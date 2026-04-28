@@ -29,7 +29,7 @@ def render_sidebar():
         st.markdown("<div style='color:#ff8c00; font-size:0.8rem; margin-top:-10px; margin-bottom:10px;'>💡 提示：輸入完畢請務必按 <b>Enter 鍵</b> 確認送出</div>", unsafe_allow_html=True)
     
         options = ["-- 快速切換標的 --"]
-        categories = {}
+        categories = {"未分類": []}
         current_cat = "未分類"
         if os.path.exists("stocklist.txt"):
             try:
