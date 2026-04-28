@@ -78,11 +78,20 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-2.5
         "tools": [{"google_search": {}}],
         "generationConfig": {"responseMimeType": "application/json"}
     }
+    payload_no_search = {
+        "contents": payload["contents"],
+        "systemInstruction": payload["systemInstruction"],
+        "generationConfig": payload["generationConfig"]
+    }
     try:
-        res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
+        headers = {"Content-Type": "application/json"}
+        res = requests.post(url, headers=headers, json=payload, timeout=60)
         if res.status_code == 404 and model_name != "gemini-2.5-flash":
             fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-            res = requests.post(fallback_url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
+            res = requests.post(fallback_url, headers=headers, json=payload, timeout=60)
+        # Google Search grounding 在尖峰時段可能較慢，若逾時則自動改用無搜尋工具重試一次
+        if res.status_code in (408, 504):
+            res = requests.post(url, headers=headers, json=payload_no_search, timeout=60)
 
         log_data_health("Gemini", res.status_code == 200, res.status_code)
         if res.status_code != 200:
@@ -106,7 +115,28 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-2.5
         else:
             return {"error": "AI 回傳的格式不正確，無法萃取 JSON 資料。"}
     except requests.exceptions.Timeout:
-        return {"error": "連線逾時 (超過 60 秒)，請稍後再試。"}
+        try:
+            # 最後保底：改用 2.5 Flash 並關閉搜尋工具，降低逾時風險
+            fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+            res = requests.post(fallback_url, headers={"Content-Type": "application/json"}, json=payload_no_search, timeout=45)
+            log_data_health("Gemini", res.status_code == 200, res.status_code)
+            if res.status_code == 200:
+                text = (
+                    res.json()
+                    .get('candidates', [{}])[0]
+                    .get('content', {})
+                    .get('parts', [{}])[0]
+                    .get('text', '')
+                    .strip()
+                )
+                s_idx = text.find('{')
+                e_idx = text.rfind('}')
+                if s_idx != -1 and e_idx != -1:
+                    return json.loads(text[s_idx:e_idx+1])
+        except Exception:
+            pass
+        return {"error": "連線逾時 (超過 60 秒)，已嘗試自動降級模型仍失敗，請稍後再試。"}
+
     except Exception as e: 
         return {"error": f"發生未預期的例外狀況：{str(e)}"}
 
