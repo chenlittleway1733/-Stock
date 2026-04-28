@@ -3,7 +3,6 @@
 yfinance、Fugle、FinMind、Yahoo、Gemini 等 API 存取都集中在這裡。
 由原始 app(1).py 拆分而來。
 """
-
 import datetime
 import io
 import json
