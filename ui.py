@@ -29,7 +29,7 @@ def render_sidebar():
         st.markdown("<div style='color:#ff8c00; font-size:0.8rem; margin-top:-10px; margin-bottom:10px;'>💡 提示：輸入完畢請務必按 <b>Enter 鍵</b> 確認送出</div>", unsafe_allow_html=True)
     
         options = ["-- 快速切換標的 --"]
-        categories = {}
+        categories = {"未分類": []}
         current_cat = "未分類"
         if os.path.exists("stocklist.txt"):
             try:
@@ -46,12 +46,136 @@ def render_sidebar():
                             current_cat = line
                             options.append(f"🏷️ {line}")
                             categories[current_cat] = []
-            except: pass
+            except Exception as e:
+                st.warning(f"⚠️ 快速選股名單讀取失敗，已改用最小模式。({str(e)[:80]})")
             
         st.selectbox("⚡ 快速選股名單", options, key="quick_select", on_change=on_quick_select_change)
+        if st.button("🗂️ 自選股管理器", use_container_width=True):
+            st.session_state.show_watchlist_manager = not st.session_state.get('show_watchlist_manager', False)
+
+        if st.session_state.get('show_watchlist_manager', False):
+            with st.container():
+                st.markdown("#### 🛠️ 自選股管理器")
+                cat_order, cat_map, parse_errors = load_stocklist_structure()
+                if parse_errors:
+                    st.warning("⚠️ 偵測到檔案格式問題：" + "；".join(parse_errors[:3]))
+
+                issues = validate_stocklist_structure(cat_order, cat_map)
+                if issues:
+                    st.error("❌ 格式驗證未通過：" + "；".join(issues[:3]))
+                else:
+                    st.success("✅ 檔案格式驗證通過")
+
+                with st.expander("➕ 新增分類", expanded=False):
+                    new_cat = st.text_input("分類名稱", key="mgr_new_cat")
+                    if st.button("新增分類", key="mgr_add_cat_btn", use_container_width=True):
+                        ok, msg = add_category_to_stocklist(new_cat)
+                        (st.success if ok else st.error)(msg)
+                        if ok: st.rerun()
+
+                with st.expander("➕ 新增股票", expanded=False):
+                    mcol1, mcol2 = st.columns(2)
+                    with mcol1:
+                        new_code = st.text_input("股票代號", key="mgr_new_code")
+                    with mcol2:
+                        new_name = st.text_input("股票名稱", key="mgr_new_name")
+                    cat_choices = cat_order if cat_order else ["未分類"]
+                    new_cat_target = st.selectbox("加入到分類", cat_choices, key="mgr_target_cat")
+                    if st.button("新增股票", key="mgr_add_stock_btn", use_container_width=True):
+                        ok, msg = add_stock_to_category(new_code, new_name, new_cat_target)
+                        (st.success if ok else st.error)(msg)
+                        if ok: st.rerun()
+
+                all_stocks = [(c, n, cat) for cat in cat_order for c, n in cat_map.get(cat, [])]
+                if all_stocks:
+                    with st.expander("🔀 搬移股票", expanded=False):
+                        stock_labels = [f"{c} {n}（{cat}）" for c, n, cat in all_stocks]
+                        picked = st.selectbox("選擇股票", stock_labels, key="mgr_move_pick")
+                        target_cat = st.selectbox("目標分類", cat_order if cat_order else ["未分類"], key="mgr_move_target")
+                        pick_code = picked.split(" ")[0]
+                        if st.button("搬移到新分類", key="mgr_move_btn", use_container_width=True):
+                            ok, msg = move_stock_to_category(pick_code, target_cat)
+                            (st.success if ok else st.error)(msg)
+                            if ok: st.rerun()
+
+                    with st.expander("🧹 刪除股票", expanded=False):
+                        del_pick = st.selectbox("選擇要刪除的股票", stock_labels, key="mgr_del_pick")
+                        del_code = del_pick.split(" ")[0]
+                        if st.button("刪除股票", key="mgr_del_btn", use_container_width=True):
+                            ok, msg = remove_stock_from_stocklist(del_code)
+                            (st.success if ok else st.error)(msg)
+                            if ok: st.rerun()
+
+                    with st.expander("↕️ 分類內排序（拖曳替代）", expanded=False):
+                        sort_cat = st.selectbox("排序分類", cat_order, key="mgr_sort_cat")
+                        sort_arr = cat_map.get(sort_cat, [])
+                        for i, (sc, sn) in enumerate(sort_arr):
+                            c1, c2, c3 = st.columns([0.64, 0.18, 0.18])
+                            with c1:
+                                st.caption(f"{i+1}. {sc} {sn}")
+                            with c2:
+                                if st.button("⬆️", key=f"mgr_up_{sort_cat}_{sc}_{i}", use_container_width=True):
+                                    ok, msg = move_stock_order_within_category(sort_cat, sc, "up")
+                                    (st.success if ok else st.warning)(msg)
+                                    if ok: st.rerun()
+                            with c3:
+                                if st.button("⬇️", key=f"mgr_dn_{sort_cat}_{sc}_{i}", use_container_width=True):
+                                    ok, msg = move_stock_order_within_category(sort_cat, sc, "down")
+                                    (st.success if ok else st.warning)(msg)
+                                    if ok: st.rerun()
+                else:
+                    st.info("目前尚無股票資料，可先新增分類或股票。")
 
         st.markdown("---")
         st.markdown("### 🎯 策略漏斗掃描器")
+        st.caption("多因子評分卡（可調權重）：估值 / 成長 / 籌碼 / 營收動能")
+        wc1, wc2 = st.columns(2)
+        with wc1:
+            st.session_state.w_valuation = st.slider("估值", 0, 100, int(st.session_state.get('w_valuation', 35)), 5, key="slider_w_valuation")
+            st.session_state.w_chip = st.slider("籌碼", 0, 100, int(st.session_state.get('w_chip', 20)), 5, key="slider_w_chip")
+        with wc2:
+            st.session_state.w_growth = st.slider("成長", 0, 100, int(st.session_state.get('w_growth', 30)), 5, key="slider_w_growth")
+            st.session_state.w_revenue = st.slider("營收動能", 0, 100, int(st.session_state.get('w_revenue', 15)), 5, key="slider_w_revenue")
+
+        total_w = st.session_state.w_valuation + st.session_state.w_growth + st.session_state.w_chip + st.session_state.w_revenue
+        if total_w == 0:
+            st.warning("⚠️ 權重總和不可為 0，系統已暫時使用平均權重。")
+            wv = wg = wc = wr = 0.25
+        else:
+            wv = st.session_state.w_valuation / total_w
+            wg = st.session_state.w_growth / total_w
+            wc = st.session_state.w_chip / total_w
+            wr = st.session_state.w_revenue / total_w
+        st.caption(f"權重占比：估值 {wv:.0%}｜成長 {wg:.0%}｜籌碼 {wc:.0%}｜營收動能 {wr:.0%}")
+
+        def clamp_score(v):
+            return max(0.0, min(100.0, v))
+
+        def pct_score(x, center=0.0, scale=2.0):
+            # x 為小數（例如 0.1 = 10%）
+            return clamp_score(50.0 + (x - center) * 100.0 * scale)
+
+        def backtest_return_from_hist(hist_df, days):
+            """最小回測：用最近收盤 vs N 天前最近可用收盤計算報酬率(%)。"""
+            try:
+                if hist_df is None or hist_df.empty or 'Close' not in hist_df.columns:
+                    return None
+                h = hist_df[['Close']].dropna().sort_index()
+                if len(h) < 2:
+                    return None
+                end_idx = h.index[-1]
+                end_close = float(h['Close'].iloc[-1])
+                target_dt = end_idx - pd.Timedelta(days=days)
+                past = h[h.index <= target_dt]
+                if past.empty:
+                    return None
+                start_close = float(past['Close'].iloc[-1])
+                if start_close <= 0:
+                    return None
+                return (end_close / start_close - 1.0) * 100.0
+            except Exception:
+                return None
+
         if st.button("🔍 掃描同族群潛力股", use_container_width=True): st.session_state.run_screener = True
         
         if st.session_state.get('run_screener'):
@@ -64,7 +188,7 @@ def render_sidebar():
                     results = []
                     pbar = st.progress(0)
                     for i, (c, n) in enumerate(target_stocks):
-                        _, inf = get_stock_data(c, st.session_state.fugle_key, st.session_state.finmind_key)
+                        hist_scan, inf = get_stock_data(c, st.session_state.fugle_key, st.session_state.finmind_key)
                         if inf:
                             pe = s_float(inf.get('trailingPE'))
                             roe = s_float(inf.get('returnOnEquity'))
@@ -76,16 +200,90 @@ def render_sidebar():
                             sys_peg = s_float(inf.get('pegRatio'))
                             peg_is_neg = (eg is not None and eg <= 0)
                             if (sys_peg is None or pd.isna(sys_peg)) and pe and eg and eg > 0: sys_peg = pe / (eg * 100)
-                        
-                            p_sort = sys_peg if sys_peg is not None and not pd.isna(sys_peg) and not peg_is_neg else 999
+
+                            # 1) 估值分數（PEG 越低越好，PE 過高扣分）
+                            peg_score = None
+                            if sys_peg is not None and not pd.isna(sys_peg) and sys_peg > 0 and not peg_is_neg:
+                                peg_score = clamp_score(100 - sys_peg * 30)
+                            pe_score = clamp_score(100 - (pe * 2)) if pe is not None and pe > 0 else None
+                            val_components = [v for v in [peg_score, pe_score] if v is not None]
+                            valuation_score = sum(val_components)/len(val_components) if val_components else 50.0
+
+                            # 2) 成長分數（EPS/營收成長）
+                            rev_g = s_float(inf.get('revenueGrowth'))
+                            growth_components = []
+                            if eg is not None: growth_components.append(pct_score(eg, center=0.0, scale=2.5))
+                            if rev_g is not None: growth_components.append(pct_score(rev_g, center=0.0, scale=2.0))
+                            growth_score = sum(growth_components)/len(growth_components) if growth_components else 50.0
+
+                            # 3) 籌碼分數（機構/內部人持股）
+                            held_inst = s_float(inf.get('heldPercentInstitutions'))
+                            held_inside = s_float(inf.get('heldPercentInsiders'))
+                            chip_components = []
+                            if held_inst is not None: chip_components.append(clamp_score(held_inst * 200))
+                            if held_inside is not None: chip_components.append(clamp_score(held_inside * 250))
+                            chip_score = sum(chip_components)/len(chip_components) if chip_components else 50.0
+
+                            # 4) 營收動能分數（YoY / MoM）
+                            rev_score = 50.0
+                            yoy_val, mom_val = None, None
+                            if df_rv is not None and not df_rv.empty:
+                                yoy_val = s_float(df_rv['YoY'].iloc[-1])  # 這裡是百分比數字
+                                mom_val = s_float(df_rv['MoM'].iloc[-1])
+                                yoy_score = clamp_score(50 + ((yoy_val or 0) * 1.5))
+                                mom_score = clamp_score(50 + ((mom_val or 0) * 2.0))
+                                rev_score = yoy_score * 0.7 + mom_score * 0.3
+
+                            total_score = valuation_score * wv + growth_score * wg + chip_score * wc + rev_score * wr
+                            r1m = backtest_return_from_hist(hist_scan, 30)
+                            r3m = backtest_return_from_hist(hist_scan, 90)
+                            r6m = backtest_return_from_hist(hist_scan, 180)
+
                             p_str = "分母為負" if peg_is_neg else (f"{sys_peg:.2f}" if sys_peg is not None and not pd.isna(sys_peg) else "N/A")
-                            results.append({'code':c,'name':n,'roe':roe,'peg_sort':p_sort,'roe_str':to_pct(roe),'peg_str':p_str})
+                            results.append({
+                                'code': c, 'name': n, 'roe': roe, 'roe_str': to_pct(roe), 'peg_str': p_str,
+                                'score_total': total_score,
+                                'score_val': valuation_score,
+                                'score_growth': growth_score,
+                                'score_chip': chip_score,
+                                'score_revenue': rev_score,
+                                'yoy': yoy_val,
+                                'mom': mom_val,
+                                'ret_1m': r1m,
+                                'ret_3m': r3m,
+                                'ret_6m': r6m,
+                            })
                         time.sleep(0.5); pbar.progress((i+1)/len(target_stocks))
-                    pbar.empty(); results.sort(key=lambda x: (x['peg_sort'], -x['roe'] if x['roe'] else 0))
+                    pbar.empty(); results.sort(key=lambda x: x['score_total'], reverse=True)
                     st.markdown("<div style='background:#1e1e1e; padding:10px; border-radius:5px; border-left:4px solid #00bfff;'><b>🌟 掃描結果</b></div>", unsafe_allow_html=True)
+
+                    def avg_ret(key):
+                        vals = [x.get(key) for x in results if x.get(key) is not None]
+                        return (sum(vals) / len(vals)) if vals else None
+
+                    a1, a3, a6 = avg_ret('ret_1m'), avg_ret('ret_3m'), avg_ret('ret_6m')
+                    bt_parts = []
+                    if a1 is not None: bt_parts.append(f"1M 平均: {a1:+.2f}%")
+                    if a3 is not None: bt_parts.append(f"3M 平均: {a3:+.2f}%")
+                    if a6 is not None: bt_parts.append(f"6M 平均: {a6:+.2f}%")
+                    if bt_parts:
+                        st.caption("🧪 最小回測/模擬（歷史報酬回看）｜" + " ｜ ".join(bt_parts))
+
                     for res in results:
-                        icon = "🔥" if res['peg_sort'] < 1.5 and res['roe'] and res['roe'] > 0.15 else "🔸"
-                        st.button(f"{icon} {res['name']} ({res['code']})\nPEG: {res['peg_str']} | ROE: {res['roe_str']}", key=f"s_{res['code']}", on_click=reset_all_states_on_stock_change, args=(res['code'],), use_container_width=True)
+                        icon = "🔥" if res['score_total'] >= 70 else ("⭐" if res['score_total'] >= 60 else "🔸")
+                        r1_txt = f"{res['ret_1m']:+.1f}%" if res.get('ret_1m') is not None else "N/A"
+                        r3_txt = f"{res['ret_3m']:+.1f}%" if res.get('ret_3m') is not None else "N/A"
+                        r6_txt = f"{res['ret_6m']:+.1f}%" if res.get('ret_6m') is not None else "N/A"
+                        st.button(
+                            f"{icon} {res['name']} ({res['code']})\n"
+                            f"總分: {res['score_total']:.1f} | PEG: {res['peg_str']} | ROE: {res['roe_str']}\n"
+                            f"估值 {res['score_val']:.0f} / 成長 {res['score_growth']:.0f} / 籌碼 {res['score_chip']:.0f} / 營收 {res['score_revenue']:.0f}\n"
+                            f"回測: 1M {r1_txt} | 3M {r3_txt} | 6M {r6_txt}",
+                            key=f"s_{res['code']}",
+                            on_click=reset_all_states_on_stock_change,
+                            args=(res['code'],),
+                            use_container_width=True
+                        )
 
         st.markdown("---")
         st.markdown("### 🐳 籌碼集中度追蹤")
@@ -165,6 +363,43 @@ def render_sidebar():
         if st.session_state.finmind_key:
             if m_ok: st.success("✅ FinMind API 連線成功")
             else: st.error("❌ FinMind 金鑰無效")
+
+        st.markdown("---")
+        st.markdown("### 🩺 Data Health Panel")
+        if st.button("🧪 執行來源健康檢查", use_container_width=True):
+            run_data_health_check(
+                st.session_state.get("fugle_key", ""),
+                st.session_state.get("finmind_key", ""),
+                st.session_state.get("api_key", "")
+            )
+            st.rerun()
+
+        health = st.session_state.get("data_health_stats", {})
+        def fmt_health_status(raw_status):
+            rs = str(raw_status).upper() if raw_status is not None else "N/A"
+            if rs == "N/A":
+                return "— 尚未呼叫"
+            if rs == "NO_KEY":
+                return "🔑 未提供金鑰 (NO_KEY)"
+            if rs in ["200", "OK"]:
+                return f"✅ 成功 ({raw_status})"
+            if rs == "ERR":
+                return "❌ 連線錯誤 (ERR)"
+            return f"⚠️ 失敗 ({raw_status})"
+
+        if health:
+            for src in ["Yahoo", "Fugle", "FinMind", "Gemini"]:
+                s = health.get(src, {"last_success": None, "error_count": 0, "last_status": "N/A"})
+                last_ok = s.get("last_success") or "尚無"
+                err_cnt = s.get("error_count", 0)
+                last_st = s.get("last_status", "N/A")
+                st.markdown(
+                    f"- **{src}**｜最近狀態: `{fmt_health_status(last_st)}`｜錯誤次數: `{err_cnt}`\n"
+                    f"  - 最後成功時間: `{last_ok}`"
+                )
+        else:
+            st.info("尚無來源健康資料。")
+        st.caption("提示：狀態會在實際呼叫該來源 API 後更新，或可按上方「執行來源健康檢查」。")
 
         st.markdown("---")
         if st.button("🔄 重新整理快取", use_container_width=True):
@@ -256,6 +491,15 @@ def render_main_page(sidebar_state=None):
             hist, info = get_stock_data(curr_id, st.session_state.fugle_key, st.session_state.finmind_key)
             if info is None: info = {}
             c_name = get_chinese_name(curr_id) or info.get('shortName', curr_id)
+
+        fallback_notes = info.get('__fallback_notes', []) if isinstance(info, dict) else []
+        price_source = info.get('__price_source') if isinstance(info, dict) else None
+        info_source = info.get('__info_source') if isinstance(info, dict) else None
+        if price_source or info_source:
+            st.caption(f"🛰️ 資料來源｜股價: {price_source or '未知'}；財務: {info_source or '未知'}")
+        if fallback_notes:
+            for note in fallback_notes:
+                st.info(f"💡 備援提示：{note}")
 
         if hist is not None and not hist.empty:
             col_title, col_star = st.columns([0.85, 0.15])
@@ -1339,4 +1583,3 @@ def render_main_page(sidebar_state=None):
             st.plotly_chart(fig_k, use_container_width=True)
         else:
             st.error(f"找不到代號 {curr_id} 的資料，請確認代號是否正確或重新整理。")
-

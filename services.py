@@ -18,7 +18,7 @@ import requests
 import streamlit as st
 import yfinance as yf
 
-from utils import s_float
+from utils import s_float, log_data_health
 
 # ==========================================
 # 3. 外部 API 與模型模組
@@ -34,6 +34,7 @@ def fetch_fugle_kline(stock_id, api_key, timeframe="D"):
     try:
         res = requests.get(url, headers=headers, timeout=10)
         if res.status_code == 200:
+            log_data_health("Fugle", True, res.status_code)
             data = res.json().get('data', [])
             if data:
                 df = pd.DataFrame(data)
@@ -41,6 +42,8 @@ def fetch_fugle_kline(stock_id, api_key, timeframe="D"):
                 df.set_index('Date', inplace=True)
                 df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
                 return df[['Open', 'High', 'Low', 'Close', 'Volume']].sort_index()
+        else:
+            log_data_health("Fugle", False, res.status_code)
     except: pass
     return pd.DataFrame()
 
@@ -52,23 +55,25 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-2.5
     current_year = datetime.date.today().year
     target_year = current_year if datetime.date.today().month < 9 else current_year + 1
     
-    system_prompt = f"""你是一個精準的財經數據提取機器人。請上網搜尋該台股公司最新財報與市場數據，提取以下指標：
-    1. 「歷史本益比 (P/E)」
-    2. 「近四季或最新年度 EPS (Trailing EPS)」
-    3. 「法人預估 {target_year} 年度 EPS (Forward EPS)」
-    4. 「股價淨值比 (P/B)」
-    5. 「毛利率」
-    6. 「營益率」
-    7. 「ROE(股東權益報酬率)」
-    8. 「最新單月或累計營收年增率(YoY)」
-    9. 「國內外法人最新預估目標價 (Target Price)」
-    10. 「負債權益比 (Debt-to-Equity Ratio)」
-    11. 「最新單月營收月增率(MoM)」
-    12. 「預估現金殖利率 (Dividend Yield)」(例如：擬配發現金股利2元，最新股價900元，殖利率應為 0.0022)
-    13. 「最新資料所屬年月或季度 (Data Period)」
-
-    必須嚴格回傳包含上述 13 個欄位的 JSON 格式。百分比請轉換為小數，數值請直接輸出數字。若查無資料，該欄位請填 null。
-    絕對不要輸出 markdown 標記或其他文字。"""
+    system_prompt = f"""你是一個精準的財經數據提取機器人。請上網搜尋該台股公司最新財報與市場數據。
+    你必須回傳 JSON，且鍵名必須嚴格使用下列 snake_case（不可改名）：
+    {{
+      "pe": 歷史本益比(P/E),
+      "trailing_eps": 近四季或最新年度 EPS,
+      "forward_eps": 法人預估 {target_year} 年度 EPS,
+      "pb": 股價淨值比(P/B),
+      "gross_margin": 毛利率,
+      "operating_margin": 營益率,
+      "roe": ROE,
+      "yoy": 最新單月或累計營收年增率,
+      "target_price": 國內外法人最新預估目標價,
+      "debt_to_equity": 負債權益比,
+      "mom": 最新單月營收月增率,
+      "dividend_yield": 預估現金殖利率,
+      "data_period": 最新資料所屬年月或季度
+    }}
+    百分比請轉為小數（例如 25% -> 0.25），數值僅輸出數字；查無資料填 null。
+    絕對不要輸出 markdown 或多餘文字。"""
     
     payload = {
         "contents": [{"parts": [{"text": f"請啟提搜尋引擎，查詢台股 {stock_name} ({stock_id}) 最新財報新聞、營收 MoM，以及 {target_year} 法人預測 EPS 與 最新目標價"}]}],
@@ -78,6 +83,7 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-2.5
     }
     try:
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
+        log_data_health("Gemini", res.status_code == 200, res.status_code)
         
         if res.status_code != 200:
             return {"error": f"API 連線被拒絕 (代碼 {res.status_code})。細節：{res.text[:150]}"}
@@ -87,7 +93,53 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-2.5
         e_idx = text.rfind('}')
         if s_idx != -1 and e_idx != -1:
             clean_text = text[s_idx:e_idx+1]
-            return json.loads(clean_text)
+            raw = json.loads(clean_text)
+
+            # 兼容舊格式鍵名（中文/英文混用）-> 統一轉成 UI 使用的 snake_case
+            aliases = {
+                "pe": ["pe", "p/e", "歷史本益比", "historical_pe", "trailing_pe"],
+                "trailing_eps": ["trailing_eps", "eps", "trailing eps", "近四季eps"],
+                "forward_eps": ["forward_eps", "forward eps", "法人預估eps"],
+                "pb": ["pb", "p/b", "股價淨值比", "price_to_book"],
+                "gross_margin": ["gross_margin", "gross margin", "毛利率"],
+                "operating_margin": ["operating_margin", "operating margin", "營益率", "營業利益率"],
+                "roe": ["roe", "股東權益報酬率"],
+                "yoy": ["yoy", "year_over_year", "營收年增率"],
+                "target_price": ["target_price", "target price", "目標價"],
+                "debt_to_equity": ["debt_to_equity", "debt-to-equity", "負債權益比"],
+                "mom": ["mom", "month_over_month", "營收月增率"],
+                "dividend_yield": ["dividend_yield", "dividend yield", "殖利率", "現金殖利率"],
+                "data_period": ["data_period", "period", "資料期間", "所屬期間"]
+            }
+
+            def pick_value(d, keys):
+                low_map = {str(k).strip().lower(): v for k, v in d.items()}
+                for k in keys:
+                    kk = k.lower()
+                    if kk in low_map:
+                        return low_map[kk]
+                return None
+
+            normalized = {}
+            for std_key, cand_keys in aliases.items():
+                normalized[std_key] = pick_value(raw, cand_keys)
+
+            # 百分比欄位容錯：若 AI 回傳 25 代表 25%，轉成 0.25
+            pct_keys = ["gross_margin", "operating_margin", "roe", "yoy", "mom", "dividend_yield", "debt_to_equity"]
+            for k in pct_keys:
+                v = normalized.get(k)
+                try:
+                    if isinstance(v, str):
+                        vv = v.replace("%", "").strip()
+                        v = float(vv)
+                    if isinstance(v, (int, float)):
+                        if 1 < abs(v) <= 100:
+                            v = v / 100.0
+                    normalized[k] = v
+                except:
+                    normalized[k] = normalized.get(k)
+
+            return normalized
         else:
             return {"error": "AI 回傳的格式不正確，無法萃取 JSON 資料。"}
     except requests.exceptions.Timeout:
@@ -106,6 +158,7 @@ def get_peers_from_ai(stock_name, stock_id, api_key):
     }
     try:
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=30)
+        log_data_health("Gemini", res.status_code == 200, res.status_code)
         if res.status_code == 200:
             clean_text = re.sub(r'```json\n?|```', '', res.json()['candidates'][0]['content']['parts'][0]['text']).strip()
             peers = json.loads(clean_text)
@@ -129,6 +182,7 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
             fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key.strip()}"
             res = requests.post(fallback_url, headers={"Content-Type": "application/json"}, json=payload, timeout=90)
             fallback_msg = f"> 💡 **系統提示**：您指定的 `{model_name}` 尚未開放或輸入錯誤，系統已自動降級使用 `Gemini 2.5 Flash` 為您完成分析。\n\n---\n\n"
+        log_data_health("Gemini", res.status_code == 200, res.status_code)
         if res.status_code == 200: 
             ans = re.sub(r'```markdown\n?|```', '', res.json().get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')).strip()
             return fallback_msg + ans
@@ -153,6 +207,7 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
         if response.status_code == 404 and model_name != "gemini-2.5-flash":
             fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
             response = requests.post(fallback_url, headers=headers, json=payload, timeout=60)
+        log_data_health("Gemini", response.status_code == 200, response.status_code)
         if response.status_code == 200:
             res_json = response.json()
             content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
@@ -212,6 +267,7 @@ def get_monthly_revenue(stock_id, fm_key=""):
     try:
         y_url = f"https://tw.stock.yahoo.com/quote/{stock_id}/revenue"
         y_res = requests.get(y_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+        log_data_health("Yahoo", y_res.status_code == 200, y_res.status_code)
         if y_res.status_code == 200:
             json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', y_res.text)
             if json_match:
@@ -265,7 +321,11 @@ def get_monthly_revenue(stock_id, fm_key=""):
         url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockMonthRevenue&data_id={stock_id}&start_date={start_str}"
         if fm_key: url += f"&token={fm_key}" 
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        ok = (res.status_code == 200)
+        status_val = res.status_code
         data = res.json()
+        ok = ok and data.get('status') == 200
+        log_data_health("FinMind", ok, status_val)
         if data.get('status') == 200 and data.get('data'):
             df = pd.DataFrame(data['data'])
             df['date'] = pd.to_datetime(df['date'])
@@ -549,16 +609,29 @@ def inject_realtime_data(hist, stock_id, timeframe="D"):
 def _get_base_stock_data(stock_id, fugle_key="", fm_key=""):
     hist = None
     info_data = {}
-    if fugle_key: hist = fetch_fugle_kline(stock_id, fugle_key, "D")
+    price_source = None
+    info_source = None
+    fallback_notes = []
+
+    if fugle_key:
+        hist = fetch_fugle_kline(stock_id, fugle_key, "D")
+        if hist is not None and not hist.empty:
+            price_source = "Fugle API"
     
     for ext in [".TW", ".TWO"]:
         try:
             ticker = yf.Ticker(f"{stock_id}{ext}")
             if hist is None or hist.empty:
                 temp_hist = ticker.history(period="5y")
-                if not temp_hist.empty: hist = temp_hist
-            try: info_data = ticker.info
-            except: pass
+                if not temp_hist.empty:
+                    hist = temp_hist
+                    price_source = "Yahoo Finance (yfinance)"
+            try:
+                info_data = ticker.info
+                if info_data:
+                    info_source = "Yahoo Finance (yfinance)"
+            except:
+                pass
             if info_data or (hist is not None and not hist.empty): break
         except: continue
             
@@ -567,12 +640,16 @@ def _get_base_stock_data(stock_id, fugle_key="", fm_key=""):
             try:
                 url = f"https://query1.finance.yahoo.com/v7/finance/download/{stock_id}{ext}?range=5y&interval=1d&events=history"
                 res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+                log_data_health("Yahoo", res.status_code == 200, res.status_code)
                 if res.status_code == 200:
                     df = pd.read_csv(io.StringIO(res.text))
                     df['Date'] = pd.to_datetime(df['Date'])
                     df.set_index('Date', inplace=True)
                     hist = df[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
-                    if not hist.empty: break
+                    if not hist.empty:
+                        price_source = "Yahoo Finance CSV fallback"
+                        fallback_notes.append("主資料源失敗，已改用 Yahoo CSV 備援股價。")
+                        break
             except: pass
 
     if hist is None or hist.empty:
@@ -581,6 +658,7 @@ def _get_base_stock_data(stock_id, fugle_key="", fm_key=""):
             url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id={stock_id}&start_date={start_str}"
             if fm_key: url += f"&token={fm_key}"
             res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+            log_data_health("FinMind", res.status_code == 200, res.status_code)
             data = res.json()
             if data.get('status') == 200 and data.get('data'):
                 df = pd.DataFrame(data['data'])
@@ -588,15 +666,28 @@ def _get_base_stock_data(stock_id, fugle_key="", fm_key=""):
                 df.rename(columns={'open':'Open','max':'High','min':'Low','close':'Close','Trading_Volume':'Volume'}, inplace=True)
                 df.set_index('Date', inplace=True)
                 hist = df[['Open','High','Low','Close','Volume']]
+                if hist is not None and not hist.empty:
+                    price_source = "FinMind fallback"
+                    fallback_notes.append("Yahoo 來源失敗，已改用 FinMind 備援股價。")
         except: pass
 
     if hist is not None and not hist.empty:
         hist.index.name = 'Date'
         fallback = get_fallback_info(stock_id)
+        filled_from_fallback = 0
         for k, v in fallback.items():
             if v is not None:
                 if k not in info_data or not info_data[k] or str(info_data[k]).lower() == 'nan':
                     info_data[k] = v
+                    filled_from_fallback += 1
+        if filled_from_fallback > 0:
+            if info_source is None:
+                info_source = "Yahoo 頁面解析備援"
+            fallback_notes.append(f"已由頁面解析補齊 {filled_from_fallback} 個財務欄位。")
+
+    info_data['__price_source'] = price_source or "未知來源"
+    info_data['__info_source'] = info_source or "未知來源"
+    info_data['__fallback_notes'] = fallback_notes
     return hist, info_data
 
 def get_stock_data(stock_id, fugle_key="", fm_key=""):
@@ -697,6 +788,58 @@ def validate_api_keys(f_key, m_key):
             m_res = (r2.status_code == 200 and r2.json().get('status') == 200)
         except: m_res = False
     return f_res, m_res
+
+def run_data_health_check(fugle_key="", finmind_key="", gemini_key=""):
+    """主動健康檢查：Yahoo / Fugle / FinMind / Gemini。"""
+    # Yahoo
+    try:
+        y = requests.get("https://tw.stock.yahoo.com/quote/2330", headers={'User-Agent': 'Mozilla/5.0'}, timeout=8)
+        log_data_health("Yahoo", y.status_code == 200, y.status_code)
+    except:
+        log_data_health("Yahoo", False, "ERR")
+
+    # Fugle (需金鑰)
+    if fugle_key and fugle_key.strip():
+        try:
+            f = requests.get(
+                "https://api.fugle.tw/marketdata/v1.0/stock/historical/candles/2330?timeframe=D",
+                headers={"X-API-KEY": fugle_key.strip()},
+                timeout=8
+            )
+            log_data_health("Fugle", f.status_code == 200, f.status_code)
+        except:
+            log_data_health("Fugle", False, "ERR")
+    else:
+        log_data_health("Fugle", False, "NO_KEY")
+
+    # FinMind (可帶 token)
+    try:
+        fm_url = "https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=2330&start_date=2024-01-01&end_date=2024-01-02"
+        if finmind_key and finmind_key.strip():
+            fm_url += f"&token={finmind_key.strip()}"
+        fm = requests.get(fm_url, timeout=8)
+        ok = (fm.status_code == 200)
+        status = fm.status_code
+        if ok:
+            try:
+                ok = fm.json().get('status') == 200
+            except:
+                ok = False
+        log_data_health("FinMind", ok, status)
+    except:
+        log_data_health("FinMind", False, "ERR")
+
+    # Gemini (需金鑰)
+    if gemini_key and gemini_key.strip():
+        try:
+            g_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key.strip()}"
+            g_payload = {"contents": [{"parts": [{"text": "ping"}]}]}
+            g = requests.post(g_url, headers={"Content-Type": "application/json"}, json=g_payload, timeout=10)
+            log_data_health("Gemini", g.status_code == 200, g.status_code)
+        except:
+            log_data_health("Gemini", False, "ERR")
+    else:
+        log_data_health("Gemini", False, "NO_KEY")
 
 @st.cache_data(ttl=86400) 
 def get_chinese_name(stock_id):

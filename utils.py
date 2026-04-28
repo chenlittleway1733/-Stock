@@ -6,6 +6,7 @@
 import os
 import re
 import math
+import datetime
 
 import pandas as pd
 import streamlit as st
@@ -92,6 +93,158 @@ def get_watchlist():
         except: pass
     return watchlist
 
+def load_stocklist_structure():
+    """解析 stocklist.txt 為 (分類順序, 分類->[(code,name)], 錯誤訊息)。"""
+    cat_order = []
+    cat_map = {}
+    errors = []
+    current_cat = None
+
+    if not os.path.exists("stocklist.txt"):
+        return [], {}, []
+
+    try:
+        with open("stocklist.txt", "r", encoding="utf-8") as f:
+            for ln, raw in enumerate(f, start=1):
+                line = raw.strip()
+                if not line:
+                    continue
+                if "," in line:
+                    parts = [p.strip() for p in line.split(",", 1)]
+                    if len(parts) != 2 or not parts[0] or not parts[1]:
+                        errors.append(f"第 {ln} 行格式錯誤：{line}")
+                        continue
+                    if current_cat is None:
+                        current_cat = "未分類"
+                        cat_order.append(current_cat)
+                        cat_map[current_cat] = []
+                    cat_map[current_cat].append((parts[0], parts[1]))
+                else:
+                    current_cat = line
+                    if current_cat not in cat_map:
+                        cat_order.append(current_cat)
+                        cat_map[current_cat] = []
+    except Exception as e:
+        errors.append(f"讀取失敗：{str(e)}")
+
+    return cat_order, cat_map, errors
+
+def save_stocklist_structure(cat_order, cat_map):
+    lines = []
+    for cat in cat_order:
+        lines.append(f"{cat}\n")
+        for code, name in cat_map.get(cat, []):
+            lines.append(f"{code},{name}\n")
+        lines.append("\n")
+    with open("stocklist.txt", "w", encoding="utf-8") as f:
+        f.writelines(lines)
+
+def validate_stocklist_structure(cat_order, cat_map):
+    issues = []
+    seen = set()
+    for cat in cat_order:
+        if not cat or "," in cat:
+            issues.append(f"分類名稱不合法：{cat}")
+        for code, name in cat_map.get(cat, []):
+            if not code.isdigit():
+                issues.append(f"代號非純數字：{code} ({name})")
+            if code in seen:
+                issues.append(f"重複代號：{code}")
+            seen.add(code)
+    return issues
+
+def add_category_to_stocklist(category_name):
+    cat = category_name.strip()
+    if not cat:
+        return False, "分類名稱不可空白。"
+    if "," in cat:
+        return False, "分類名稱不可包含逗號。"
+    cat_order, cat_map, _ = load_stocklist_structure()
+    if cat in cat_map:
+        return False, "分類已存在。"
+    cat_order.append(cat)
+    cat_map[cat] = []
+    save_stocklist_structure(cat_order, cat_map)
+    return True, f"已新增分類：{cat}"
+
+def add_stock_to_category(code, name, category):
+    sc = str(code).strip()
+    sn = str(name).strip()
+    if not sc or not sn:
+        return False, "股票代號與名稱皆不可空白。"
+    if not sc.isdigit():
+        return False, "股票代號必須為純數字。"
+    cat_order, cat_map, _ = load_stocklist_structure()
+    if category not in cat_map:
+        cat_order.append(category)
+        cat_map[category] = []
+    for c in cat_order:
+        for ec, _ in cat_map.get(c, []):
+            if ec == sc:
+                return False, f"代號 {sc} 已存在於分類「{c}」。"
+    cat_map[category].append((sc, sn))
+    save_stocklist_structure(cat_order, cat_map)
+    return True, f"已加入 {sc} {sn} 到「{category}」。"
+
+def remove_stock_from_stocklist(code):
+    sc = str(code).strip()
+    cat_order, cat_map, _ = load_stocklist_structure()
+    removed = False
+    for c in cat_order:
+        old_len = len(cat_map.get(c, []))
+        cat_map[c] = [(ec, en) for ec, en in cat_map.get(c, []) if ec != sc]
+        if len(cat_map[c]) != old_len:
+            removed = True
+    if not removed:
+        return False, f"找不到代號 {sc}。"
+    save_stocklist_structure(cat_order, cat_map)
+    return True, f"已刪除代號 {sc}。"
+
+def move_stock_to_category(code, target_category):
+    sc = str(code).strip()
+    target = str(target_category).strip()
+    if not target:
+        return False, "目標分類不可空白。"
+    cat_order, cat_map, _ = load_stocklist_structure()
+    found = None
+    for c in cat_order:
+        for i, (ec, en) in enumerate(cat_map.get(c, [])):
+            if ec == sc:
+                found = (c, i, en)
+                break
+        if found:
+            break
+    if not found:
+        return False, f"找不到代號 {sc}。"
+    from_cat, idx, name = found
+    if target not in cat_map:
+        cat_order.append(target)
+        cat_map[target] = []
+    if from_cat == target:
+        return False, "已在同一分類。"
+    cat_map[from_cat].pop(idx)
+    cat_map[target].append((sc, name))
+    save_stocklist_structure(cat_order, cat_map)
+    return True, f"已將 {sc} 移動至「{target}」。"
+
+def move_stock_order_within_category(category, code, direction="up"):
+    cat_order, cat_map, _ = load_stocklist_structure()
+    if category not in cat_map:
+        return False, "分類不存在。"
+    arr = cat_map[category]
+    idx = next((i for i, (c, _) in enumerate(arr) if c == str(code).strip()), -1)
+    if idx == -1:
+        return False, "找不到該代號。"
+    if direction == "up" and idx > 0:
+        arr[idx-1], arr[idx] = arr[idx], arr[idx-1]
+    elif direction == "down" and idx < len(arr)-1:
+        arr[idx+1], arr[idx] = arr[idx], arr[idx+1]
+    else:
+        return False, "已在邊界，無法移動。"
+    cat_map[category] = arr
+    save_stocklist_structure(cat_order, cat_map)
+    return True, "排序已更新。"
+
 def toggle_watchlist(code, name):
     lines = []
     if os.path.exists("stocklist.txt"):
@@ -140,6 +293,38 @@ def init_session_state():
     if 'run_screener' not in st.session_state: st.session_state.run_screener = False
     if 'quick_select' not in st.session_state: st.session_state.quick_select = "-- 快速切換標的 --"
     if 'stock_input_widget' not in st.session_state: st.session_state.stock_input_widget = "2330"
+    if 'show_watchlist_manager' not in st.session_state: st.session_state.show_watchlist_manager = False
+    if 'w_valuation' not in st.session_state: st.session_state.w_valuation = 35
+    if 'w_growth' not in st.session_state: st.session_state.w_growth = 30
+    if 'w_chip' not in st.session_state: st.session_state.w_chip = 20
+    if 'w_revenue' not in st.session_state: st.session_state.w_revenue = 15
+    if 'data_health_stats' not in st.session_state:
+        st.session_state.data_health_stats = {
+            "Yahoo": {"last_success": None, "error_count": 0, "last_status": "N/A"},
+            "Fugle": {"last_success": None, "error_count": 0, "last_status": "N/A"},
+            "FinMind": {"last_success": None, "error_count": 0, "last_status": "N/A"},
+            "Gemini": {"last_success": None, "error_count": 0, "last_status": "N/A"},
+        }
+
+def log_data_health(source, ok, status_code=None):
+    src = str(source).strip()
+    if not src:
+        return
+    if 'data_health_stats' not in st.session_state:
+        init_session_state()
+    stats = st.session_state.data_health_stats
+    if src not in stats:
+        stats[src] = {"last_success": None, "error_count": 0, "last_status": "N/A"}
+
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    s = stats[src]
+    s["last_status"] = str(status_code) if status_code is not None else ("OK" if ok else "ERR")
+    if ok:
+        s["last_success"] = now_str
+    else:
+        s["error_count"] = int(s.get("error_count", 0)) + 1
+    stats[src] = s
+    st.session_state.data_health_stats = stats
 
 def reset_all_states_on_stock_change(stock_code):
     st.session_state.selected_stock = stock_code
