@@ -328,8 +328,9 @@ def render_sidebar():
             "Gemini 2.5 Flash", 
             "Gemini 2.5 Pro",
             "Gemini 3 Flash Preview",
-            "Gemini 3.1 Flash-Lite Preview",
-            "Gemini 3.1 Pro Preview (付費版)"
+            "Gemini 3 Flash-Lite Preview",
+            "Gemini 3 Pro Preview (付費版)"
+
         ], key="ai_model_radio")
     
         st.session_state.api_key = st.text_input("🔑 Gemini API Key", type="password", value=st.session_state.api_key)
