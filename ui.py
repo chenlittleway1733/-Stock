@@ -50,7 +50,81 @@ def render_sidebar():
                 st.warning(f"⚠️ 快速選股名單讀取失敗，已改用最小模式。({str(e)[:80]})")
             
         st.selectbox("⚡ 快速選股名單", options, key="quick_select", on_change=on_quick_select_change)
+        if st.button("🗂️ 自選股管理器", use_container_width=True):
+            st.session_state.show_watchlist_manager = not st.session_state.get('show_watchlist_manager', False)
 
+        if st.session_state.get('show_watchlist_manager', False):
+            with st.container():
+                st.markdown("#### 🛠️ 自選股管理器")
+                cat_order, cat_map, parse_errors = load_stocklist_structure()
+                if parse_errors:
+                    st.warning("⚠️ 偵測到檔案格式問題：" + "；".join(parse_errors[:3]))
+
+                issues = validate_stocklist_structure(cat_order, cat_map)
+                if issues:
+                    st.error("❌ 格式驗證未通過：" + "；".join(issues[:3]))
+                else:
+                    st.success("✅ 檔案格式驗證通過")
+
+                with st.expander("➕ 新增分類", expanded=False):
+                    new_cat = st.text_input("分類名稱", key="mgr_new_cat")
+                    if st.button("新增分類", key="mgr_add_cat_btn", use_container_width=True):
+                        ok, msg = add_category_to_stocklist(new_cat)
+                        (st.success if ok else st.error)(msg)
+                        if ok: st.rerun()
+
+                with st.expander("➕ 新增股票", expanded=False):
+                    mcol1, mcol2 = st.columns(2)
+                    with mcol1:
+                        new_code = st.text_input("股票代號", key="mgr_new_code")
+                    with mcol2:
+                        new_name = st.text_input("股票名稱", key="mgr_new_name")
+                    cat_choices = cat_order if cat_order else ["未分類"]
+                    new_cat_target = st.selectbox("加入到分類", cat_choices, key="mgr_target_cat")
+                    if st.button("新增股票", key="mgr_add_stock_btn", use_container_width=True):
+                        ok, msg = add_stock_to_category(new_code, new_name, new_cat_target)
+                        (st.success if ok else st.error)(msg)
+                        if ok: st.rerun()
+
+                all_stocks = [(c, n, cat) for cat in cat_order for c, n in cat_map.get(cat, [])]
+                if all_stocks:
+                    with st.expander("🔀 搬移股票", expanded=False):
+                        stock_labels = [f"{c} {n}（{cat}）" for c, n, cat in all_stocks]
+                        picked = st.selectbox("選擇股票", stock_labels, key="mgr_move_pick")
+                        target_cat = st.selectbox("目標分類", cat_order if cat_order else ["未分類"], key="mgr_move_target")
+                        pick_code = picked.split(" ")[0]
+                        if st.button("搬移到新分類", key="mgr_move_btn", use_container_width=True):
+                            ok, msg = move_stock_to_category(pick_code, target_cat)
+                            (st.success if ok else st.error)(msg)
+                            if ok: st.rerun()
+
+                    with st.expander("🧹 刪除股票", expanded=False):
+                        del_pick = st.selectbox("選擇要刪除的股票", stock_labels, key="mgr_del_pick")
+                        del_code = del_pick.split(" ")[0]
+                        if st.button("刪除股票", key="mgr_del_btn", use_container_width=True):
+                            ok, msg = remove_stock_from_stocklist(del_code)
+                            (st.success if ok else st.error)(msg)
+                            if ok: st.rerun()
+
+                    with st.expander("↕️ 分類內排序（拖曳替代）", expanded=False):
+                        sort_cat = st.selectbox("排序分類", cat_order, key="mgr_sort_cat")
+                        sort_arr = cat_map.get(sort_cat, [])
+                        for i, (sc, sn) in enumerate(sort_arr):
+                            c1, c2, c3 = st.columns([0.64, 0.18, 0.18])
+                            with c1:
+                                st.caption(f"{i+1}. {sc} {sn}")
+                            with c2:
+                                if st.button("⬆️", key=f"mgr_up_{sort_cat}_{sc}_{i}", use_container_width=True):
+                                    ok, msg = move_stock_order_within_category(sort_cat, sc, "up")
+                                    (st.success if ok else st.warning)(msg)
+                                    if ok: st.rerun()
+                            with c3:
+                                if st.button("⬇️", key=f"mgr_dn_{sort_cat}_{sc}_{i}", use_container_width=True):
+                                    ok, msg = move_stock_order_within_category(sort_cat, sc, "down")
+                                    (st.success if ok else st.warning)(msg)
+                                    if ok: st.rerun()
+                else:
+                    st.info("目前尚無股票資料，可先新增分類或股票。")
         st.markdown("---")
         st.markdown("### 🎯 策略漏斗掃描器")
         if st.button("🔍 掃描同族群潛力股", use_container_width=True): st.session_state.run_screener = True
@@ -1348,4 +1422,3 @@ def render_main_page(sidebar_state=None):
             st.plotly_chart(fig_k, use_container_width=True)
         else:
             st.error(f"找不到代號 {curr_id} 的資料，請確認代號是否正確或重新整理。")
-
