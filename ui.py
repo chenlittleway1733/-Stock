@@ -46,7 +46,8 @@ def render_sidebar():
                             current_cat = line
                             options.append(f"🏷️ {line}")
                             categories[current_cat] = []
-            except: pass
+            except Exception as e:
+                st.warning(f"⚠️ 快速選股名單讀取失敗，已改用最小模式。({str(e)[:80]})")
             
         st.selectbox("⚡ 快速選股名單", options, key="quick_select", on_change=on_quick_select_change)
 
@@ -256,6 +257,14 @@ def render_main_page(sidebar_state=None):
             hist, info = get_stock_data(curr_id, st.session_state.fugle_key, st.session_state.finmind_key)
             if info is None: info = {}
             c_name = get_chinese_name(curr_id) or info.get('shortName', curr_id)
+        fallback_notes = info.get('__fallback_notes', []) if isinstance(info, dict) else []
+        price_source = info.get('__price_source') if isinstance(info, dict) else None
+        info_source = info.get('__info_source') if isinstance(info, dict) else None
+        if price_source or info_source:
+            st.caption(f"🛰️ 資料來源｜股價: {price_source or '未知'}；財務: {info_source or '未知'}")
+        if fallback_notes:
+            for note in fallback_notes:
+                st.info(f"💡 備援提示：{note}")
 
         if hist is not None and not hist.empty:
             col_title, col_star = st.columns([0.85, 0.15])
