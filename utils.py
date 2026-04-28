@@ -6,7 +6,7 @@
 import os
 import re
 import math
-
+import datetime
 import pandas as pd
 import streamlit as st
 
@@ -292,6 +292,38 @@ def init_session_state():
     if 'quick_select' not in st.session_state: st.session_state.quick_select = "-- 快速切換標的 --"
     if 'stock_input_widget' not in st.session_state: st.session_state.stock_input_widget = "2330"
     if 'show_watchlist_manager' not in st.session_state: st.session_state.show_watchlist_manager = False
+    if 'w_valuation' not in st.session_state: st.session_state.w_valuation = 35
+    if 'w_growth' not in st.session_state: st.session_state.w_growth = 30
+    if 'w_chip' not in st.session_state: st.session_state.w_chip = 20
+    if 'w_revenue' not in st.session_state: st.session_state.w_revenue = 15
+    if 'data_health_stats' not in st.session_state:
+        st.session_state.data_health_stats = {
+            "Yahoo": {"last_success": None, "error_count": 0, "last_status": "N/A"},
+            "Fugle": {"last_success": None, "error_count": 0, "last_status": "N/A"},
+            "FinMind": {"last_success": None, "error_count": 0, "last_status": "N/A"},
+            "Gemini": {"last_success": None, "error_count": 0, "last_status": "N/A"},
+        }
+
+def log_data_health(source, ok, status_code=None):
+    src = str(source).strip()
+    if not src:
+        return
+    if 'data_health_stats' not in st.session_state:
+        init_session_state()
+    stats = st.session_state.data_health_stats
+    if src not in stats:
+        stats[src] = {"last_success": None, "error_count": 0, "last_status": "N/A"}
+
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    s = stats[src]
+    s["last_status"] = str(status_code) if status_code is not None else ("OK" if ok else "ERR")
+    if ok:
+        s["last_success"] = now_str
+    else:
+        s["error_count"] = int(s.get("error_count", 0)) + 1
+    stats[src] = s
+    st.session_state.data_health_stats = stats
+
 def reset_all_states_on_stock_change(stock_code):
     st.session_state.selected_stock = stock_code
     st.session_state.quick_select = "-- 快速切換標的 --"
