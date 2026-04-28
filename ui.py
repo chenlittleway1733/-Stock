@@ -366,6 +366,16 @@ def render_sidebar():
         st.markdown("---")
         st.markdown("### 🩺 Data Health Panel")
         health = st.session_state.get("data_health_stats", {})
+        def fmt_health_status(raw_status):
+            rs = str(raw_status).upper() if raw_status is not None else "N/A"
+            if rs == "N/A":
+                return "— 尚未呼叫"
+            if rs in ["200", "OK"]:
+                return f"✅ 成功 ({raw_status})"
+            if rs == "ERR":
+                return "❌ 連線錯誤 (ERR)"
+            return f"⚠️ 失敗 ({raw_status})"
+
         if health:
             for src in ["Yahoo", "Fugle", "FinMind", "Gemini"]:
                 s = health.get(src, {"last_success": None, "error_count": 0, "last_status": "N/A"})
@@ -373,7 +383,7 @@ def render_sidebar():
                 err_cnt = s.get("error_count", 0)
                 last_st = s.get("last_status", "N/A")
                 st.markdown(
-                    f"- **{src}**｜最近狀態: `{last_st}`｜錯誤次數: `{err_cnt}`\n"
+                    f"- **{src}**｜最近狀態: `{fmt_health_status(last_st)}`｜錯誤次數: `{err_cnt}`\n"
                     f"  - 最後成功時間: `{last_ok}`"
                 )
         else:
