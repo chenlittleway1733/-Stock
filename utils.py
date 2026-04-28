@@ -2,7 +2,6 @@
 共用常數、格式化工具、自選股與 Streamlit Session State 管理。
 由原始 app(1).py 拆分而來。
 """
-
 import os
 import re
 import math
