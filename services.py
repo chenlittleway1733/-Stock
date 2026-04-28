@@ -18,7 +18,7 @@ import requests
 import streamlit as st
 import yfinance as yf
 
-from utils import s_float
+from utils import s_float, log_data_health
 
 # ==========================================
 # 3. 外部 API 與模型模組
@@ -34,6 +34,7 @@ def fetch_fugle_kline(stock_id, api_key, timeframe="D"):
     try:
         res = requests.get(url, headers=headers, timeout=10)
         if res.status_code == 200:
+            log_data_health("Fugle", True, res.status_code)
             data = res.json().get('data', [])
             if data:
                 df = pd.DataFrame(data)
@@ -41,6 +42,8 @@ def fetch_fugle_kline(stock_id, api_key, timeframe="D"):
                 df.set_index('Date', inplace=True)
                 df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
                 return df[['Open', 'High', 'Low', 'Close', 'Volume']].sort_index()
+            else:
+                log_data_health("Fugle", False, res.status_code)
     except: pass
     return pd.DataFrame()
 
@@ -78,7 +81,7 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-2.5
     }
     try:
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
-        
+        log_data_health("Gemini", res.status_code == 200, res.status_code)
         if res.status_code != 200:
             return {"error": f"API 連線被拒絕 (代碼 {res.status_code})。細節：{res.text[:150]}"}
             
@@ -106,6 +109,7 @@ def get_peers_from_ai(stock_name, stock_id, api_key):
     }
     try:
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=30)
+        log_data_health("Gemini", res.status_code == 200, res.status_code)
         if res.status_code == 200:
             clean_text = re.sub(r'```json\n?|```', '', res.json()['candidates'][0]['content']['parts'][0]['text']).strip()
             peers = json.loads(clean_text)
@@ -129,6 +133,7 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
             fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key.strip()}"
             res = requests.post(fallback_url, headers={"Content-Type": "application/json"}, json=payload, timeout=90)
             fallback_msg = f"> 💡 **系統提示**：您指定的 `{model_name}` 尚未開放或輸入錯誤，系統已自動降級使用 `Gemini 2.5 Flash` 為您完成分析。\n\n---\n\n"
+        log_data_health("Gemini", res.status_code == 200, res.status_code)
         if res.status_code == 200: 
             ans = re.sub(r'```markdown\n?|```', '', res.json().get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')).strip()
             return fallback_msg + ans
@@ -153,6 +158,7 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
         if response.status_code == 404 and model_name != "gemini-2.5-flash":
             fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
             response = requests.post(fallback_url, headers=headers, json=payload, timeout=60)
+        log_data_health("Gemini", response.status_code == 200, response.status_code)
         if response.status_code == 200:
             res_json = response.json()
             content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
@@ -212,6 +218,7 @@ def get_monthly_revenue(stock_id, fm_key=""):
     try:
         y_url = f"https://tw.stock.yahoo.com/quote/{stock_id}/revenue"
         y_res = requests.get(y_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+        log_data_health("Yahoo", y_res.status_code == 200, y_res.status_code)
         if y_res.status_code == 200:
             json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', y_res.text)
             if json_match:
@@ -265,7 +272,11 @@ def get_monthly_revenue(stock_id, fm_key=""):
         url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockMonthRevenue&data_id={stock_id}&start_date={start_str}"
         if fm_key: url += f"&token={fm_key}" 
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        ok = (res.status_code == 200)
+        status_val = res.status_code
         data = res.json()
+        ok = ok and data.get('status') == 200
+        log_data_health("FinMind", ok, status_val)
         if data.get('status') == 200 and data.get('data'):
             df = pd.DataFrame(data['data'])
             df['date'] = pd.to_datetime(df['date'])
@@ -580,6 +591,7 @@ def _get_base_stock_data(stock_id, fugle_key="", fm_key=""):
             try:
                 url = f"https://query1.finance.yahoo.com/v7/finance/download/{stock_id}{ext}?range=5y&interval=1d&events=history"
                 res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+                log_data_health("Yahoo", res.status_code == 200, res.status_code)
                 if res.status_code == 200:
                     df = pd.read_csv(io.StringIO(res.text))
                     df['Date'] = pd.to_datetime(df['Date'])
@@ -597,6 +609,7 @@ def _get_base_stock_data(stock_id, fugle_key="", fm_key=""):
             url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id={stock_id}&start_date={start_str}"
             if fm_key: url += f"&token={fm_key}"
             res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+            log_data_health("FinMind", res.status_code == 200, res.status_code)
             data = res.json()
             if data.get('status') == 200 and data.get('data'):
                 df = pd.DataFrame(data['data'])
