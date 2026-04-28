@@ -73,18 +73,31 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-2.5
     絕對不要輸出 markdown 標記或其他文字。"""
     
     payload = {
-        "contents": [{"parts": [{"text": f"請啟提搜尋引擎，查詢台股 {stock_name} ({stock_id}) 最新財報新聞、營收 MoM，以及 {target_year} 法人預測 EPS 與 最新目標價"}]}],
+        "contents": [{"parts": [{"text": f"請啟用搜尋引擎，查詢台股 {stock_name} ({stock_id}) 最新財報新聞、營收 MoM，以及 {target_year} 法人預測 EPS 與最新目標價"}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "tools": [{"google_search": {}}],
         "generationConfig": {"responseMimeType": "application/json"}
     }
     try:
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
+        if res.status_code == 404 and model_name != "gemini-2.5-flash":
+            fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+            res = requests.post(fallback_url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
+
         log_data_health("Gemini", res.status_code == 200, res.status_code)
         if res.status_code != 200:
             return {"error": f"API 連線被拒絕 (代碼 {res.status_code})。細節：{res.text[:150]}"}
-            
-        text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+
+        text = (
+            res.json()
+            .get('candidates', [{}])[0]
+            .get('content', {})
+            .get('parts', [{}])[0]
+            .get('text', '')
+            .strip()
+        )
+        if not text:
+            return {"error": "AI 回傳內容為空，請稍後重試。"}
         s_idx = text.find('{')
         e_idx = text.rfind('}')
         if s_idx != -1 and e_idx != -1:
