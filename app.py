@@ -1,38 +1,21 @@
-"""Main Streamlit entrypoint for the modularized stock application."""
-
-from __future__ import annotations
+"""
+台股聯網 AI 投資戰情室 - Streamlit 入口檔
+執行方式：
+    streamlit run app.py
+"""
 
 import streamlit as st
 
-from data_fetch import add_technical_indicators, compute_valuation, fetch_stock_data
-from ui_sections import (
-    render_kd_chart,
-    render_news_placeholder,
-    render_price_chart,
-    render_top_bar,
-    render_valuation,
-)
+from ui import render_main_page, render_sidebar
+from utils import init_session_state
 
+# ==========================================
+# 0. 網頁基本設定
+# ==========================================
+st.set_page_config(page_title="台股聯網 AI 投資戰情室", layout="wide")
+st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True)
 
-stock_symbol, yf_symbol = render_top_bar()
+init_session_state()
 
-if stock_symbol:
-    try:
-        hist, info = fetch_stock_data(yf_symbol)
-
-        if hist.empty:
-            st.error("找不到該股票的資料，請確認台股代號是否正確。")
-        else:
-            stock_name = info.get("shortName", stock_symbol)
-            current_price = hist["Close"].iloc[-1]
-
-            valuation = compute_valuation(info, current_price)
-            hist_with_indicators = add_technical_indicators(hist)
-
-            render_valuation(stock_name, stock_symbol, current_price, valuation)
-            render_price_chart(hist_with_indicators)
-            render_kd_chart(hist_with_indicators)
-            render_news_placeholder()
-
-    except Exception as exc:
-        st.error(f"系統分析時發生錯誤: {exc}")
+sidebar_state = render_sidebar()
+render_main_page(sidebar_state)
