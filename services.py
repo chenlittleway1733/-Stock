@@ -549,16 +549,29 @@ def inject_realtime_data(hist, stock_id, timeframe="D"):
 def _get_base_stock_data(stock_id, fugle_key="", fm_key=""):
     hist = None
     info_data = {}
-    if fugle_key: hist = fetch_fugle_kline(stock_id, fugle_key, "D")
+    price_source = None
+    info_source = None
+    fallback_notes = []
+
+    if fugle_key:
+        hist = fetch_fugle_kline(stock_id, fugle_key, "D")
+        if hist is not None and not hist.empty:
+            price_source = "Fugle API"
     
     for ext in [".TW", ".TWO"]:
         try:
             ticker = yf.Ticker(f"{stock_id}{ext}")
             if hist is None or hist.empty:
                 temp_hist = ticker.history(period="5y")
-                if not temp_hist.empty: hist = temp_hist
-            try: info_data = ticker.info
-            except: pass
+                if not temp_hist.empty:
+                    hist = temp_hist
+                    price_source = "Yahoo Finance (yfinance)"
+            try:
+                info_data = ticker.info
+                if info_data:
+                    info_source = "Yahoo Finance (yfinance)"
+            except:
+                pass
             if info_data or (hist is not None and not hist.empty): break
         except: continue
             
@@ -572,7 +585,10 @@ def _get_base_stock_data(stock_id, fugle_key="", fm_key=""):
                     df['Date'] = pd.to_datetime(df['Date'])
                     df.set_index('Date', inplace=True)
                     hist = df[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
-                    if not hist.empty: break
+                    if not hist.empty:
+                        price_source = "Yahoo Finance CSV fallback"
+                        fallback_notes.append("主資料源失敗，已改用 Yahoo CSV 備援股價。")
+                        break
             except: pass
 
     if hist is None or hist.empty:
@@ -588,15 +604,28 @@ def _get_base_stock_data(stock_id, fugle_key="", fm_key=""):
                 df.rename(columns={'open':'Open','max':'High','min':'Low','close':'Close','Trading_Volume':'Volume'}, inplace=True)
                 df.set_index('Date', inplace=True)
                 hist = df[['Open','High','Low','Close','Volume']]
+                if hist is not None and not hist.empty:
+                    price_source = "FinMind fallback"
+                    fallback_notes.append("Yahoo 來源失敗，已改用 FinMind 備援股價。")
         except: pass
 
     if hist is not None and not hist.empty:
         hist.index.name = 'Date'
         fallback = get_fallback_info(stock_id)
+        filled_from_fallback = 0
         for k, v in fallback.items():
             if v is not None:
                 if k not in info_data or not info_data[k] or str(info_data[k]).lower() == 'nan':
                     info_data[k] = v
+                    filled_from_fallback += 1
+        if filled_from_fallback > 0:
+            if info_source is None:
+                info_source = "Yahoo 頁面解析備援"
+            fallback_notes.append(f"已由頁面解析補齊 {filled_from_fallback} 個財務欄位。")
+
+    info_data['__price_source'] = price_source or "未知來源"
+    info_data['__info_source'] = info_source or "未知來源"
+    info_data['__fallback_notes'] = fallback_notes                    
     return hist, info_data
 
 def get_stock_data(stock_id, fugle_key="", fm_key=""):
