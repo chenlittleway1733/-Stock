@@ -320,7 +320,6 @@ def render_sidebar():
             else:
                 st.error("❌ 找不到有效的金鑰，請確認檔案格式是否正確。")
 
-        st.markdown("---")
         if st.button("🔄 重新整理快取", use_container_width=True):
             st.cache_data.clear(); st.rerun()
         st.markdown("---")
