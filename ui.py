@@ -321,6 +321,9 @@ def render_sidebar():
                 st.error("❌ 找不到有效的金鑰，請確認檔案格式是否正確。")
 
         st.markdown("---")
+        if st.button("🔄 重新整理快取", use_container_width=True):
+            st.cache_data.clear(); st.rerun()
+        st.markdown("---")
         st.markdown("### 🧠 AI 聯網議題選股")
         topic_q = st.text_input("輸入議題 (如: 代理人AI、矽光子)")
     
@@ -384,8 +387,7 @@ def render_sidebar():
         else:
             st.info("尚無來源健康資料。")
         st.markdown("---")
-        if st.button("🔄 重新整理快取", use_container_width=True):
-            st.cache_data.clear(); st.rerun()
+
 
     return {
         "topic_q": locals().get("topic_q", ""),
