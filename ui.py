@@ -1172,10 +1172,16 @@ def render_main_page(sidebar_state=None):
             """
             st.markdown(clean_html(chip_html), unsafe_allow_html=True)
             st.markdown("---")
-                        # 打包提示詞用：以「系統優先、AI 回填」方式填入關鍵財務指標，避免大量 N/A。
+            # 打包提示詞：完整收斂「面板可見值 + AI/系統來源」，缺值統一顯示 NULL
             def _fmt_or_na(val, fmt):
-                return fmt(val) if val is not None else "N/A"
+                return fmt(val) if val is not None else "NULL"
+            
+            def _nullize_text(s):
+                s = str(s) if s is not None else ""
+                s = s.replace("N/A", "NULL").replace("無資料", "NULL").replace("未捕捉到", "NULL")
+                return s if s.strip() else "NULL"
 
+            # 面板核心數值（系統/AI/推估）
             ctx_pe = _fmt_or_na(eff_pe, lambda v: f"{v:.1f}x")
             ctx_fpe = _fmt_or_na(eff_forward_pe, lambda v: f"{v:.1f}x")
             ctx_pb = _fmt_or_na(eff_pb, lambda v: f"{v:.2f}x")
@@ -1186,22 +1192,26 @@ def render_main_page(sidebar_state=None):
 
             eps_now = t_eps if t_eps is not None else ai_t_eps
             eps_fwd = sys_f_eps_calc if sys_f_eps_calc is not None else ai_f_eps_calc
-            if eps_now is not None or eps_fwd is not None:
-                left = f"{eps_now:.2f}" if eps_now is not None else "N/A"
-                right = f"{eps_fwd:.2f}" if eps_fwd is not None else "N/A"
-                ctx_eps = f"{left} / {right}"
-            else:
-                ctx_eps = "N/A"
-
+            ctx_eps = f"{eps_now:.2f} / {eps_fwd:.2f}" if (eps_now is not None and eps_fwd is not None) else _nullize_text(f"{eps_now if eps_now is not None else 'NULL'} / {eps_fwd if eps_fwd is not None else 'NULL'}")
             ctx_rg = _fmt_or_na(eff_rg, lambda v: f"{v*100:.2f}%")
             ctx_eg = _fmt_or_na(real_cg, lambda v: f"{v*100:.2f}%")
             ctx_gm = _fmt_or_na(eff_gm, lambda v: f"{v*100:.2f}%")
             ctx_om = _fmt_or_na(eff_om, lambda v: f"{v*100:.2f}%")
             ctx_roe = _fmt_or_na(eff_roe, lambda v: f"{v*100:.2f}%")
             ctx_de = _fmt_or_na(eff_de, lambda v: f"{v:.2f}")
+            ctx_tp_est = _nullize_text(tp_est_str)
+            panel_pe = _nullize_text(pe_str)
+            panel_fpe = _nullize_text(fpe_str)
+            panel_pb = _nullize_text(pb_str)
+            panel_peg = _nullize_text(peg_str_disp)
+            panel_eps = _nullize_text(f_eps_display)
+            panel_rg = _nullize_text(rg_str)
+            panel_eg = _nullize_text(eg_str_disp)
+            panel_gmom = _nullize_text(gm_om_str)
+            panel_roe = _nullize_text(roe_str)
+            panel_de = _nullize_text(de_str)
 
-
-            # 打包提示詞用：若法人高/均/低目標價缺值，使用 AI 最新聯網目標價回填，避免顯示 N/A。
+            # 目標價回填
             prompt_hi_str = hi_str
             prompt_me_str = me_str
             prompt_lo_str = lo_str
@@ -1215,47 +1225,83 @@ def render_main_page(sidebar_state=None):
 
 
             context_str = f"""
-            【即時盤面與估值 (原始數據 vs AI數據)】
-            - 最新收盤價: {curr_p} 元
-            - 歷史本益比 (Trailing P/E): {ctx_pe}
-            - 前瞻本益比 (Forward P/E): {ctx_fpe}
-            - 股價淨值比 (P/B): {ctx_pb}
-            - 本益成長比 (PEG): {ctx_peg}
-            - 🎯 系統逆向推算極限高空價: {tp_est_str}
+【A. 盤面與估值（請逐項引用；缺值為 NULL）】
+- 股票: {c_name} ({curr_id})
+- 最新收盤價: {_nullize_text(curr_p)} 元
+- 歷史本益比(整合值): {ctx_pe}
+- 前瞻本益比(整合值): {ctx_fpe}
+- 股價淨值比(整合值): {ctx_pb}
+- PEG(整合值): {ctx_peg}
+- 系統逆向推算極限高空價: {ctx_tp_est}
+- 面板顯示-歷史本益比: {panel_pe}
+- 面板顯示-前瞻本益比: {panel_fpe}
+- 面板顯示-P/B: {panel_pb}
+- 面板顯示-PEG: {panel_peg}
 
-            【財務基本面動能 (原始數據 vs AI數據)】
-            - EPS (目前 / 預估): {ctx_eps} 元
-            - 營收年增率 (YoY) [{latest_rev_month}]: {ctx_rg}
-            - 最新單月營收月增率 (MoM) [{latest_rev_month}]: {latest_mom_str}
-            - 預估獲利成長 (YoY): {ctx_eg}
-            - 毛利率: {ctx_gm}
-            - 營業利益率: {ctx_om}
-            - 股東權益報酬率 (ROE): {ctx_roe}
-            - 負債權益比 (D/E Ratio): {ctx_de}
-            - 🩺 Piotroski F-Score 健康跑分: {fs_str}（滿分 9 分）
+【B. 財務動能（原始/AI/推估整合）】
+- EPS(目前/預估): {_nullize_text(ctx_eps)} 元
+- 面板顯示-EPS卡: {panel_eps}
+- 營收年增率 YoY [{latest_rev_month}]: {ctx_rg}
+- 最新單月營收月增率 MoM [{latest_rev_month}]: {_nullize_text(latest_mom_str)}
+- 預估獲利成長 YoY: {ctx_eg}
+- 毛利率: {ctx_gm}
+- 營業利益率: {ctx_om}
+- ROE: {ctx_roe}
+- D/E Ratio: {ctx_de}
+- 面板顯示-營收成長卡: {panel_rg}
+- 面板顯示-獲利成長卡: {panel_eg}
+- 面板顯示-毛利/營益卡: {panel_gmom}
+- 面板顯示-ROE卡: {panel_roe}
+- 面板顯示-D/E卡: {panel_de}
 
-            【🛡️ 防禦力與財務健康檢測 (重要參考)】
-            - 預估殖利率: {dy_str}
-            - 自由現金流 (FCF): {fcf_str}
-            - 流動比率 (Current Ratio): {cr_str}
+【C. 防禦力與健康】
+- 預估殖利率: {_nullize_text(dy_str)}
+- 自由現金流 FCF: {_nullize_text(fcf_str)}
+- 流動比率: {_nullize_text(cr_str)}
+- Piotroski F-Score: {_nullize_text(fs_str)}（滿分 9 分）
 
-            【法人預估目標價】
-            - 最高目標價: {prompt_hi_str}
-            - 平均目標價: {prompt_me_str}
-            - 最低保底價: {prompt_lo_str}
-            - AI 最新聯網目標價 ({ai_suffix}): {ai_tp_str}
-            """
-        
-            full_prompt_for_copy = f"""你是一位精通台股的資深產業分析師與操盤手。
-    請上網搜尋目標公司的最新動態、財報與法說會資訊，並「強烈參考我提供給你的最新盤面與財務估值數據」，提供以下深度分析：
-    1. 產業前景與趨勢判斷 (近期利多/利空、未來展望)
-    2. 公司競爭優勢 (護城河、市占率、核心技術)
-    3. 總體經濟與地緣政治系統性風險評估 (如中東局勢、通膨、關稅對該公司的近期影響)
-    4. 具體的買賣點建議與操作策略 (請結合基本面、系統逆推目標價、防禦力現金流與技術型態，給出具體進出場評估或價位區間參考)
-
-    請深度分析台股 {c_name} ({curr_id}) 的產業前景、競爭優勢、系統性風險及買賣點策略。
-
+【D. 法人與 AI 聯網目標價】
+- 最高目標價: {_nullize_text(prompt_hi_str)}
+- 平均目標價: {_nullize_text(prompt_me_str)}
+- 最低保底價: {_nullize_text(prompt_lo_str)}
+- AI 最新聯網目標價({ai_suffix}): {_nullize_text(ai_tp_str)}
+- 目標價分析師人數: {_nullize_text(ai_analyst_count)}
+- 目標價核心理由: {_nullize_text(ai_target_rationale)}
+"""
     【系統已算出的最新關鍵數據，請務必納入買賣點評估考量】：\n{context_str}"""
+
+            full_prompt_for_copy = f"""你是台股研究總監 + 交易策略專家。請用繁體中文、條列、可執行結論，並嚴格使用下方數據。
+
+任務要求：
+1) 先做「資料品質盤點」：逐項標記哪些欄位是系統/AI/推估/NULL，並說明對結論影響。
+2) 產業與公司質化分析：
+   - 公司優勢/護城河、劣勢/結構風險、管理層與資本配置、供應鏈位置。
+   - 未來 1~2 年成長動能與可能失速點。
+3) 估值判斷：
+   - 用 P/E、Forward P/E、PEG、P/B、ROE、D/E、FCF 綜合判斷目前屬低估/合理/高估。
+   - 若關鍵值為 NULL，需提出替代判斷法，不可跳過。
+4) 交易決策（最重要）：
+   - 是否可買：給「可買/觀望/不建議」三選一結論。
+   - 買點：給 2~3 個分批區間與理由（基本面+技術面+風險報酬）。
+   - 賣點：給 2~3 個減碼/停利/停損條件（價位或事件觸發）。
+   - 倉位建議：保守/中性/積極 三種配置比例。
+5) 風險情境：
+   - 牛市/基準/熊市三情境，列出目標價區間、假設前提、觸發條件。
+6) 監控清單：
+   - 未來每月要追的 8 個指標與警戒閾值（如 YoY、MoM、毛利率、存貨、接單、法人調整目標價等）。
+
+輸出格式（必須照做）：
+- [投資結論一句話]
+- [公司優缺點]
+- [估值與成長解讀]
+- [買點/賣點/停損停利]
+- [三情境目標價]
+- [風險與反證]
+- [下月追蹤清單]
+
+以下是系統面板完整數據（含網路抓取 / AI 抓取 / 推估；無資料為 NULL）：
+{context_str}
+"""
 
             col_ai1, col_ai2 = st.columns([1.2, 1])
             with col_ai1:
