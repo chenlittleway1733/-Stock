@@ -325,9 +325,7 @@ def render_sidebar():
         st.markdown("### 🧠 AI 聯網議題選股")
         topic_q = st.text_input("輸入議題 (如: 代理人AI、矽光子)")
     
-        ai_model_option = st.radio("選擇 AI 大腦", [
-            "Gemini 3 Flash Preview",
-            "Gemini 3 Flash-Lite Preview",
+        ai_model_option = st.radio("使用AI版本", [
             "Gemini 3 Pro Preview (付費版)"
         ], key="ai_model_radio")
     
