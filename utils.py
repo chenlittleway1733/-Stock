@@ -354,7 +354,7 @@ def on_quick_select_change():
         st.session_state.quick_select = "-- 快速切換標的 --"
 
 def get_selected_model_id():
-    opt = st.session_state.get('ai_model_radio', 'Gemini 2.5 Flash')
+    opt = st.session_state.get('ai_model_radio', 'Gemini 3 Flash Preview')
         # 保留舊文案相容（3.1），實際模型代號改為 Gemini 3 系列官方命名
     if "3 Pro" in opt or "3.1 Pro" in opt: return "gemini-3.1-pro-preview"
     elif "3 Flash-Lite" in opt or "3.1 Flash-Lite" in opt: return "gemini-3.1-flash-lite-preview"
