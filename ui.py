@@ -1508,7 +1508,12 @@ def render_main_page(sidebar_state=None):
             plot_df = full_df.tail(120).copy()
         
             if not inst_df.empty:
-                temp_dates = pd.to_datetime(plot_df.index).normalize()
+                # 🛠️ 修復時區問題：強制移除 K 線圖日期的時區，才能跟 FinMind 的日期精準對齊
+                temp_dates = pd.to_datetime(plot_df.index)
+                if temp_dates.tz is not None:
+                    temp_dates = temp_dates.tz_localize(None)
+                temp_dates = temp_dates.normalize()
+            
                 inst_df_aligned = inst_df.copy()
                 inst_df_aligned.index = pd.to_datetime(inst_df_aligned.index).normalize()
             
