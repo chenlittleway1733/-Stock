@@ -325,12 +325,9 @@ def render_sidebar():
         topic_q = st.text_input("輸入議題 (如: 代理人AI、矽光子)")
     
         ai_model_option = st.radio("選擇 AI 大腦", [
-            "Gemini 2.5 Flash", 
-            "Gemini 2.5 Pro",
             "Gemini 3 Flash Preview",
             "Gemini 3 Flash-Lite Preview",
             "Gemini 3 Pro Preview (付費版)"
-
         ], key="ai_model_radio")
     
         st.session_state.api_key = st.text_input("🔑 Gemini API Key", type="password", value=st.session_state.api_key)
@@ -599,11 +596,11 @@ def render_main_page(sidebar_state=None):
                     
                         if isinstance(fetched_data, dict) and "error" not in fetched_data:
                             model_label_map = {
-                                "gemini-2.5-flash": "Gemini 2.5 Flash",
-                                "gemini-2.5-pro": "Gemini 2.5 Pro",
                                 "gemini-3.1-flash-preview": "Gemini 3 Flash Preview",
                                 "gemini-3.1-flash-lite-preview": "Gemini 3 Flash-Lite Preview",
                                 "gemini-3.1-pro-preview": "Gemini 3 Pro Preview (付費版)",
+                                "gemini-2.5-flash": "Gemini 2.5 Flash (自動降級)",
+                                "gemini-2.5-pro": "Gemini 2.5 Pro (自動降級)",
                             }
                             model_id = fetched_data.get('model_used', selected_model)
                             fetched_data['model_used'] = model_label_map.get(model_id, model_id)                            
@@ -618,10 +615,13 @@ def render_main_page(sidebar_state=None):
                 has_ai_fin_fetch = bool(temp_ai_fin)
                 if temp_ai_fin.get('model_used'):
                     st.markdown(f"<div style='text-align:right; color:#FFD700; font-size:0.85rem; margin-top:5px;'>🤖 驅動核心: <b>{temp_ai_fin['model_used']}</b></div>", unsafe_allow_html=True)
-                    if st.button("🧾 顯示本次 AI 回報資料", key=f"show_ai_raw_{curr_id}", use_container_width=True):
+                    if st.button("🧾 顯示本次 AI 查詢與回報資料", key=f"show_ai_raw_{curr_id}", use_container_width=True):
                         st.session_state[f"show_ai_raw_{curr_id}"] = not st.session_state.get(f"show_ai_raw_{curr_id}", False)
                     if st.session_state.get(f"show_ai_raw_{curr_id}", False):
-                        st.caption("以下為本次使用目前 API Key 抓取到的 AI 原始回報欄位：")
+                        st.caption("以下為本次 AI 全方位校對與補齊財報的查詢內容與原始回報：")
+                        query_preview = temp_ai_fin.get("query_payload")
+                        if query_preview:
+                            st.code(query_preview, language="json")
                         st.json(temp_ai_fin)    
             df_rev_bk = get_monthly_revenue(curr_id, st.session_state.finmind_key)
             df_per_bk = get_pe_pb_data(curr_id, st.session_state.finmind_key)
