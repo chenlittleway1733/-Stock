@@ -8,6 +8,7 @@ import math
 import os
 import re
 import time
+import json
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -1046,16 +1047,6 @@ def render_main_page(sidebar_state=None):
             st.markdown(clean_html(dfens_html), unsafe_allow_html=True)
             st.markdown("---")
 
-            def price_str(v):
-                return f"{v:.1f}" if v is not None else "無資料"
-
-            hi_val = s_float(info.get('targetHighPrice'))
-            me_val = s_float(info.get('targetMeanPrice'))
-            lo_val = s_float(info.get('targetLowPrice'))
-            hi_str = price_str(hi_val)
-            me_str = price_str(me_val)
-            lo_str = price_str(lo_val)
-        
             st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
         
             if hi_val is not None and me_val is not None and lo_val is not None:
@@ -1176,28 +1167,6 @@ def render_main_page(sidebar_state=None):
             """
             st.markdown(clean_html(chip_html), unsafe_allow_html=True)
             st.markdown("---")
-
-            # ==========================================
-            # 🚀 提早打包給 AI 的純文字 Prompt 變數，絕不報錯
-            # ==========================================
-            ai_fpe_prompt = sys_forward_pe if sys_forward_pe is not None else None
-            orig_peg_num = orig_peg if orig_peg is not None else (-999 if real_cg is not None and real_cg <= 0 else None)
-            if orig_peg_num == -999:
-                ctx_peg = f"分母為負，無意義 ({ai_peg:.2f}, AI反推)" if ai_peg is not None else "分母為負，無意義"
-            else:
-                ctx_peg = p_fmt(orig_peg_num, ai_peg, 'num', 'AI反推')
-
-            ctx_pe = p_fmt(pe_ratio, ai_pe, 'x')
-            ctx_pb = p_fmt(pb_ratio, ai_pb, 'x')
-            ctx_rg = p_fmt(rev_growth, ai_yoy, 'pct')
-            ctx_gm = p_fmt(gross_margin, ai_gm, 'pct')
-            ctx_om = p_fmt(op_margin, ai_om, 'pct')
-            ctx_roe = p_fmt(roe, ai_roe, 'pct')
-            ctx_de = p_fmt(sys_de, ai_de, 'pct')
-            ctx_fpe = p_fmt(sys_forward_pe, ai_fpe, 'x', 'AI反推') if sys_forward_pe else "N/A"
-            ctx_eps = p_dual(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'AI推/捉')
-            ctx_eg = p_fmt(real_cg, ai_cg, 'pct', 'AI推算')
-            tp_est_str = f"{extreme_target_price:.1f} 元 (Cap上限 {target_pe_cap:.0f}x)" if extreme_target_price else "無資料"
 
             context_str = f"""
             【即時盤面與估值 (原始數據 vs AI數據)】
