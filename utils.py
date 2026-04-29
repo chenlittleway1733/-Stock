@@ -62,7 +62,7 @@ def p_dual(o1, o2, a1, a2, suffix="AI捉取"):
         s += f" ({sa1} / {sa2}, {suffix})"
     return s
 
-def build_cmp_str(orig, ai_val, fmt="pct", suffix="AI推估"):
+def build_cmp_str(orig, ai_val, fmt="pct", suffix="AI推估", show_ai_missing=False):
     s = to_val_str(orig, fmt)
     if ai_val is not None and not pd.isna(ai_val):
         ai_text = to_val_str(float(ai_val), fmt)
@@ -71,17 +71,20 @@ def build_cmp_str(orig, ai_val, fmt="pct", suffix="AI推估"):
     s += f"<br><span style='color:#FFD700; font-size:0.85rem;'>({ai_text}, {suffix})</span>"
     return s
 
-def build_cmp_dual_str(o1, o2, a1, a2, fmt1="num", fmt2="num", suffix="AI推估"):
+def build_cmp_dual_str(o1, o2, a1, a2, fmt1="num", fmt2="num", suffix="AI推估", show_ai_missing=False):
     s1 = to_val_str(o1, fmt1)
     s2 = to_val_str(o2, fmt2)
     s = f"{s1} / <span style='color:#00bfff;'>{s2}</span>" if (fmt1=="num" and fmt2=="num") else f"{s1} / {s2}"
+    has_ai = ((a1 is not None and not pd.isna(a1)) or (a2 is not None and not pd.isna(a2)))
+    if not has_ai and not show_ai_missing:
+        return s
     sa1 = to_val_str(float(a1) if a1 is not None and not pd.isna(a1) else None, fmt1)
     sa2 = to_val_str(float(a2) if a2 is not None and not pd.isna(a2) else None, fmt2)
     if sa1 == "N/A":
         sa1 = "AI找不到數據"
     if sa2 == "N/A":
         sa2 = "AI找不到數據"
-    s += f"<br><span style='color:#FFD700; font-size:0.85rem;'>({sa1} / {sa2}, {suffix})</span>"    
+    s += f"<br><span style='color:#FFD700; font-size:0.85rem;'>({sa1} / {sa2}, {suffix})</span>"
     return s
 
 def clean_html(html_str):
@@ -353,6 +356,6 @@ def get_selected_model_id():
         # 保留舊文案相容（3.1），實際模型代號改為 Gemini 3 系列官方命名
     if "3 Pro" in opt or "3.1 Pro" in opt: return "gemini-3.1-pro-preview"
     elif "3 Flash-Lite" in opt or "3.1 Flash-Lite" in opt: return "gemini-3.1-flash-lite-preview"
-    elif "3 Flash" in opt: return "gemini-3.1-flash-preview"    
+    elif "3 Flash" in opt: return "gemini-3.1-flash-preview"
     elif "2.5 Pro" in opt: return "gemini-2.5-pro"
     else: return "gemini-2.5-flash"
