@@ -1267,7 +1267,6 @@ def render_main_page(sidebar_state=None):
 - 目標價分析師人數: {_nullize_text(ai_analyst_count)}
 - 目標價核心理由: {_nullize_text(ai_target_rationale)}
 """
-    【系統已算出的最新關鍵數據，請務必納入買賣點評估考量】：\n{context_str}"""
 
             full_prompt_for_copy = f"""你是台股研究總監 + 交易策略專家。請用繁體中文、條列、可執行結論，並嚴格使用下方數據。
 
