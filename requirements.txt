@@ -3,3 +3,5 @@ pandas
 yfinance
 plotly
 requests
+google-genai
+streamlit
