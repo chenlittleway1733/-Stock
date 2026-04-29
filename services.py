@@ -46,7 +46,7 @@ def fetch_fugle_kline(stock_id, api_key, timeframe="D"):
     except: pass
     return pd.DataFrame()
 
-def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-2.5-flash"):
+def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1-flash-preview"):
     if not api_key: return {"error": "未提供 API Key"}
     api_key = api_key.strip()
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
@@ -85,10 +85,12 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-2.5
     }
     try:
         headers = {"Content-Type": "application/json"}
+        used_model = model_name
         res = requests.post(url, headers=headers, json=payload, timeout=60)
         if res.status_code == 404 and model_name != "gemini-2.5-flash":
             fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
             res = requests.post(fallback_url, headers=headers, json=payload, timeout=60)
+            used_model = "gemini-2.5-flash"
         # Google Search grounding 在尖峰時段可能較慢，若逾時則自動改用無搜尋工具重試一次
         if res.status_code in (408, 504):
             res = requests.post(url, headers=headers, json=payload_no_search, timeout=60)
@@ -111,7 +113,10 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-2.5
         e_idx = text.rfind('}')
         if s_idx != -1 and e_idx != -1:
             clean_text = text[s_idx:e_idx+1]
-            return json.loads(clean_text)
+            parsed = json.loads(clean_text)
+            if isinstance(parsed, dict):
+                parsed["model_used"] = used_model
+            return parsed            
         else:
             return {"error": "AI 回傳的格式不正確，無法萃取 JSON 資料。"}
     except requests.exceptions.Timeout:
@@ -132,7 +137,10 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-2.5
                 s_idx = text.find('{')
                 e_idx = text.rfind('}')
                 if s_idx != -1 and e_idx != -1:
-                    return json.loads(text[s_idx:e_idx+1])
+                    parsed = json.loads(text[s_idx:e_idx+1])
+                    if isinstance(parsed, dict):
+                        parsed["model_used"] = "gemini-2.5-flash"
+                    return parsed                    
         except Exception:
             pass
         return {"error": "連線逾時 (超過 60 秒)，已嘗試自動降級模型仍失敗，請稍後再試。"}
