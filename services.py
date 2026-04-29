@@ -69,10 +69,17 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
     11. 「最新單月營收月增率(MoM)」
     12. 「預估現金殖利率 (Dividend Yield)」(例如：擬配發現金股利2元，最新股價900元，殖利率應為 0.0022)
     13. 「最新資料所屬年月或季度 (Data Period)」
-
+    14. 「目標價統計分析師人數 (Target Price Analyst Count)」
+    15. 「目標價核心理由摘要 (Target Price Rationale)」
     必須嚴格回傳包含上述 13 個欄位的 JSON 格式。百分比請轉換為小數（例如 25.5% 寫成 0.255，衰退5%寫成 -0.05），數值請直接輸出數字。若查無資料，該欄位請填 null。
+    請務必搜尋近期各大券商對該公司的最新目標價。
+    並且【務必在報告的第一行】嚴格依照以下格式輸出數據(若查無資料請填 "無")：
+    [TARGET_PRICE: 最高價, 平均價, 最低價]
+    範例：[TARGET_PRICE: 1200, 1050, 900]
+    接著，在下方簡述法人給出這些目標價的主要核心理由（看多或看空的原因）。
+    最後再輸出 JSON。必須嚴格回傳包含上述 15 個欄位的 JSON 格式。百分比請轉換為小數（例如 25.5% 寫成 0.255，衰退5%寫成 -0.05），數值請直接輸出數字。若查無資料，該欄位請填 null。
     格式範例：
-    {{"pe": 15.2, "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.082, "target_price": 1050.0, "debt_to_equity": 0.45, "mom": 0.015, "dividend_yield": 0.032, "data_period": "2024/03"}}
+     {{"pe": 15.2, "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.082, "target_price": 1050.0, "target_price_high": 1200.0, "target_price_avg": 1050.0, "target_price_low": 900.0, "target_price_analyst_count": 18, "target_price_rationale": "AI 伺服器需求強、毛利率改善但評價偏高", "debt_to_equity": 0.45, "mom": 0.015, "dividend_yield": 0.032, "data_period": "2024/03"}}
     絕對不要輸出 markdown 標記或其他文字。"""
     
     payload = {
@@ -113,13 +120,22 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
         )
         if not text:
             return {"error": "AI 回傳內容為空，請稍後重試。"}
-            
+
+        marker_match = re.search(r"\[TARGET_PRICE:\s*([^,\]]+)\s*,\s*([^,\]]+)\s*,\s*([^\]]+)\]", text)
+        marker_data = {}
+        if marker_match:
+            marker_data = {
+                "target_price_high": s_float(marker_match.group(1).replace("無", "")),
+                "target_price_avg": s_float(marker_match.group(2).replace("無", "")),
+                "target_price_low": s_float(marker_match.group(3).replace("無", "")),
+            }            
         s_idx = text.find('{')
         e_idx = text.rfind('}')
         if s_idx != -1 and e_idx != -1:
             clean_text = text[s_idx:e_idx+1]
             parsed = json.loads(clean_text)
             if isinstance(parsed, dict):
+                parsed.update({k: v for k, v in marker_data.items() if v is not None and parsed.get(k) is None})
                 parsed["model_used"] = used_model
                 parsed["query_payload"] = json.dumps(payload, ensure_ascii=False, indent=2)
             return parsed            
