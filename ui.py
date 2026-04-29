@@ -598,7 +598,15 @@ def render_main_page(sidebar_state=None):
                         fetched_data = get_financials_from_ai(c_name, curr_id, st.session_state.api_key, selected_model)
                     
                         if isinstance(fetched_data, dict) and "error" not in fetched_data:
-                            fetched_data['model_used'] = st.session_state.get('ai_model_radio', 'Gemini 2.5 Flash')
+                            model_label_map = {
+                                "gemini-2.5-flash": "Gemini 2.5 Flash",
+                                "gemini-2.5-pro": "Gemini 2.5 Pro",
+                                "gemini-3.1-flash-preview": "Gemini 3 Flash Preview",
+                                "gemini-3.1-flash-lite-preview": "Gemini 3 Flash-Lite Preview",
+                                "gemini-3.1-pro-preview": "Gemini 3 Pro Preview (付費版)",
+                            }
+                            model_id = fetched_data.get('model_used', selected_model)
+                            fetched_data['model_used'] = model_label_map.get(model_id, model_id)                            
                             st.session_state.ai_fetched_financials[curr_id] = fetched_data
                             st.rerun()
                         elif isinstance(fetched_data, dict) and "error" in fetched_data:
