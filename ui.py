@@ -694,7 +694,11 @@ def render_main_page(sidebar_state=None):
         
             # 🚀 接收 AI 抓到的目標價、MoM 與 Dividend Yield，並覆蓋錯誤資料
             ai_target_price = s_float(ai_fin.get('target_price'))
-        
+            ai_hi_val = s_float(ai_fin.get('target_price_high'))
+            ai_me_val = s_float(ai_fin.get('target_price_avg')) or ai_target_price
+            ai_lo_val = s_float(ai_fin.get('target_price_low'))
+            ai_analyst_count = ai_fin.get('target_price_analyst_count')
+            ai_target_rationale = str(ai_fin.get('target_price_rationale') or "").strip()
             ai_mom = s_float(ai_fin.get('mom'))
             if ai_mom is not None: 
                 latest_mom_val = ai_mom * 100
@@ -1048,26 +1052,26 @@ def render_main_page(sidebar_state=None):
             st.markdown(clean_html(dfens_html), unsafe_allow_html=True)
             st.markdown("---")
 
-            st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{info.get('numberOfAnalystOpinions', 0)} 位)")
+            analyst_count_display = ai_analyst_count if ai_analyst_count not in (None, "", "null") else "無"
+            st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{analyst_count_display} 位)")
         
-            if hi_val is not None and me_val is not None and lo_val is not None:
+            if ai_hi_val is not None and ai_me_val is not None and ai_lo_val is not None:
                 v1, v2, v3 = st.columns(3)
-                v1.markdown(f"<div style='background:#ffebee;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最高預期</small><br><b>{hi_val:.1f}</b></div>", unsafe_allow_html=True)
-                upside = ((me_val / curr_p) - 1) * 100 if curr_p else 0
-                v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>平均預測</small><br><b>{me_val:.1f}</b><br><small>空間: {upside:+.1f}%</small></div>", unsafe_allow_html=True)
-                v3.markdown(f"<div style='background:#e8f5e9;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>法人最低保底</small><br><b>{lo_val:.1f}</b></div>", unsafe_allow_html=True)
-                if ai_target_price: st.info(f"🤖 **AI 最新聯網捕捉法人目標價：** {ai_target_price:.1f} 元 ({ai_suffix})")
+                v1.markdown(f"<div style='background:#ffebee;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>最高價</small><br><b>{ai_hi_val:.1f}</b></div>", unsafe_allow_html=True)
+                upside = ((ai_me_val / curr_p) - 1) * 100 if curr_p else 0
+                v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>平均價</small><br><b>{ai_me_val:.1f}</b><br><small>空間: {upside:+.1f}%</small></div>", unsafe_allow_html=True)
+                v3.markdown(f"<div style='background:#e8f5e9;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>最低價</small><br><b>{ai_lo_val:.1f}</b></div>", unsafe_allow_html=True)
+                if ai_target_rationale:
+                    st.caption(f"📌 法人目標價核心理由：{ai_target_rationale}")
                 st.markdown("---")
-            elif hi_val is not None:
-                 st.info(f"系統法人最高預期：**{hi_val:.1f}**")
-                 if ai_target_price: st.info(f"🤖 **AI 最新聯網捕捉法人目標價：** {ai_target_price:.1f} 元 ({ai_suffix})")
-                 st.markdown("---")
-            elif ai_target_price:
-                 upside_ai = ((ai_target_price / curr_p) - 1) * 100 if curr_p else 0
-                 st.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>🤖 AI 聯網捕捉最新目標價 ({ai_suffix})</small><br><b>{ai_target_price:.1f}</b><br><small>潛在空間: {upside_ai:+.1f}%</small></div>", unsafe_allow_html=True)
+            elif ai_me_val is not None:
+                 upside_ai = ((ai_me_val / curr_p) - 1) * 100 if curr_p else 0
+                 st.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>🤖 AI 聯網捕捉平均目標價 ({ai_suffix})</small><br><b>{ai_me_val:.1f}</b><br><small>潛在空間: {upside_ai:+.1f}%</small></div>", unsafe_allow_html=True)
+                 if ai_target_rationale:
+                    st.caption(f"📌 法人目標價核心理由：{ai_target_rationale}")
                  st.markdown("---")
             else:
-                 st.markdown("<span style='color:gray;'>系統與 AI 目前皆無明確的法人目標價資料。</span>", unsafe_allow_html=True)
+                 st.markdown("<span style='color:gray;'>AI 目前尚未捕捉到法人目標價資料。</span>", unsafe_allow_html=True)
                  st.markdown("---")
 
             # 🚀 主力籌碼追蹤雷達
