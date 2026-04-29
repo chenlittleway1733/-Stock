@@ -66,8 +66,10 @@ def build_cmp_str(orig, ai_val, fmt="pct", suffix="AI推估", show_ai_missing=Fa
     s = to_val_str(orig, fmt)
     if ai_val is not None and not pd.isna(ai_val):
         ai_text = to_val_str(float(ai_val), fmt)
-    else:
+    elif show_ai_missing:
         ai_text = "AI找不到數據"
+    else:
+        return s
     s += f"<br><span style='color:#FFD700; font-size:0.85rem;'>({ai_text}, {suffix})</span>"
     return s
 
