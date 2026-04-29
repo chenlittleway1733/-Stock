@@ -1172,6 +1172,35 @@ def render_main_page(sidebar_state=None):
             """
             st.markdown(clean_html(chip_html), unsafe_allow_html=True)
             st.markdown("---")
+                        # 打包提示詞用：以「系統優先、AI 回填」方式填入關鍵財務指標，避免大量 N/A。
+            def _fmt_or_na(val, fmt):
+                return fmt(val) if val is not None else "N/A"
+
+            ctx_pe = _fmt_or_na(eff_pe, lambda v: f"{v:.1f}x")
+            ctx_fpe = _fmt_or_na(eff_forward_pe, lambda v: f"{v:.1f}x")
+            ctx_pb = _fmt_or_na(eff_pb, lambda v: f"{v:.2f}x")
+            if eff_peg == -999:
+                ctx_peg = "分母為負"
+            else:
+                ctx_peg = _fmt_or_na(eff_peg, lambda v: f"{v:.2f}")
+
+            eps_now = t_eps if t_eps is not None else ai_t_eps
+            eps_fwd = sys_f_eps_calc if sys_f_eps_calc is not None else ai_f_eps_calc
+            if eps_now is not None or eps_fwd is not None:
+                left = f"{eps_now:.2f}" if eps_now is not None else "N/A"
+                right = f"{eps_fwd:.2f}" if eps_fwd is not None else "N/A"
+                ctx_eps = f"{left} / {right}"
+            else:
+                ctx_eps = "N/A"
+
+            ctx_rg = _fmt_or_na(eff_rg, lambda v: f"{v*100:.2f}%")
+            ctx_eg = _fmt_or_na(real_cg, lambda v: f"{v*100:.2f}%")
+            ctx_gm = _fmt_or_na(eff_gm, lambda v: f"{v*100:.2f}%")
+            ctx_om = _fmt_or_na(eff_om, lambda v: f"{v*100:.2f}%")
+            ctx_roe = _fmt_or_na(eff_roe, lambda v: f"{v*100:.2f}%")
+            ctx_de = _fmt_or_na(eff_de, lambda v: f"{v:.2f}")
+
+
             # 打包提示詞用：若法人高/均/低目標價缺值，使用 AI 最新聯網目標價回填，避免顯示 N/A。
             prompt_hi_str = hi_str
             prompt_me_str = me_str
@@ -1203,7 +1232,7 @@ def render_main_page(sidebar_state=None):
             - 營業利益率: {ctx_om}
             - 股東權益報酬率 (ROE): {ctx_roe}
             - 負債權益比 (D/E Ratio): {ctx_de}
-            - 🩺 Piotroski F-Score 健康跑分: {f_score_val} / 9 分
+            - 🩺 Piotroski F-Score 健康跑分: {fs_str}（滿分 9 分）
 
             【🛡️ 防禦力與財務健康檢測 (重要參考)】
             - 預估殖利率: {dy_str}
