@@ -399,6 +399,9 @@ def render_sidebar():
 
 def render_main_page(sidebar_state=None):
     """渲染主畫面。"""
+    hi_val = None
+    me_val = None
+    lo_val = None
     sidebar_state = sidebar_state or {}
     topic_q = sidebar_state.get("topic_q", "")
     f_ok = sidebar_state.get("f_ok", None)
