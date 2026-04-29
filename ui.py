@@ -595,6 +595,13 @@ def render_main_page(sidebar_state=None):
                         fetched_data = get_financials_from_ai(c_name, curr_id, st.session_state.api_key, selected_model)
                     
                         if isinstance(fetched_data, dict) and "error" not in fetched_data:
+                            core_fin_keys = ["pe", "trailing_eps", "forward_eps", "pb", "gross_margin", "operating_margin", "roe", "yoy", "target_price", "mom", "dividend_yield"]
+                            has_effective_fin_data = any(fetched_data.get(k) not in (None, "", "null") for k in core_fin_keys)
+                            if not has_effective_fin_data:
+                                st.warning("⚠️ AI 本次有回應，但未抓到可用財報欄位（可能是來源暫無資料或回傳皆為 null）。請稍後重試或切換標的。")
+                                st.session_state.ai_fetched_financials.pop(curr_id, None)
+                                st.stop()
+
                             model_label_map = {
                                 "gemini-3.1-flash-preview": "Gemini 3 Flash Preview",
                                 "gemini-3.1-flash-lite-preview": "Gemini 3 Flash-Lite Preview",
@@ -615,9 +622,15 @@ def render_main_page(sidebar_state=None):
                 has_ai_fin_fetch = bool(temp_ai_fin)
                 if temp_ai_fin.get('model_used'):
                     st.markdown(f"<div style='text-align:right; color:#FFD700; font-size:0.85rem; margin-top:5px;'>🤖 驅動核心: <b>{temp_ai_fin['model_used']}</b></div>", unsafe_allow_html=True)
-                    if st.button("🧾 顯示本次 AI 查詢與回報資料", key=f"show_ai_raw_{curr_id}", use_container_width=True):
-                        st.session_state[f"show_ai_raw_{curr_id}"] = not st.session_state.get(f"show_ai_raw_{curr_id}", False)
-                    if st.session_state.get(f"show_ai_raw_{curr_id}", False):
+                    raw_state_key = f"show_ai_raw_panel_{curr_id}"
+                    if raw_state_key not in st.session_state:
+                        st.session_state[raw_state_key] = False
+
+                    btn_label = "🧾 隱藏本次 AI 查詢與回報資料" if st.session_state[raw_state_key] else "🧾 顯示本次 AI 查詢與回報資料"
+                    if st.button(btn_label, key=f"toggle_ai_raw_btn_{curr_id}", use_container_width=True):
+                        st.session_state[raw_state_key] = not st.session_state[raw_state_key]
+
+                    if st.session_state[raw_state_key]:
                         st.caption("以下為本次 AI 全方位校對與補齊財報的查詢內容與原始回報：")
                         query_preview = temp_ai_fin.get("query_payload")
                         if query_preview:
