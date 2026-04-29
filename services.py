@@ -116,6 +116,7 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
             parsed = json.loads(clean_text)
             if isinstance(parsed, dict):
                 parsed["model_used"] = used_model
+                parsed["query_payload"] = json.dumps(payload, ensure_ascii=False, indent=2)
             return parsed            
         else:
             return {"error": "AI 回傳的格式不正確，無法萃取 JSON 資料。"}
@@ -140,6 +141,7 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
                     parsed = json.loads(text[s_idx:e_idx+1])
                     if isinstance(parsed, dict):
                         parsed["model_used"] = "gemini-2.5-flash"
+                        parsed["query_payload"] = json.dumps(payload_no_search, ensure_ascii=False, indent=2)
                     return parsed                    
         except Exception:
             pass
