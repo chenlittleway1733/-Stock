@@ -1172,6 +1172,18 @@ def render_main_page(sidebar_state=None):
             """
             st.markdown(clean_html(chip_html), unsafe_allow_html=True)
             st.markdown("---")
+            # 打包提示詞用：若法人高/均/低目標價缺值，使用 AI 最新聯網目標價回填，避免顯示 N/A。
+            prompt_hi_str = hi_str
+            prompt_me_str = me_str
+            prompt_lo_str = lo_str
+            if ai_target_price is not None:
+                if prompt_hi_str == "N/A" and ai_hi_val is None:
+                    prompt_hi_str = f"{ai_target_price:.1f}（AI回填）"
+                if prompt_me_str == "N/A" and ai_me_val is None:
+                    prompt_me_str = f"{ai_target_price:.1f}（AI回填）"
+                if prompt_lo_str == "N/A" and ai_lo_val is None:
+                    prompt_lo_str = f"{ai_target_price:.1f}（AI回填）"
+
 
             context_str = f"""
             【即時盤面與估值 (原始數據 vs AI數據)】
@@ -1199,9 +1211,9 @@ def render_main_page(sidebar_state=None):
             - 流動比率 (Current Ratio): {cr_str}
 
             【法人預估目標價】
-            - 最高目標價: {hi_str}
-            - 平均目標價: {me_str}
-            - 最低保底價: {lo_str}
+            - 最高目標價: {prompt_hi_str}
+            - 平均目標價: {prompt_me_str}
+            - 最低保底價: {prompt_lo_str}
             - AI 最新聯網目標價 ({ai_suffix}): {ai_tp_str}
             """
         
