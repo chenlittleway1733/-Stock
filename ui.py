@@ -615,9 +615,14 @@ def render_main_page(sidebar_state=None):
                             st.error("🚨 AI 暫時無法找到確切數據，或請求遭拒。")
 
                 temp_ai_fin = st.session_state.ai_fetched_financials.get(curr_id, {})
+                has_ai_fin_fetch = bool(temp_ai_fin)
                 if temp_ai_fin.get('model_used'):
                     st.markdown(f"<div style='text-align:right; color:#FFD700; font-size:0.85rem; margin-top:5px;'>🤖 驅動核心: <b>{temp_ai_fin['model_used']}</b></div>", unsafe_allow_html=True)
-                        
+                    if st.button("🧾 顯示本次 AI 回報資料", key=f"show_ai_raw_{curr_id}", use_container_width=True):
+                        st.session_state[f"show_ai_raw_{curr_id}"] = not st.session_state.get(f"show_ai_raw_{curr_id}", False)
+                    if st.session_state.get(f"show_ai_raw_{curr_id}", False):
+                        st.caption("以下為本次使用目前 API Key 抓取到的 AI 原始回報欄位：")
+                        st.json(temp_ai_fin)    
             df_rev_bk = get_monthly_revenue(curr_id, st.session_state.finmind_key)
             df_per_bk = get_pe_pb_data(curr_id, st.session_state.finmind_key)
             fm_health = get_finmind_financial_health(curr_id, st.session_state.finmind_key)
@@ -766,8 +771,8 @@ def render_main_page(sidebar_state=None):
 
             eff_f_eps = sys_f_eps_calc
             eps_source_text = f"海外系統或反推 ({eff_f_eps:.2f}元)" if eff_f_eps is not None else "系統預估 (無資料)"
-            f_eps_display = build_cmp_dual_str(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'num', 'num', 'AI推估')
-        
+            f_eps_display = build_cmp_dual_str(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'num', 'num', 'AI推估', show_ai_missing=has_ai_fin_fetch)
+    
             sys_forward_pe = s_float(info.get('forwardPE'))
             if sys_forward_pe is None and eff_f_eps is not None and eff_f_eps > 0: sys_forward_pe = curr_p / eff_f_eps
         
@@ -816,7 +821,7 @@ def render_main_page(sidebar_state=None):
 
             ai_extreme_target_price = ai_f_eps_calc * target_pe_cap if ai_f_eps_calc is not None else None
         
-            eg_str_disp = build_cmp_str(real_cg, ai_cg, 'pct', 'AI推算')
+            eg_str_disp = build_cmp_str(real_cg, ai_cg, 'pct', 'AI推算', show_ai_missing=has_ai_fin_fetch)
             if is_base_normalized: eg_str_disp += "<br><span style='color:#FFD700; font-size:0.75rem; font-weight:normal;'>⚠️ 啟動低基期防護(分母=0.5)</span>"
             eg_color = "#ff4d4d" if real_cg and real_cg > 0 else ("#00cc66" if real_cg and real_cg < 0 else "#fff")
         
@@ -826,11 +831,11 @@ def render_main_page(sidebar_state=None):
             orig_fpe_str = f"{sys_forward_pe:.1f}x" if sys_forward_pe is not None else "N/A"
             fpe_str = f"{orig_fpe_str}<br><span style='color:#FFD700; font-size:0.85rem;'>({ai_fpe:.1f}x, AI推算)</span>" if ai_fpe is not None else orig_fpe_str
         
-            pe_str = build_cmp_str(pe_ratio, ai_pe, 'x', ai_suffix)
-            rg_str = build_cmp_str(rev_growth, ai_yoy, 'pct', ai_suffix)
-            gm_om_str = build_cmp_dual_str(gross_margin, op_margin, ai_gm, ai_om, 'pct', 'pct', ai_suffix)
-            roe_str = build_cmp_str(roe, ai_roe, 'pct', ai_suffix)
-            de_str = build_cmp_str(sys_de, ai_de, 'pct', ai_suffix)
+            pe_str = build_cmp_str(pe_ratio, ai_pe, 'x', ai_suffix, show_ai_missing=has_ai_fin_fetch)
+            rg_str = build_cmp_str(rev_growth, ai_yoy, 'pct', ai_suffix, show_ai_missing=has_ai_fin_fetch)
+            gm_om_str = build_cmp_dual_str(gross_margin, op_margin, ai_gm, ai_om, 'pct', 'pct', ai_suffix, show_ai_missing=has_ai_fin_fetch)
+            roe_str = build_cmp_str(roe, ai_roe, 'pct', ai_suffix, show_ai_missing=has_ai_fin_fetch)
+            de_str = build_cmp_str(sys_de, ai_de, 'pct', ai_suffix, show_ai_missing=has_ai_fin_fetch)
         
             rg_color = "#ff4d4d" if eff_rg and eff_rg > 0 else ("#00cc66" if eff_rg and eff_rg < 0 else "#fff")
             roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳 (已透過恆等式校正)'>⭐ 優質</span>" if eff_roe is not None and eff_roe >= 0.15 else ""
@@ -865,7 +870,7 @@ def render_main_page(sidebar_state=None):
                 elif eff_peg <= 1: peg_color, peg_text = "#00cc66", "低估 (成長性支撐)"
                 else: peg_color, peg_text = "#FFD700", "合理區間"
 
-            pb_str = build_cmp_str(pb_ratio, ai_pb, 'x', ai_suffix)
+            pb_str = build_cmp_str(pb_ratio, ai_pb, 'x', ai_suffix, show_ai_missing=has_ai_fin_fetch)
         
             if sys_target_price_est or ai_target_price_est:
                 if is_capped or ai_is_capped:
