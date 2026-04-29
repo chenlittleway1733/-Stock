@@ -17,8 +17,8 @@ import requests
 import streamlit as st
 import yfinance as yf
 
-# 移除 log_data_health 的直接依賴，避免 Streamlit Cache 衝突
-from utils import s_float
+# 從 utils 引入需要的工具
+from utils import s_float, log_data_health
 
 # ==========================================
 # 3. 外部 API 與模型模組
@@ -34,6 +34,7 @@ def fetch_fugle_kline(stock_id, api_key, timeframe="D"):
     try:
         res = requests.get(url, headers=headers, timeout=10)
         if res.status_code == 200:
+            log_data_health("Fugle", True, res.status_code)
             data = res.json().get('data', [])
             if data:
                 df = pd.DataFrame(data)
@@ -41,6 +42,8 @@ def fetch_fugle_kline(stock_id, api_key, timeframe="D"):
                 df.set_index('Date', inplace=True)
                 df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
                 return df[['Open', 'High', 'Low', 'Close', 'Volume']].sort_index()
+            else:
+                log_data_health("Fugle", False, res.status_code)
     except: pass
     return pd.DataFrame()
 
@@ -92,9 +95,11 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
             res = requests.post(fallback_url, headers=headers, json=payload, timeout=60)
             used_model = "gemini-2.5-flash"
             
+        # Google Search grounding 在尖峰時段可能較慢，若逾時則自動改用無搜尋工具重試一次
         if res.status_code in (408, 504, 500, 503):
             res = requests.post(url, headers=headers, json=payload_no_search, timeout=60)
 
+        log_data_health("Gemini", res.status_code == 200, res.status_code)
         if res.status_code != 200:
             return {"error": f"API 連線被拒絕 (代碼 {res.status_code})。細節：{res.text[:150]}"}
 
@@ -123,8 +128,10 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
             
     except requests.exceptions.Timeout:
         try:
+            # 最後保底：改用 2.5 Flash 並關閉搜尋工具，降低逾時風險
             fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
             res = requests.post(fallback_url, headers={"Content-Type": "application/json"}, json=payload_no_search, timeout=45)
+            log_data_health("Gemini", res.status_code == 200, res.status_code)
             if res.status_code == 200:
                 text = (
                     res.json()
@@ -160,6 +167,7 @@ def get_peers_from_ai(stock_name, stock_id, api_key):
     }
     try:
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=30)
+        log_data_health("Gemini", res.status_code == 200, res.status_code)
         if res.status_code == 200:
             clean_text = re.sub(r'```json\n?|```', '', res.json()['candidates'][0]['content']['parts'][0]['text']).strip()
             peers = json.loads(clean_text)
@@ -183,6 +191,7 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
             fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key.strip()}"
             res = requests.post(fallback_url, headers={"Content-Type": "application/json"}, json=payload, timeout=90)
             fallback_msg = f"> 💡 **系統提示**：您指定的 `{model_name}` 尚未開放或輸入錯誤，系統已自動降級使用 `Gemini 2.5 Flash` 為您完成分析。\n\n---\n\n"
+        log_data_health("Gemini", res.status_code == 200, res.status_code)
         if res.status_code == 200: 
             ans = re.sub(r'```markdown\n?|```', '', res.json().get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')).strip()
             return fallback_msg + ans
@@ -207,6 +216,7 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
         if response.status_code == 404 and model_name != "gemini-2.5-flash":
             fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
             response = requests.post(fallback_url, headers=headers, json=payload, timeout=60)
+        log_data_health("Gemini", response.status_code == 200, response.status_code)
         if response.status_code == 200:
             res_json = response.json()
             content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
@@ -266,6 +276,7 @@ def get_monthly_revenue(stock_id, fm_key=""):
     try:
         y_url = f"https://tw.stock.yahoo.com/quote/{stock_id}/revenue"
         y_res = requests.get(y_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+        log_data_health("Yahoo", y_res.status_code == 200, y_res.status_code)
         if y_res.status_code == 200:
             json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', y_res.text)
             if json_match:
@@ -319,7 +330,11 @@ def get_monthly_revenue(stock_id, fm_key=""):
         url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockMonthRevenue&data_id={stock_id}&start_date={start_str}"
         if fm_key: url += f"&token={fm_key}" 
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        ok = (res.status_code == 200)
+        status_val = res.status_code
         data = res.json()
+        ok = ok and data.get('status') == 200
+        log_data_health("FinMind", ok, status_val)
         if data.get('status') == 200 and data.get('data'):
             df = pd.DataFrame(data['data'])
             df['date'] = pd.to_datetime(df['date'])
@@ -500,4 +515,303 @@ def get_fallback_info(stock_id):
             info['operatingMargins'] = found_data.get('operatingMargins')
             info['returnOnEquity'] = found_data.get('returnOnEquity')
             
-        sec_match = re.
+        # 完整補齊原本斷掉的 re 搜尋語句
+        sec_match = re.search(r'href="/class-quote\?category=([^"&]+)', text)
+        if sec_match: info['sector'] = urllib.parse.unquote(sec_match.group(1))
+    except: pass
+    return info
+
+@st.cache_data(ttl=30)
+def get_realtime_data(stock_id):
+    rt_data = {}
+    try:
+        session = requests.Session()
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        session.get("https://mis.twse.com.tw/stock/index.jsp", headers=headers, timeout=5)
+        url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{stock_id}.tw|otc_{stock_id}.tw"
+        res = session.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            msg_array = data.get('msgArray', [])
+            if msg_array:
+                info = msg_array[0]
+                def p_f(v): return float(v) if v != '-' and v is not None else None
+                rt_price = p_f(info.get('z'))
+                if rt_price is None: rt_price = p_f(info.get('y'))
+                if rt_price is not None:
+                    rt_data['realtime_price'] = rt_price
+                    rt_data['realtime_prev_close'] = p_f(info.get('y'))
+                    rt_data['realtime_open'] = p_f(info.get('o')) or rt_price
+                    rt_data['realtime_high'] = p_f(info.get('h')) or rt_price
+                    rt_data['realtime_low'] = p_f(info.get('l')) or rt_price
+                    rt_data['realtime_volume'] = p_f(info.get('v'))
+                    return rt_data
+    except: pass
+
+    for ext in [".TW", ".TWO"]:
+        try:
+            tk = yf.Ticker(f"{stock_id}{ext}")
+            fi = tk.fast_info
+            if 'last_price' in fi:
+                rt_data['realtime_price'] = fi['last_price']
+                rt_data['realtime_prev_close'] = fi.get('previous_close')
+                rt_data['realtime_open'] = fi.get('open')
+                rt_data['realtime_high'] = fi.get('day_high')
+                rt_data['realtime_low'] = fi.get('day_low')
+                rt_data['realtime_volume'] = fi.get('last_volume')
+                return rt_data
+        except: continue
+        
+    return rt_data
+
+def inject_realtime_data(hist, stock_id, timeframe="D"):
+    if hist is None or hist.empty: return hist, None
+    
+    tw_time = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+    if tw_time.hour < 9: target_date = (tw_time - datetime.timedelta(days=1)).date()
+    else: target_date = tw_time.date()
+    
+    if hist.index.tz is not None:
+        hist = hist[hist.index.date <= target_date]
+    else:
+        hist = hist[hist.index.date <= target_date]
+        
+    if hist.empty: return hist, None
+
+    rt_data = get_realtime_data(stock_id)
+    rt_price = rt_data.get('realtime_price')
+    rt_prev = rt_data.get('realtime_prev_close')
+    
+    if rt_price is not None and rt_price > 0:
+        rt_open = rt_data.get('realtime_open') or rt_price
+        rt_high = rt_data.get('realtime_high') or rt_price
+        rt_low = rt_data.get('realtime_low') or rt_price
+        rt_vol = rt_data.get('realtime_volume') or 0
+        
+        last_date = hist.index[-1].date()
+        if timeframe == "D":
+            if last_date < target_date:
+                new_idx = pd.to_datetime(target_date)
+                if hist.index.tz is not None: new_idx = new_idx.tz_localize(hist.index.tz)
+                new_row = pd.DataFrame({
+                    'Open': [rt_open], 'High': [rt_high], 'Low': [rt_low], 
+                    'Close': [rt_price], 'Volume': [rt_vol]
+                }, index=pd.Index([new_idx], name='Date'))
+                hist = pd.concat([hist, new_row])
+            elif last_date == target_date:
+                hist.loc[hist.index[-1], 'Close'] = rt_price
+                hist.loc[hist.index[-1], 'Open'] = rt_open
+                hist.loc[hist.index[-1], 'High'] = max(hist.loc[hist.index[-1], 'High'], rt_high)
+                hist.loc[hist.index[-1], 'Low'] = min(hist.loc[hist.index[-1], 'Low'], rt_low)
+                if rt_vol > 0: hist.loc[hist.index[-1], 'Volume'] = rt_vol
+        elif timeframe in ["W", "M"]:
+            hist.loc[hist.index[-1], 'Close'] = rt_price
+            if rt_high > hist.loc[hist.index[-1], 'High']: hist.loc[hist.index[-1], 'High'] = rt_high
+            if rt_low < hist.loc[hist.index[-1], 'Low']: hist.loc[hist.index[-1], 'Low'] = rt_low
+            
+    hist.index.name = 'Date'
+    return hist, rt_prev
+
+@st.cache_data(ttl=3600)
+def _get_base_stock_data(stock_id, fugle_key="", fm_key=""):
+    hist = None
+    info_data = {}
+    price_source = None
+    info_source = None
+    fallback_notes = []
+
+    if fugle_key:
+        hist = fetch_fugle_kline(stock_id, fugle_key, "D")
+        if hist is not None and not hist.empty:
+            price_source = "Fugle API"
+    
+    for ext in [".TW", ".TWO"]:
+        try:
+            ticker = yf.Ticker(f"{stock_id}{ext}")
+            if hist is None or hist.empty:
+                temp_hist = ticker.history(period="5y")
+                if not temp_hist.empty:
+                    hist = temp_hist
+                    price_source = "Yahoo Finance (yfinance)"
+            try:
+                info_data = ticker.info
+                if info_data:
+                    info_source = "Yahoo Finance (yfinance)"
+            except:
+                pass
+            if info_data or (hist is not None and not hist.empty): break
+        except: continue
+            
+    if hist is None or hist.empty:
+        for ext in [".TW", ".TWO"]:
+            try:
+                url = f"https://query1.finance.yahoo.com/v7/finance/download/{stock_id}{ext}?range=5y&interval=1d&events=history"
+                res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+                log_data_health("Yahoo", res.status_code == 200, res.status_code)
+                if res.status_code == 200:
+                    df = pd.read_csv(io.StringIO(res.text))
+                    df['Date'] = pd.to_datetime(df['Date'])
+                    df.set_index('Date', inplace=True)
+                    hist = df[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
+                    if not hist.empty:
+                        price_source = "Yahoo Finance CSV fallback"
+                        fallback_notes.append("主資料源失敗，已改用 Yahoo CSV 備援股價。")
+                        break
+            except: pass
+
+    if hist is None or hist.empty:
+        try:
+            start_str = f"{(datetime.date.today() - datetime.timedelta(days=1825)).isoformat()}"
+            url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id={stock_id}&start_date={start_str}"
+            if fm_key: url += f"&token={fm_key}"
+            res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+            log_data_health("FinMind", res.status_code == 200, res.status_code)
+            data = res.json()
+            if data.get('status') == 200 and data.get('data'):
+                df = pd.DataFrame(data['data'])
+                df['Date'] = pd.to_datetime(df['date'])
+                df.rename(columns={'open':'Open','max':'High','min':'Low','close':'Close','Trading_Volume':'Volume'}, inplace=True)
+                df.set_index('Date', inplace=True)
+                hist = df[['Open','High','Low','Close','Volume']]
+                if hist is not None and not hist.empty:
+                    price_source = "FinMind fallback"
+                    fallback_notes.append("Yahoo 來源失敗，已改用 FinMind 備援股價。")
+        except: pass
+
+    if hist is not None and not hist.empty:
+        hist.index.name = 'Date'
+        fallback = get_fallback_info(stock_id)
+        filled_from_fallback = 0
+        for k, v in fallback.items():
+            if v is not None:
+                if k not in info_data or not info_data[k] or str(info_data[k]).lower() == 'nan':
+                    info_data[k] = v
+                    filled_from_fallback += 1
+        if filled_from_fallback > 0:
+            if info_source is None:
+                info_source = "Yahoo 頁面解析備援"
+            fallback_notes.append(f"已由頁面解析補齊 {filled_from_fallback} 個財務欄位。")
+
+    info_data['__price_source'] = price_source or "未知來源"
+    info_data['__info_source'] = info_source or "未知來源"
+    info_data['__fallback_notes'] = fallback_notes                    
+    return hist, info_data
+
+def get_stock_data(stock_id, fugle_key="", fm_key=""):
+    hist, info_data = _get_base_stock_data(stock_id, fugle_key, fm_key)
+    if hist is not None and not hist.empty:
+        hist = hist.copy()
+        info_data = info_data.copy()
+        hist, rt_prev = inject_realtime_data(hist, stock_id, "D")
+        if rt_prev is not None: info_data['previousClose'] = rt_prev
+    return hist, info_data
+
+@st.cache_data(ttl=900)
+def _get_base_chart_data(stock_id, timeframe, fugle_key=""):
+    tf_map = {"日線": "D", "週線": "W", "月線": "M", "60分線": "60"}
+    if fugle_key:
+        tf = tf_map.get(timeframe, "D")
+        df = fetch_fugle_kline(stock_id, fugle_key, tf)
+        if not df.empty:
+            df.index.name = 'Date'
+            return df
+
+    interval_map = {"日線": {"period": "1y", "interval": "1d"}, "週線": {"period": "2y", "interval": "1wk"}, "月線": {"period": "5y", "interval": "1mo"}, "60分線": {"period": "1mo", "interval": "60m"}}
+    params = interval_map.get(timeframe, {"period": "1y", "interval": "1d"})
+    for ext in [".TW", ".TWO"]:
+        try:
+            ticker = yf.Ticker(f"{stock_id}{ext}")
+            df = ticker.history(period=params["period"], interval=params["interval"])
+            if not df.empty:
+                if df.index.tz is not None: df.index = df.index.tz_localize(None)
+                df.index.name = 'Date'
+                return df
+        except: continue
+        
+    if timeframe == "日線":
+        hist, _ = _get_base_stock_data(stock_id, fugle_key, "")
+        if hist is not None and not hist.empty: return hist
+
+    return pd.DataFrame()
+
+def get_chart_data(stock_id, timeframe, fugle_key=""):
+    df = _get_base_chart_data(stock_id, timeframe, fugle_key)
+    if not df.empty:
+        df = df.copy()
+        if timeframe == "日線": df, _ = inject_realtime_data(df, stock_id, "D")
+        elif timeframe == "週線": df, _ = inject_realtime_data(df, stock_id, "W")
+        elif timeframe == "月線": df, _ = inject_realtime_data(df, stock_id, "M")
+    return df
+
+@st.cache_data(ttl=43200)
+def get_inst_data(stock_id, fm_key=""):
+    try:
+        today = datetime.date.today()
+        start_str = (today - datetime.timedelta(days=180)).strftime("%Y-%m-%d")
+        url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInstitutionalInvestorsBuySell&data_id={stock_id}&start_date={start_str}"
+        if fm_key: url += f"&token={fm_key}" 
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            if data.get('status') == 200 and data.get('data'):
+                df = pd.DataFrame(data['data'])
+                if df.empty: return pd.DataFrame()
+                df['date'] = pd.to_datetime(df['date'])
+                
+                if 'buy_sell' not in df.columns:
+                    if 'buy' not in df.columns: df['buy'] = 0
+                    if 'sell' not in df.columns: df['sell'] = 0
+                    df['buy'] = pd.to_numeric(df['buy'], errors='coerce').fillna(0)
+                    df['sell'] = pd.to_numeric(df['sell'], errors='coerce').fillna(0)
+                    df['buy_sell'] = df['buy'] - df['sell']
+                else:
+                    df['buy_sell'] = pd.to_numeric(df['buy_sell'], errors='coerce').fillna(0)
+                
+                pivot_df = df.pivot_table(index='date', columns='name', values='buy_sell', aggfunc='sum').fillna(0)
+                res_df = pd.DataFrame(index=pivot_df.index)
+                f_cols = [c for c in pivot_df.columns if '外資' in str(c) or 'Foreign' in str(c)]
+                t_cols = [c for c in pivot_df.columns if '投信' in str(c) or 'Trust' in str(c)]
+                d_cols = [c for c in pivot_df.columns if '自營商' in str(c) or 'Dealer' in str(c)]
+                res_df['Foreign'] = pivot_df[f_cols].sum(axis=1) if f_cols else 0
+                res_df['Trust'] = pivot_df[t_cols].sum(axis=1) if t_cols else 0
+                res_df['Dealer'] = pivot_df[d_cols].sum(axis=1) if d_cols else 0
+                return res_df / 1000 
+    except: pass
+    return pd.DataFrame()
+
+@st.cache_data(ttl=60)
+def validate_api_keys(f_key, m_key):
+    f_res, m_res = None, None
+    if f_key:
+        clean_f = re.sub(r'\s+', '', f_key)
+        try:
+            r1 = requests.get("https://api.fugle.tw/marketdata/v1.0/stock/historical/candles/2330?timeframe=D", headers={"X-API-KEY": clean_f}, timeout=15)
+            f_res = (r1.status_code == 200)
+        except: f_res = False
+    if m_key:
+        clean_m = re.sub(r'\s+', '', m_key)
+        try:
+            r2 = requests.get(f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=2330&start_date=2024-01-01&end_date=2024-01-02&token={clean_m}", timeout=15)
+            m_res = (r2.status_code == 200 and r2.json().get('status') == 200)
+        except: m_res = False
+    return f_res, m_res
+
+@st.cache_data(ttl=86400) 
+def get_chinese_name(stock_id):
+    try:
+        url = f"https://tw.stock.yahoo.com/quote/{stock_id}"
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+        match = re.search(r'<title>(.*?)(?:\(| \()', res.text)
+        if match: return match.group(1).strip()
+    except: pass
+    return None
+
+@st.cache_data(ttl=86400)
+def translate_to_zh(text):
+    if not text or text == '暫無簡介。': return text
+    try:
+        url = "https://translate.googleapis.com/translate_a/single"
+        params = {"client": "gtx", "sl": "en", "tl": "zh-TW", "dt": "t", "q": text}
+        res = requests.get(url, params=params, timeout=5)
+        return "".join([item[0] for item in res.json()[0]])
+    except: return text + "\n\n(⚠️ 翻譯服務暫時忙碌中)"
