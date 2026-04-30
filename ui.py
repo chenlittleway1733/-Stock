@@ -1178,8 +1178,15 @@ def render_main_page(sidebar_state=None):
             
             def _nullize_text(s):
                 s = str(s) if s is not None else ""
+                # 1. 剝除所有 HTML 標籤，替換成一個空白
+                import re
+                s = re.sub(r'<[^>]+>', ' ', s)
+                # 2. 替換掉代表空值的字串
                 s = s.replace("N/A", "NULL").replace("無資料", "NULL").replace("未捕捉到", "NULL")
-                return s if s.strip() else "NULL"
+                # 3. 將多個連續空白縮減為單一空白，避免標籤被取代後留下過多空格
+                s = re.sub(r'\s+', ' ', s)
+                
+                return s.strip() if s.strip() else "NULL"
 
             # 面板核心數值（系統/AI/推估）
             ctx_pe = _fmt_or_na(eff_pe, lambda v: f"{v:.1f}x")
