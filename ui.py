@@ -712,7 +712,6 @@ def render_main_page(sidebar_state=None):
         
             # 設定 AI 標籤與時間後綴
             raw_ai_period = str(ai_fin.get('data_period', '')).replace('None', '').strip()
-            ai_suffix = f"AI({raw_ai_period})" if raw_ai_period else "AI捉取"
             ai_label = "AI捉取"
             ai_period_val = f"({raw_ai_period})" if raw_ai_period else ""
         
@@ -783,7 +782,6 @@ def render_main_page(sidebar_state=None):
                         if not valid_pe.empty:
                             hist_high_pe = valid_pe.quantile(0.9)
                             if hist_high_pe > suggested_cap + 5:
-                                suggested_cap = float(math.ceil(hist_high_pe / 5) * 5)
                                 cap_reason += f"<br>📈 <span style='color:#FFD700;'>近兩年 AI 週期高位達 {hist_high_pe:.1f}x，動態釋放天花板！</span>"
             
                 target_pe_cap = st.number_input("⚙️ 動態本益比天花板 (Cap)", value=float(suggested_cap), step=5.0, help="防禦低基期失真陷阱！系統已根據毛利率與產業題材自動調整合理的極限本益比。")
@@ -1218,14 +1216,13 @@ def render_main_page(sidebar_state=None):
 
 
             context_str = f"""
-            
 【A. 盤面與估值（請逐項引用；缺值為 NULL）】
 - 股票: {c_name} ({curr_id})
 - 最新收盤價: {_nullize_text(curr_p)} 元
-- 歷史本益比(系統/AI): {panel_pe}
-- 前瞻本益比(系統/AI): {panel_fpe}
-- 股價淨值比(系統/AI): {panel_pb}
-- 前瞻PEG(系統/AI): {panel_peg}
+- 歷史本益比(系統/AI整合): {panel_pe}
+- 前瞻本益比(系統/AI整合): {panel_fpe}
+- 股價淨值比(系統/AI整合): {panel_pb}
+- 前瞻PEG(系統/AI整合): {panel_peg}
 - 系統逆向推算極限高空價: {ctx_tp_est}
 
 【B. 財務動能（原始/AI/推估整合）】
@@ -1240,7 +1237,7 @@ def render_main_page(sidebar_state=None):
 【C. 防禦力與健康】
 - 預估殖利率: {_nullize_text(dy_str)}
 - 自由現金流 FCF: {_nullize_text(fcf_str)}
-- 流動比率: {_nullize_text(cr_str)}
+- 流 মিটিং動比率: {_nullize_text(cr_str)}
 - Piotroski F-Score: {_nullize_text(fs_str)}（滿分 9 分）
 
 【D. 法人與 AI 聯網目標價】
