@@ -23,9 +23,6 @@ SECTOR_MAP = {
 # ==========================================
 # 1. 全局安全轉換與排版函數
 # ==========================================
-# ==========================================
-# 1. 全局安全轉換與排版函數
-# ==========================================
 def s_float(val, default=None):
     try:
         if val is None: return default
@@ -71,7 +68,6 @@ def build_cmp_str(orig, ai_val, fmt="pct", suffix="AI推估", show_ai_missing=Fa
     else:
         return s
     
-    # 調整格式：(標籤: 數值, 時間)
     time_str = f", {period}" if period else ""
     s += f"<br><span style='color:#FFD700; font-size:0.85rem;'>({suffix}: {ai_text}{time_str})</span>"
     return s
@@ -85,10 +81,11 @@ def build_cmp_dual_str(o1, o2, a1, a2, fmt1="num", fmt2="num", suffix="AI推估"
         return s
     sa1 = to_val_str(float(a1) if a1 is not None and not pd.isna(a1) else None, fmt1)
     sa2 = to_val_str(float(a2) if a2 is not None and not pd.isna(a2) else None, fmt2)
-    if sa1 == "N/A": sa1 = "AI找不到數據"
-    if sa2 == "N/A": sa2 = "AI找不到數據"
-    
-    # 調整格式：(標籤: 數值1 / 數值2, 時間)
+    if sa1 == "N/A":
+        sa1 = "AI找不到數據"
+    if sa2 == "N/A":
+        sa2 = "AI找不到數據"
+        
     time_str = f", {period}" if period else ""
     s += f"<br><span style='color:#FFD700; font-size:0.85rem;'>({suffix}: {sa1} / {sa2}{time_str})</span>"
     return s
@@ -105,6 +102,7 @@ def get_watchlist():
                     if "," in line: watchlist.append(line.split(",")[0].strip())
         except: pass
     return watchlist
+
 def load_stocklist_structure():
     """解析 stocklist.txt 為 (分類順序, 分類->[(code,name)], 錯誤訊息)。"""
     cat_order = []
@@ -359,7 +357,6 @@ def on_quick_select_change():
 
 def get_selected_model_id():
     opt = st.session_state.get('ai_model_radio', 'Gemini 3 Flash Preview')
-        # 保留舊文案相容（3.1），實際模型代號改為 Gemini 3 系列官方命名
     if "3 Pro" in opt or "3.1 Pro" in opt: return "gemini-3.1-pro-preview"
     elif "3 Flash-Lite" in opt or "3.1 Flash-Lite" in opt: return "gemini-3.1-flash-lite-preview"
     elif "3 Flash" in opt: return "gemini-3.1-flash-preview"
