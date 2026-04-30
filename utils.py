@@ -62,7 +62,7 @@ def p_dual(o1, o2, a1, a2, suffix="AI捉取"):
         s += f" ({sa1} / {sa2}, {suffix})"
     return s
 
-def build_cmp_str(orig, ai_val, fmt="pct", suffix="AI推估", show_ai_missing=False):
+def build_cmp_str(orig, ai_val, fmt="pct", suffix="AI推估", show_ai_missing=False, period=""):
     s = to_val_str(orig, fmt)
     if ai_val is not None and not pd.isna(ai_val):
         ai_text = to_val_str(float(ai_val), fmt)
@@ -70,10 +70,13 @@ def build_cmp_str(orig, ai_val, fmt="pct", suffix="AI推估", show_ai_missing=Fa
         ai_text = "AI找不到數據"
     else:
         return s
-    s += f"<br><span style='color:#FFD700; font-size:0.85rem;'>({ai_text}, {suffix})</span>"
+    
+    # 調整格式：(標籤: 數值, 時間)
+    time_str = f", {period}" if period else ""
+    s += f"<br><span style='color:#FFD700; font-size:0.85rem;'>({suffix}: {ai_text}{time_str})</span>"
     return s
 
-def build_cmp_dual_str(o1, o2, a1, a2, fmt1="num", fmt2="num", suffix="AI推估", show_ai_missing=False):
+def build_cmp_dual_str(o1, o2, a1, a2, fmt1="num", fmt2="num", suffix="AI推估", show_ai_missing=False, period=""):
     s1 = to_val_str(o1, fmt1)
     s2 = to_val_str(o2, fmt2)
     s = f"{s1} / <span style='color:#00bfff;'>{s2}</span>" if (fmt1=="num" and fmt2=="num") else f"{s1} / {s2}"
@@ -82,11 +85,12 @@ def build_cmp_dual_str(o1, o2, a1, a2, fmt1="num", fmt2="num", suffix="AI推估"
         return s
     sa1 = to_val_str(float(a1) if a1 is not None and not pd.isna(a1) else None, fmt1)
     sa2 = to_val_str(float(a2) if a2 is not None and not pd.isna(a2) else None, fmt2)
-    if sa1 == "N/A":
-        sa1 = "AI找不到數據"
-    if sa2 == "N/A":
-        sa2 = "AI找不到數據"
-    s += f"<br><span style='color:#FFD700; font-size:0.85rem;'>({sa1} / {sa2}, {suffix})</span>"
+    if sa1 == "N/A": sa1 = "AI找不到數據"
+    if sa2 == "N/A": sa2 = "AI找不到數據"
+    
+    # 調整格式：(標籤: 數值1 / 數值2, 時間)
+    time_str = f", {period}" if period else ""
+    s += f"<br><span style='color:#FFD700; font-size:0.85rem;'>({suffix}: {sa1} / {sa2}{time_str})</span>"
     return s
 
 def clean_html(html_str):
