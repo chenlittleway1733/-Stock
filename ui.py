@@ -710,8 +710,11 @@ def render_main_page(sidebar_state=None):
             
             ai_dy = s_float(ai_fin.get('dividend_yield'))
         
+            # 設定 AI 標籤與時間後綴
             raw_ai_period = str(ai_fin.get('data_period', '')).replace('None', '').strip()
             ai_suffix = f"AI({raw_ai_period})" if raw_ai_period else "AI捉取"
+            ai_label = "AI捉取"
+            ai_period_val = f"({raw_ai_period})" if raw_ai_period else ""
         
             # 🚀 在目標價 html 生成前，先宣告給 prompt 用的純文字變數，絕對防禦 NameError
             ai_tp_str = f"{ai_target_price:.1f}" if ai_target_price is not None else "未捕捉到"
@@ -790,7 +793,9 @@ def render_main_page(sidebar_state=None):
 
             eff_f_eps = sys_f_eps_calc
             eps_source_text = f"海外系統或反推 ({eff_f_eps:.2f}元)" if eff_f_eps is not None else "系統預估 (無資料)"
-            f_eps_display = build_cmp_dual_str(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'num', 'num', 'AI推估', show_ai_missing=has_ai_fin_fetch)
+            
+            # 使用新的排版函數呼叫
+            f_eps_display = build_cmp_dual_str(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'num', 'num', 'AI推估', show_ai_missing=has_ai_fin_fetch, period=ai_period_val)
     
             sys_forward_pe = s_float(info.get('forwardPE'))
             if sys_forward_pe is None and eff_f_eps is not None and eff_f_eps > 0: sys_forward_pe = curr_p / eff_f_eps
@@ -840,21 +845,28 @@ def render_main_page(sidebar_state=None):
 
             ai_extreme_target_price = ai_f_eps_calc * target_pe_cap if ai_f_eps_calc is not None else None
         
-            eg_str_disp = build_cmp_str(real_cg, ai_cg, 'pct', 'AI推算', show_ai_missing=has_ai_fin_fetch)
+            # 手動組合區域
+            time_str = f", {ai_period_val}" if ai_period_val else ""
+
+            # 1. 預估獲利成長 (YoY)
+            eg_str_disp = build_cmp_str(real_cg, ai_cg, 'pct', 'AI推估', show_ai_missing=has_ai_fin_fetch, period=ai_period_val)
             if is_base_normalized: eg_str_disp += "<br><span style='color:#FFD700; font-size:0.75rem; font-weight:normal;'>⚠️ 啟動低基期防護(分母=0.5)</span>"
             eg_color = "#ff4d4d" if real_cg and real_cg > 0 else ("#00cc66" if real_cg and real_cg < 0 else "#fff")
         
+            # 2. 前瞻 PEG
             orig_peg_str = f"{orig_peg:.2f}" if orig_peg is not None else ("分母為負" if real_cg is not None and real_cg <= 0 else "N/A")
-            peg_str_disp = f"{orig_peg_str}<br><span style='color:#FFD700; font-size:0.85rem;'>({ai_peg:.2f}, AI推算)</span>" if ai_peg is not None else orig_peg_str
+            peg_str_disp = f"{orig_peg_str}<br><span style='color:#FFD700; font-size:0.85rem;'>(AI推估: {ai_peg:.2f}{time_str})</span>" if ai_peg is not None else orig_peg_str
         
+            # 3. 前瞻 P/E
             orig_fpe_str = f"{sys_forward_pe:.1f}x" if sys_forward_pe is not None else "N/A"
-            fpe_str = f"{orig_fpe_str}<br><span style='color:#FFD700; font-size:0.85rem;'>({ai_fpe:.1f}x, AI推算)</span>" if ai_fpe is not None else orig_fpe_str
+            fpe_str = f"{orig_fpe_str}<br><span style='color:#FFD700; font-size:0.85rem;'>(AI推估: {ai_fpe:.1f}x{time_str})</span>" if ai_fpe is not None else orig_fpe_str
         
-            pe_str = build_cmp_str(pe_ratio, ai_pe, 'x', ai_suffix, show_ai_missing=has_ai_fin_fetch)
-            rg_str = build_cmp_str(rev_growth, ai_yoy, 'pct', ai_suffix, show_ai_missing=has_ai_fin_fetch)
-            gm_om_str = build_cmp_dual_str(gross_margin, op_margin, ai_gm, ai_om, 'pct', 'pct', ai_suffix, show_ai_missing=has_ai_fin_fetch)
-            roe_str = build_cmp_str(roe, ai_roe, 'pct', ai_suffix, show_ai_missing=has_ai_fin_fetch)
-            de_str = build_cmp_str(sys_de, ai_de, 'pct', ai_suffix, show_ai_missing=has_ai_fin_fetch)
+            pe_str = build_cmp_str(pe_ratio, ai_pe, 'x', ai_label, show_ai_missing=has_ai_fin_fetch, period=ai_period_val)
+            rg_str = build_cmp_str(rev_growth, ai_yoy, 'pct', ai_label, show_ai_missing=has_ai_fin_fetch, period=ai_period_val)
+            gm_om_str = build_cmp_dual_str(gross_margin, op_margin, ai_gm, ai_om, 'pct', 'pct', ai_label, show_ai_missing=has_ai_fin_fetch, period=ai_period_val)
+            roe_str = build_cmp_str(roe, ai_roe, 'pct', ai_label, show_ai_missing=has_ai_fin_fetch, period=ai_period_val)
+            de_str = build_cmp_str(sys_de, ai_de, 'pct', ai_label, show_ai_missing=has_ai_fin_fetch, period=ai_period_val)
+            pb_str = build_cmp_str(pb_ratio, ai_pb, 'x', ai_label, show_ai_missing=has_ai_fin_fetch, period=ai_period_val)
         
             rg_color = "#ff4d4d" if eff_rg and eff_rg > 0 else ("#00cc66" if eff_rg and eff_rg < 0 else "#fff")
             roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳 (已透過恆等式校正)'>⭐ 優質</span>" if eff_roe is not None and eff_roe >= 0.15 else ""
@@ -888,8 +900,6 @@ def render_main_page(sidebar_state=None):
                 elif eff_peg > 2: peg_color, peg_text = "#ff4d4d", "透支未來成長"
                 elif eff_peg <= 1: peg_color, peg_text = "#00cc66", "低估 (成長性支撐)"
                 else: peg_color, peg_text = "#FFD700", "合理區間"
-
-            pb_str = build_cmp_str(pb_ratio, ai_pb, 'x', ai_suffix, show_ai_missing=has_ai_fin_fetch)
         
             if sys_target_price_est or ai_target_price_est:
                 if is_capped or ai_is_capped:
@@ -900,10 +910,10 @@ def render_main_page(sidebar_state=None):
                         cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>{cap_msg}</span>"
             
                 sys_tp_str = f"{sys_target_price_est:.1f}元" if sys_target_price_est else "N/A"
-                ai_tp_est_html = f"<span style='color:#FFD700; font-size:0.95rem;'>({ai_target_price_est:.1f}元, AI推估)</span>" if ai_target_price_est else ""
+                ai_tp_est_html = f"<span style='color:#FFD700; font-size:0.95rem;'>(AI推估: {ai_target_price_est:.1f}元{time_str})</span>" if ai_target_price_est else ""
             
                 sys_ext_str = f"{extreme_target_price:.1f}元" if extreme_target_price else "N/A"
-                ai_ext_str = f"<span style='color:#FFD700; font-size:0.95rem;'>({ai_extreme_target_price:.1f}元, AI推估)</span>" if ai_extreme_target_price else ""
+                ai_ext_str = f"<span style='color:#FFD700; font-size:0.95rem;'>(AI推估: {ai_extreme_target_price:.1f}元{time_str})</span>" if ai_extreme_target_price else ""
             
                 debug_eps = eff_f_eps if eff_f_eps else 0
             
@@ -1066,7 +1076,7 @@ def render_main_page(sidebar_state=None):
                 st.markdown("---")
             elif ai_me_val is not None:
                  upside_ai = ((ai_me_val / curr_p) - 1) * 100 if curr_p else 0
-                 st.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>🤖 AI 聯網捕捉平均目標價 ({ai_suffix})</small><br><b>{ai_me_val:.1f}</b><br><small>潛在空間: {upside_ai:+.1f}%</small></div>", unsafe_allow_html=True)
+                 st.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>🤖 AI 聯網捕捉平均目標價 ({ai_label} {ai_period_val})</small><br><b>{ai_me_val:.1f}</b><br><small>潛在空間: {upside_ai:+.1f}%</small></div>", unsafe_allow_html=True)
                  if ai_target_rationale:
                     st.caption(f"📌 法人目標價核心理由：{ai_target_rationale}")
                  st.markdown("---")
@@ -1172,40 +1182,16 @@ def render_main_page(sidebar_state=None):
             """
             st.markdown(clean_html(chip_html), unsafe_allow_html=True)
             st.markdown("---")
-            # 打包提示詞：完整收斂「面板可見值 + AI/系統來源」，缺值統一顯示 NULL
-            def _fmt_or_na(val, fmt):
-                return fmt(val) if val is not None else "NULL"
             
             def _nullize_text(s):
                 s = str(s) if s is not None else ""
-                # 1. 剝除所有 HTML 標籤，替換成一個空白
                 import re
                 s = re.sub(r'<[^>]+>', ' ', s)
-                # 2. 替換掉代表空值的字串
                 s = s.replace("N/A", "NULL").replace("無資料", "NULL").replace("未捕捉到", "NULL")
-                # 3. 將多個連續空白縮減為單一空白，避免標籤被取代後留下過多空格
                 s = re.sub(r'\s+', ' ', s)
-                
                 return s.strip() if s.strip() else "NULL"
 
             # 面板核心數值（系統/AI/推估）
-            ctx_pe = _fmt_or_na(eff_pe, lambda v: f"{v:.1f}x")
-            ctx_fpe = _fmt_or_na(eff_forward_pe, lambda v: f"{v:.1f}x")
-            ctx_pb = _fmt_or_na(eff_pb, lambda v: f"{v:.2f}x")
-            if eff_peg == -999:
-                ctx_peg = "分母為負"
-            else:
-                ctx_peg = _fmt_or_na(eff_peg, lambda v: f"{v:.2f}")
-
-            eps_now = t_eps if t_eps is not None else ai_t_eps
-            eps_fwd = sys_f_eps_calc if sys_f_eps_calc is not None else ai_f_eps_calc
-            ctx_eps = f"{eps_now:.2f} / {eps_fwd:.2f}" if (eps_now is not None and eps_fwd is not None) else _nullize_text(f"{eps_now if eps_now is not None else 'NULL'} / {eps_fwd if eps_fwd is not None else 'NULL'}")
-            ctx_rg = _fmt_or_na(eff_rg, lambda v: f"{v*100:.2f}%")
-            ctx_eg = _fmt_or_na(real_cg, lambda v: f"{v*100:.2f}%")
-            ctx_gm = _fmt_or_na(eff_gm, lambda v: f"{v*100:.2f}%")
-            ctx_om = _fmt_or_na(eff_om, lambda v: f"{v*100:.2f}%")
-            ctx_roe = _fmt_or_na(eff_roe, lambda v: f"{v*100:.2f}%")
-            ctx_de = _fmt_or_na(eff_de, lambda v: f"{v:.2f}")
             ctx_tp_est = _nullize_text(tp_est_str)
             panel_pe = _nullize_text(pe_str)
             panel_fpe = _nullize_text(fpe_str)
@@ -1235,31 +1221,20 @@ def render_main_page(sidebar_state=None):
 【A. 盤面與估值（請逐項引用；缺值為 NULL）】
 - 股票: {c_name} ({curr_id})
 - 最新收盤價: {_nullize_text(curr_p)} 元
-- 歷史本益比(整合值): {ctx_pe}
-- 前瞻本益比(整合值): {ctx_fpe}
-- 股價淨值比(整合值): {ctx_pb}
-- PEG(整合值): {ctx_peg}
+- 歷史本益比(系統/AI): {panel_pe}
+- 前瞻本益比(系統/AI): {panel_fpe}
+- 股價淨值比(系統/AI): {panel_pb}
+- 前瞻PEG(系統/AI): {panel_peg}
 - 系統逆向推算極限高空價: {ctx_tp_est}
-- 面板顯示-歷史本益比: {panel_pe}
-- 面板顯示-前瞻本益比: {panel_fpe}
-- 面板顯示-P/B: {panel_pb}
-- 面板顯示-PEG: {panel_peg}
 
 【B. 財務動能（原始/AI/推估整合）】
-- EPS(目前/預估): {_nullize_text(ctx_eps)} 元
-- 面板顯示-EPS卡: {panel_eps}
-- 營收年增率 YoY [{latest_rev_month}]: {ctx_rg}
+- EPS(目前/預估): {panel_eps}
+- 營收年增率 YoY [{latest_rev_month}]: {panel_rg}
 - 最新單月營收月增率 MoM [{latest_rev_month}]: {_nullize_text(latest_mom_str)}
-- 預估獲利成長 YoY: {ctx_eg}
-- 毛利率: {ctx_gm}
-- 營業利益率: {ctx_om}
-- ROE: {ctx_roe}
-- D/E Ratio: {ctx_de}
-- 面板顯示-營收成長卡: {panel_rg}
-- 面板顯示-獲利成長卡: {panel_eg}
-- 面板顯示-毛利/營益卡: {panel_gmom}
-- 面板顯示-ROE卡: {panel_roe}
-- 面板顯示-D/E卡: {panel_de}
+- 預估獲利成長 YoY: {panel_eg}
+- 毛利率 / 營益率: {panel_gmom}
+- ROE (恆等式校正): {panel_roe}
+- 負債權益比 (D/E): {panel_de}
 
 【C. 防禦力與健康】
 - 預估殖利率: {_nullize_text(dy_str)}
@@ -1271,7 +1246,7 @@ def render_main_page(sidebar_state=None):
 - 最高目標價: {_nullize_text(prompt_hi_str)}
 - 平均目標價: {_nullize_text(prompt_me_str)}
 - 最低保底價: {_nullize_text(prompt_lo_str)}
-- AI 最新聯網目標價({ai_suffix}): {_nullize_text(ai_tp_str)}
+- AI 最新聯網目標價({ai_label}): {_nullize_text(ai_tp_str)}
 - 目標價分析師人數: {_nullize_text(ai_analyst_count)}
 - 目標價核心理由: {_nullize_text(ai_target_rationale)}
 """
