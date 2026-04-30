@@ -897,7 +897,7 @@ def render_main_page(sidebar_state=None):
                 elif eff_peg > 2: peg_color, peg_text = "#ff4d4d", "透支未來成長"
                 elif eff_peg <= 1: peg_color, peg_text = "#00cc66", "低估 (成長性支撐)"
                 else: peg_color, peg_text = "#FFD700", "合理區間"
-        if sys_target_price_est or ai_target_price_est:
+            if sys_target_price_est or ai_target_price_est:
                 if is_capped or ai_is_capped:
                     cap_msg = f"🚨 觸發封頂防護 ({target_pe_cap:.0f}x)"
                     if (extreme_target_price and curr_p > extreme_target_price) or (ai_extreme_target_price and curr_p > ai_extreme_target_price):
