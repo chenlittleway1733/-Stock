@@ -1218,6 +1218,7 @@ def render_main_page(sidebar_state=None):
 
 
             context_str = f"""
+            
 【A. 盤面與估值（請逐項引用；缺值為 NULL）】
 - 股票: {c_name} ({curr_id})
 - 最新收盤價: {_nullize_text(curr_p)} 元
