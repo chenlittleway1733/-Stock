@@ -898,25 +898,23 @@ def render_main_page(sidebar_state=None):
                 elif eff_peg > 2: peg_color, peg_text = "#ff4d4d", "透支未來成長"
                 elif eff_peg <= 1: peg_color, peg_text = "#00cc66", "低估 (成長性支撐)"
                 else: peg_color, peg_text = "#FFD700", "合理區間"
-        
-            if sys_target_price_est or ai_target_price_est:
+        if sys_target_price_est or ai_target_price_est:
                 if is_capped or ai_is_capped:
                     cap_msg = f"🚨 觸發封頂防護 ({target_pe_cap:.0f}x)"
                     if (extreme_target_price and curr_p > extreme_target_price) or (ai_extreme_target_price and curr_p > ai_extreme_target_price):
                         cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>{cap_msg}，追高風險極大！</span>"
                     else: 
                         cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>{cap_msg}</span>"
-            
                 sys_tp_str = f"{sys_target_price_est:.1f}元" if sys_target_price_est else "N/A"
-                ai_tp_est_html = f"<span style='color:#FFD700; font-size:0.95rem;'>(AI推估: {ai_target_price_est:.1f}元{time_str})</span>" if ai_target_price_est else ""
-            
+                ai_tp_est_html = f"<span style='color:#FFD700; font-size:0.95rem;'>(AI推估: {ai_target_price_est:.1f}元{time_str})</span>" if ai_target_price_est else ""            
                 sys_ext_str = f"{extreme_target_price:.1f}元" if extreme_target_price else "N/A"
-                ai_ext_str = f"<span style='color:#FFD700; font-size:0.95rem;'>(AI推估: {ai_extreme_target_price:.1f}元{time_str})</span>" if ai_extreme_target_price else ""
-            
+                ai_ext_str = f"<span style='color:#FFD700; font-size:0.95rem;'>(AI推估: {ai_extreme_target_price:.1f}元{time_str})</span>" if ai_extreme_target_price else ""   
                 debug_eps = eff_f_eps if eff_f_eps else 0
-            
+                # 🚀 修正處：將計算出來的結果回填給純文字變數 tp_est_str，讓提示詞抓得到
+                ai_tp_txt = f"{ai_target_price_est:.1f}元" if ai_target_price_est else "N/A"
+                ai_ext_txt = f"{ai_extreme_target_price:.1f}元" if ai_extreme_target_price else "N/A"
+                tp_est_str = f"合理估值: {sys_tp_str} (AI推估: {ai_tp_txt}) | 極限高空價: {sys_ext_str} (AI推估: {ai_ext_txt}) | 帶入 Cap: {target_pe_cap:.0f}x"               
                 target_price_html = f"<div style='color:#aaa; font-size:0.85rem; border-top:1px solid #444; padding-top:8px; margin-top:8px;'>🎯 合理估值 (PEG 推算): <b style='color:#fff; font-size:1.1rem;'>{sys_tp_str}</b> <br>{ai_tp_est_html}<br>🚀 <span style='color:#ff4d4d; font-weight:bold;'>極限高空價 (Forward EPS × Cap): <span style='font-size:1.2rem;'>{sys_ext_str}</span> <br>{ai_ext_str}</span><br><div style='background:#2c2c2c; padding:4px 8px; border-radius:4px; margin-top:4px;'><small style='color:#00bfff;'>🐛 [底層運算除錯] 帶入 EPS: {debug_eps:.2f} | 帶入 Cap: {target_pe_cap:.0f}x</small></div>{cap_warning_html}</div>"
-
             val_html = f"""
             <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom:20px;'>
                 <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pe_color};'>
@@ -1189,7 +1187,7 @@ def render_main_page(sidebar_state=None):
                 s = re.sub(r'\s+', ' ', s)
                 return s.strip() if s.strip() else "NULL"
 
-            # 面板核心數值（系統/AI/推估）
+# 面板核心數值（系統/AI/推估）
             ctx_tp_est = _nullize_text(tp_est_str)
             panel_pe = _nullize_text(pe_str)
             panel_fpe = _nullize_text(fpe_str)
@@ -1202,19 +1200,22 @@ def render_main_page(sidebar_state=None):
             panel_roe = _nullize_text(roe_str)
             panel_de = _nullize_text(de_str)
 
-            # 目標價回填
-            prompt_hi_str = hi_str
-            prompt_me_str = me_str
-            prompt_lo_str = lo_str
+            # 🚀 修正處：正確讀取系統目標價與 AI 目標價的判斷邏輯
+            sys_hi = s_float(info.get('targetHighPrice'))
+            sys_me = s_float(info.get('targetMeanPrice'))
+            sys_lo = s_float(info.get('targetLowPrice'))
+            hi_str = f"{sys_hi:.1f}" if sys_hi is not None else "N/A"
+            me_str = f"{sys_me:.1f}" if sys_me is not None else "N/A"
+            lo_str = f"{sys_lo:.1f}" if sys_lo is not None else "N/A"
+
+            prompt_hi_str = f"{ai_hi_val:.1f}" if ai_hi_val is not None else hi_str
+            prompt_me_str = f"{ai_me_val:.1f}" if ai_me_val is not None else me_str
+            prompt_lo_str = f"{ai_lo_val:.1f}" if ai_lo_val is not None else lo_str
+            
             if ai_target_price is not None:
-                if prompt_hi_str == "N/A" and ai_hi_val is None:
-                    prompt_hi_str = f"{ai_target_price:.1f}（AI回填）"
-                if prompt_me_str == "N/A" and ai_me_val is None:
-                    prompt_me_str = f"{ai_target_price:.1f}（AI回填）"
-                if prompt_lo_str == "N/A" and ai_lo_val is None:
-                    prompt_lo_str = f"{ai_target_price:.1f}（AI回填）"
-
-
+                if prompt_hi_str == "N/A": prompt_hi_str = f"{ai_target_price:.1f} (AI回填)"
+                if prompt_me_str == "N/A": prompt_me_str = f"{ai_target_price:.1f} (AI回填)"
+                if prompt_lo_str == "N/A": prompt_lo_str = f"{ai_target_price:.1f} (AI回填)"
             context_str = f"""
 【A. 盤面與估值（請逐項引用；缺值為 NULL）】
 - 股票: {c_name} ({curr_id})
