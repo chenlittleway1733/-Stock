@@ -690,6 +690,12 @@ def render_main_page(sidebar_state=None):
             ai_om = s_float(ai_fin.get('operating_margin'))
             ai_roe = s_float(ai_fin.get('roe'))
             ai_de = s_float(ai_fin.get('debt_to_equity'))
+            ai_dy = s_float(ai_fin.get('dividend_yield'))
+            
+            # 接取剛增加的三項防禦/主力籌碼指標
+            ai_fcf = s_float(ai_fin.get('free_cash_flow'))
+            ai_cr = s_float(ai_fin.get('current_ratio'))
+            ai_shares = s_float(ai_fin.get('shares_outstanding'))
         
             # 🚀 接收 AI 抓到的目標價、MoM 與 Dividend Yield，並覆蓋錯誤資料
             ai_target_price = s_float(ai_fin.get('target_price'))
@@ -706,8 +712,6 @@ def render_main_page(sidebar_state=None):
                 latest_mom_str = f"{latest_mom_val:.2f}%"
             else:
                 latest_mom_str = "N/A"
-            
-            ai_dy = s_float(ai_fin.get('dividend_yield'))
         
             # 設定 AI 標籤與時間後綴
             raw_ai_period = str(ai_fin.get('data_period', '')).replace('None', '').strip()
@@ -998,8 +1002,10 @@ def render_main_page(sidebar_state=None):
 
             fcf = s_float(info.get('freeCashflow'))
             if fcf is None and fm_health.get('cfo_l'): fcf = fm_health.get('cfo_l')
+            if ai_fcf is not None: fcf = ai_fcf
             
             current_ratio = s_float(info.get('currentRatio'))
+            if ai_cr is not None: current_ratio = ai_cr
 
             dy_str = to_pct(div_yield)
             if div_yield is None: dy_color, dy_eval = "gray", "無資料"
@@ -1131,6 +1137,7 @@ def render_main_page(sidebar_state=None):
             insider_pct = s_float(info.get('heldPercentInsiders'))
             inst_pct = s_float(info.get('heldPercentInstitutions'))
             shares_out = s_float(info.get('sharesOutstanding'))
+            if ai_shares is not None: shares_out = ai_shares
             share_capital = shares_out * 10 if shares_out is not None else None
 
             if share_capital is not None:
@@ -1186,7 +1193,7 @@ def render_main_page(sidebar_state=None):
                 s = re.sub(r'\s+', ' ', s)
                 return s.strip() if s.strip() else "NULL"
 
-# 面板核心數值（系統/AI/推估）
+            # 面板核心數值（系統/AI/推估）
             ctx_tp_est = _nullize_text(tp_est_str)
             panel_pe = _nullize_text(pe_str)
             panel_fpe = _nullize_text(fpe_str)
@@ -1237,7 +1244,7 @@ def render_main_page(sidebar_state=None):
 【C. 防禦力與健康】
 - 預估殖利率: {_nullize_text(dy_str)}
 - 自由現金流 FCF: {_nullize_text(fcf_str)}
-- 流 মিটিং動比率: {_nullize_text(cr_str)}
+- 流動比率: {_nullize_text(cr_str)}
 - Piotroski F-Score: {_nullize_text(fs_str)}（滿分 9 分）
 
 【D. 法人與 AI 聯網目標價】
@@ -1281,32 +1288,11 @@ def render_main_page(sidebar_state=None):
 以下是系統面板完整數據（含網路抓取 / AI 抓取 / 推估；無資料為 NULL）,若出現數據不合理，可上網查詢並說明不合理原因：
 {context_str}
 """
-
-            col_ai1, col_ai2 = st.columns([1.2, 1])
-            with col_ai1:
-                if st.button("🤖 啟動 AI 綜合產業與實戰操作分析", help="將結合畫面上算出的財報與目標價數據，提供深度的買賣點建議"):
-                    if not st.session_state.api_key: st.warning("請先於左側選單輸入您的 API Key。")
-                    else:
-                        with st.spinner(f"AI ({st.session_state.get('selected_model', 'gemini-2.5-flash')}) 正在深度檢索最新產業動態並結合盤面數據計算買賣點..."):
-                            st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, context_str, st.session_state.get('selected_model', 'gemini-2.5-flash'))
-        
-            with col_ai2:
-                with st.expander("📋 點此複製【打包提示詞】至Gemini或ChatGpt發問"):
-                    st.markdown("<small style='color:gray;'>*請在下方文字框內點選，全選 (Ctrl+A / ⌘+A) 並複製，直接貼至付費版 Gemini Advanced 或是 ChatGPT 對話框，即可獲得同等專業的分析！*</small>", unsafe_allow_html=True)
-                    st.text_area("提示詞內容", value=full_prompt_for_copy, height=300, label_visibility="collapsed")
-        
-            if st.session_state.ai_industry_result:
-                st.markdown("<br>", unsafe_allow_html=True)
-                with st.container(border=True):
-                    col1, col2 = st.columns([0.7, 0.3])
-                    with col1: st.markdown("### 🤖 AI 綜合產業透視與實戰策略")
-                    with col2: st.markdown("<div style='text-align:right; margin-top:20px;'><small style='color:#00bfff;'>💡 往下捲動有【一鍵複製區塊】</small></div>", unsafe_allow_html=True)
-                    st.markdown(st.session_state.ai_industry_result)
-                    st.markdown("---")
-                    st.markdown("##### 📋 【純文字複製區】")
-                    st.markdown("<small style='color:gray;'>*請在下方文字框內全選並複製，貼至 Gemini Advanced 進行二次深度驗證。*</small>", unsafe_allow_html=True)
-                    st.text_area("純文字結果", value=st.session_state.ai_industry_result, height=400, label_visibility="collapsed")
-                st.markdown("<br>", unsafe_allow_html=True)
+            
+            # 將原本的 AI 按鈕移除，並將提示詞區塊設為展開且全寬度顯示
+            with st.expander("📋 點此複製【打包提示詞】至 Gemini Advanced 或 ChatGPT 發問", expanded=True):
+                st.markdown("<small style='color:gray;'>*請在下方文字框內點選，全選 (Ctrl+A / ⌘+A) 並複製，直接貼至付費版 Gemini Advanced 或是 ChatGPT 對話框，即可獲得同等專業的分析！*</small>", unsafe_allow_html=True)
+                st.text_area("提示詞內容", value=full_prompt_for_copy, height=300, label_visibility="collapsed")
             
             st.markdown("---")
 
@@ -1640,3 +1626,5 @@ def render_main_page(sidebar_state=None):
             st.plotly_chart(fig_k, use_container_width=True)
         else:
             st.error(f"找不到代號 {curr_id} 的資料，請確認代號是否正確或重新整理。")
+
+}
