@@ -3,7 +3,6 @@ Streamlit 使用者介面層：
 包含側邊欄、主畫面、卡片、圖表與互動按鈕。
 由原始 app(1).py 拆分而來。
 """
-
 import datetime
 import math
 import os
@@ -387,13 +386,11 @@ def render_sidebar():
             st.info("尚無來源健康資料。")
         st.markdown("---")
 
-
     return {
         "topic_q": locals().get("topic_q", ""),
         "f_ok": locals().get("f_ok", None),
         "m_ok": locals().get("m_ok", None),
     }
-
 
 def render_main_page(sidebar_state=None):
     """渲染主畫面。"""
@@ -591,7 +588,7 @@ def render_main_page(sidebar_state=None):
             with col_fin_title:
                 st.markdown("#### 💼 財務基本面與獲利基準微調")
             with col_fin_btn:
-                if st.button("🪄 啟動 AI 全方位校對與補齊財報", disabled=not st.session_state.api_key, use_container_width=True, help="點此讓 AI 上網搜尋最新財報與估值指標，並與現有資料進行比對"):
+                if st.button("🪄 啟提 AI 全方位校對與補齊財報", disabled=not st.session_state.api_key, use_container_width=True, help="點此讓 AI 上網搜尋最新財報與估值指標，並與現有資料進行比對"):
                     with st.spinner("AI 正在聯網為您強行抓取最新財報數據，請稍候... (約需 30-45 秒)"):
                         selected_model = get_selected_model_id()
                         fetched_data = get_financials_from_ai(c_name, curr_id, st.session_state.api_key, selected_model)
@@ -1627,5 +1624,3 @@ def render_main_page(sidebar_state=None):
             st.plotly_chart(fig_k, use_container_width=True)
         else:
             st.error(f"找不到代號 {curr_id} 的資料，請確認代號是否正確或重新整理。")
-
-}
