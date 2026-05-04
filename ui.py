@@ -1278,7 +1278,7 @@ def render_main_page(sidebar_state=None):
 - [風險與反證]
 - [下月追蹤清單]
 
-以下是系統面板完整數據（含網路抓取 / AI 抓取 / 推估；無資料為 NULL）：
+以下是系統面板完整數據（含網路抓取 / AI 抓取 / 推估；無資料為 NULL）,若出現數據不合理，可上網查詢並說明不合理原因：
 {context_str}
 """
 
@@ -1291,7 +1291,7 @@ def render_main_page(sidebar_state=None):
                             st.session_state.ai_industry_result = get_ai_industry_analysis(c_name, curr_id, st.session_state.api_key, context_str, st.session_state.get('selected_model', 'gemini-2.5-flash'))
         
             with col_ai2:
-                with st.expander("📋 若 API 額度耗盡？點此複製【打包提示詞】手動發問"):
+                with st.expander("📋 點此複製【打包提示詞】至Gemini或ChatGpt發問"):
                     st.markdown("<small style='color:gray;'>*請在下方文字框內點選，全選 (Ctrl+A / ⌘+A) 並複製，直接貼至付費版 Gemini Advanced 或是 ChatGPT 對話框，即可獲得同等專業的分析！*</small>", unsafe_allow_html=True)
                     st.text_area("提示詞內容", value=full_prompt_for_copy, height=300, label_visibility="collapsed")
         
