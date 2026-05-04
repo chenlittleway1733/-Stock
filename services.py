@@ -484,73 +484,65 @@ def get_finmind_financial_health(stock_id, fm_key=""):
 @st.cache_data(ttl=1800)
 def get_stock_news(stock_id):
     news_data = []
-    for ext in [".TW", ".TWO"]:
-        try:
-            ticker = yf.Ticker(f"{stock_id}{ext}")
-            news = ticker.news
-            if news:
-                for n in news:
-                    news_data.append({
-                        "title": n.get("title", ""),
-                        "publisher": n.get("publisher", ""),
-                        "link": n.get("link", ""),
-                        "timestamp": n.get("providerPublishTime", 0)
-                    })
-                break 
-        except: pass
+    
+    # 方法 1: 使用 Google News RSS 抓取繁體中文台股新聞 (高穩定度與即時性)
+    try:
+        # 組合精準搜尋字串，只找與財報、法說會、營收等基本面相關的新聞
+        query = f"{stock_id} 台股 (財報 OR 法說會 OR 營收 OR 盈餘 OR EPS)"
+        encoded_query = urllib.parse.quote(query)
+        url = f"https://news.google.com/rss/search?q={encoded_query}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+        
+        res = requests.get(url, timeout=10)
+        if res.status_code == 200:
+            import email.utils
+            root = ET.fromstring(res.text)
+            for item in root.findall('.//item')[:5]:
+                title = item.find('title').text if item.find('title') is not None else ""
+                link = item.find('link').text if item.find('link') is not None else ""
+                source = item.find('source').text if item.find('source') is not None else "Google News"
+                pubDate = item.find('pubDate').text if item.find('pubDate') is not None else ""
+                
+                timestamp = 0
+                if pubDate:
+                    try:
+                        # 將 RSS 格式時間轉換為時間戳
+                        parsed_date = email.utils.parsedate_tz(pubDate)
+                        if parsed_date:
+                            timestamp = int(email.utils.mktime_tz(parsed_date))
+                    except: pass
+                    
+                news_data.append({
+                    "title": title,
+                    "publisher": source,
+                    "link": link,
+                    "timestamp": timestamp
+                })
+    except: pass
+
+    # 方法 2: 若 Google News 失敗，退回原本的 yfinance 備援 (同樣加入關鍵字過濾)
+    if not news_data:
+        for ext in [".TW", ".TWO"]:
+            try:
+                ticker = yf.Ticker(f"{stock_id}{ext}")
+                news = ticker.news
+                if news:
+                    for n in news:
+                        title = n.get("title", "")
+                        # 簡易過濾 Yahoo 財經新聞，保留與基本面相關的
+                        if any(kw in title for kw in ["財報", "法說", "營收", "EPS", "盈餘", "季報", "年報", "獲利"]):
+                            news_data.append({
+                                "title": title,
+                                "publisher": n.get("publisher", ""),
+                                "link": n.get("link", ""),
+                                "timestamp": n.get("providerPublishTime", 0)
+                            })
+                    break 
+            except: pass
+            
     if news_data:
         news_data.sort(key=lambda x: x["timestamp"], reverse=True)
         return news_data[:5]
     return []
-
-def analyze_news_sentiment(stock_name, news_data, api_key, model_name="gemini-3.0-pro"):
-    if not api_key: return {"error": "未提供 API Key"}
-    if not news_data: return {"error": "無新聞資料可供分析"}
-    
-    news_text = "\n".join([f"- {n['title']} ({n['publisher']})" for n in news_data])
-    
-    system_prompt = """你是一個專業的股市新聞情緒分析師。
-    請根據提供的新聞標題，判斷目前市場對該公司的情緒。
-    請務必從以下「五個級別」中選擇一個最適合的：
-    1. 強烈偏多 (多項重大利多、財報驚艷、突破性進展)
-    2. 偏多 (正面消息為主、營運穩健向上)
-    3. 中性 (無明顯方向、消息互相抵銷)
-    4. 偏空 (負面消息為主、營運遇逆風)
-    5. 強烈偏空 (多項重大利空、財報爆雷、意外事件)
-
-    必須嚴格回傳包含以下欄位的 JSON 格式：
-    {
-        "sentiment": "強烈偏多" | "偏多" | "中性" | "偏空" | "強烈偏空",
-        "summary": "請用 2~3 句話，專業且精煉地總結近期的利多或利空重點與潛在影響。"
-    }
-    絕對不要輸出 markdown 標記或其他文字。"""
-    
-    payload = {
-        "contents": [{"parts": [{"text": f"請分析 {stock_name} 的近期新聞情緒：\n{news_text}"}]}],
-        "systemInstruction": {"parts": [{"text": system_prompt}]},
-        "generationConfig": {"responseMimeType": "application/json"}
-    }
-    
-    # 優先呼叫 Gemini 3.0 Pro
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key.strip()}"
-    
-    try:
-        res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=30)
-        
-        # 增加防呆機制：若 3.0 Pro 的 API 名稱未生效或無權限 (404)，自動降級使用 2.5 Pro
-        if res.status_code == 404:
-            fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={api_key.strip()}"
-            res = requests.post(fallback_url, headers={"Content-Type": "application/json"}, json=payload, timeout=30)
-
-        if res.status_code == 200:
-            text = res.json().get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '').strip()
-            s_idx = text.find('{')
-            e_idx = text.rfind('}')
-            if s_idx != -1 and e_idx != -1:
-                return json.loads(text[s_idx:e_idx+1])
-        return {"error": f"API 連線失敗 ({res.status_code})"}
-    except Exception as e:
-        return {"error": f"分析失敗: {str(e)}"}
 
 def get_fallback_info(stock_id):
     info = {}
