@@ -582,13 +582,64 @@ def render_main_page(sidebar_state=None):
                 st.markdown(clean_html(trend_html), unsafe_allow_html=True)
 
             # ==========================================
+            # 📰 個股即時新聞與 AI 情緒分析
+            # ==========================================
+            st.markdown("#### 📰 近期新聞與 AI 情緒分析")
+            news_list = get_stock_news(curr_id)
+            if news_list:
+                col_n1, col_n2 = st.columns([1.5, 1])
+                with col_n1:
+                    for n in news_list[:3]:
+                        publish_time = datetime.datetime.fromtimestamp(n['timestamp']).strftime('%Y-%m-%d %H:%M') if n['timestamp'] else "未知時間"
+                        st.markdown(f"🔸 [{n['title']}]({n['link']}) <span style='color:gray; font-size:0.8rem;'>- {n['publisher']} ({publish_time})</span>", unsafe_allow_html=True)
+                
+                with col_n2:
+                    if st.button("🤖 啟動 AI 新聞情緒解讀", key=f"btn_news_{curr_id}", use_container_width=True):
+                        if not st.session_state.api_key:
+                            st.warning("請先輸入 API Key")
+                        else:
+                            with st.spinner("AI (Gemini 3.0 Pro) 正在深度判讀新聞情緒..."):
+                                # 這裡強制傳入 gemini-3.0-pro 進行推論
+                                sent_res = analyze_news_sentiment(c_name, news_list, st.session_state.api_key, model_name="gemini-3.0-pro")
+                                st.session_state[f"news_sentiment_{curr_id}"] = sent_res
+                    
+                    sent_res = st.session_state.get(f"news_sentiment_{curr_id}")
+                    if sent_res:
+                        if "error" in sent_res:
+                            st.error(sent_res["error"])
+                        else:
+                            sentiment = sent_res.get("sentiment", "中性")
+                            
+                            # 擴充為 5 種級別的顏色與圖示
+                            if "強烈偏多" in sentiment:
+                                color, icon = "#ff4d4d", "🔥"
+                            elif "偏多" in sentiment:
+                                color, icon = "#ff8c00", "📈"
+                            elif "強烈偏空" in sentiment:
+                                color, icon = "#00cc66", "⚠️"
+                            elif "偏空" in sentiment:
+                                color, icon = "#66bb6a", "📉"
+                            else:
+                                color, icon = "#FFD700", "⚖️"
+                                
+                            st.markdown(f"""
+                            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {color};'>
+                                <div style='font-size:1.1rem; font-weight:bold; color:{color}; margin-bottom:5px;'>{icon} AI 綜合情緒：{sentiment}</div>
+                                <div style='color:#ddd; font-size:0.95rem; line-height:1.4;'>{sent_res.get("summary", "")}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+            else:
+                st.caption("目前無最新新聞資料。")
+            st.markdown("---")
+
+            # ==========================================
             # 💼 財務基本面與獲利基準微調
             # ==========================================
             col_fin_title, col_fin_btn = st.columns([0.6, 0.4])
             with col_fin_title:
                 st.markdown("#### 💼 財務基本面與獲利基準微調")
             with col_fin_btn:
-                if st.button("🪄 啟提 AI 全方位校對與補齊財報", disabled=not st.session_state.api_key, use_container_width=True, help="點此讓 AI 上網搜尋最新財報與估值指標，並與現有資料進行比對"):
+                if st.button("🪄 啟動 AI 全方位校對與補齊財報", disabled=not st.session_state.api_key, use_container_width=True, help="點此讓 AI 上網搜尋最新財報與估值指標，並與現有資料進行比對"):
                     with st.spinner("AI 正在聯網為您強行抓取最新財報數據，請稍候... (約需 30-45 秒)"):
                         selected_model = get_selected_model_id()
                         fetched_data = get_financials_from_ai(c_name, curr_id, st.session_state.api_key, selected_model)
