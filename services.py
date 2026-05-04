@@ -481,6 +481,77 @@ def get_finmind_financial_health(stock_id, fm_key=""):
     except: pass
     return {}
 
+@st.cache_data(ttl=1800)
+def get_stock_news(stock_id):
+    news_data = []
+    for ext in [".TW", ".TWO"]:
+        try:
+            ticker = yf.Ticker(f"{stock_id}{ext}")
+            news = ticker.news
+            if news:
+                for n in news:
+                    news_data.append({
+                        "title": n.get("title", ""),
+                        "publisher": n.get("publisher", ""),
+                        "link": n.get("link", ""),
+                        "timestamp": n.get("providerPublishTime", 0)
+                    })
+                break 
+        except: pass
+    if news_data:
+        news_data.sort(key=lambda x: x["timestamp"], reverse=True)
+        return news_data[:5]
+    return []
+
+def analyze_news_sentiment(stock_name, news_data, api_key, model_name="gemini-3.0-pro"):
+    if not api_key: return {"error": "未提供 API Key"}
+    if not news_data: return {"error": "無新聞資料可供分析"}
+    
+    news_text = "\n".join([f"- {n['title']} ({n['publisher']})" for n in news_data])
+    
+    system_prompt = """你是一個專業的股市新聞情緒分析師。
+    請根據提供的新聞標題，判斷目前市場對該公司的情緒。
+    請務必從以下「五個級別」中選擇一個最適合的：
+    1. 強烈偏多 (多項重大利多、財報驚艷、突破性進展)
+    2. 偏多 (正面消息為主、營運穩健向上)
+    3. 中性 (無明顯方向、消息互相抵銷)
+    4. 偏空 (負面消息為主、營運遇逆風)
+    5. 強烈偏空 (多項重大利空、財報爆雷、意外事件)
+
+    必須嚴格回傳包含以下欄位的 JSON 格式：
+    {
+        "sentiment": "強烈偏多" | "偏多" | "中性" | "偏空" | "強烈偏空",
+        "summary": "請用 2~3 句話，專業且精煉地總結近期的利多或利空重點與潛在影響。"
+    }
+    絕對不要輸出 markdown 標記或其他文字。"""
+    
+    payload = {
+        "contents": [{"parts": [{"text": f"請分析 {stock_name} 的近期新聞情緒：\n{news_text}"}]}],
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "generationConfig": {"responseMimeType": "application/json"}
+    }
+    
+    # 優先呼叫 Gemini 3.0 Pro
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key.strip()}"
+    
+    try:
+        res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=30)
+        
+        # 增加防呆機制：若 3.0 Pro 的 API 名稱未生效或無權限 (404)，自動降級使用 2.5 Pro
+        if res.status_code == 404:
+            fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={api_key.strip()}"
+            res = requests.post(fallback_url, headers={"Content-Type": "application/json"}, json=payload, timeout=30)
+
+        if res.status_code == 200:
+            text = res.json().get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '').strip()
+            s_idx = text.find('{')
+            e_idx = text.rfind('}')
+            if s_idx != -1 and e_idx != -1:
+                return json.loads(text[s_idx:e_idx+1])
+        return {"error": f"API 連線失敗 ({res.status_code})"}
+    except Exception as e:
+        return {"error": f"分析失敗: {str(e)}"}
+
 def get_fallback_info(stock_id):
     info = {}
     for ext in [".TW", ".TWO"]:
