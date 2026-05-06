@@ -1,7 +1,7 @@
 """
 外部資料與模型服務層：
 yfinance、Fugle、FinMind、Yahoo、Gemini 等 API 存取都集中在這裡。
-由原始 app(1).py 拆分而來。
+由原始 app(1).py 拆分而來，已全面升級為最新的 google-genai 官方 SDK。
 """
 import datetime
 import io
@@ -16,6 +16,10 @@ import pandas as pd
 import requests
 import streamlit as st
 import yfinance as yf
+
+# 新增 Google 官方 GenAI SDK 引入
+from google import genai
+from google.genai import types
 
 # 從 utils 引入需要的工具
 from utils import s_float, log_data_health
@@ -47,15 +51,18 @@ def fetch_fugle_kline(stock_id, api_key, timeframe="D"):
     except: pass
     return pd.DataFrame()
 
-def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1-flash-preview"):
+def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1-pro-preview"):
     if not api_key: return {"error": "未提供 API Key"}
-    api_key = api_key.strip()
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
     
+    try:
+        client = genai.Client(api_key=api_key.strip())
+    except Exception as e:
+        return {"error": f"GenAI Client 初始化失敗：{str(e)}"}
+        
     current_year = datetime.date.today().year
     target_year = current_year if datetime.date.today().month < 9 else current_year + 1
     
-    system_prompt = f"""你是一個精準的財經數據提取機器人。請上網搜尋該台股公司最新財報與市場數據，提取以下指標：
+    system_prompt = f"""你是一個精準的財經數據提取機器人。請上網搜尋該台股公司「最新」、「最即時」的財報與市場數據，絕對不要使用過期的舊資料，提取以下指標：
     1. 「歷史本益比 (P/E)」
     2. 「近四季或最新年度 EPS (Trailing EPS)」
     3. 「法人預估 {target_year} 年度 EPS (Forward EPS)」
@@ -68,7 +75,7 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
     10. 「負債權益比 (Debt-to-Equity Ratio)」
     11. 「最新單月營收月增率(MoM)」
     12. 「預估現金殖利率 (Dividend Yield)」(例如：擬配發現金股利2元，最新股價900元，殖利率應為 0.0022)
-    13. 「最新資料所屬年月或季度 (Data Period)」
+    13. 「最新資料所屬年月或具體日期 (Data Period)」(請務必標示出你查到這些最新數據的具體發布日期或所屬時間，例如：2024年4月或2024/05/15)
     14. 「目標價統計分析師人數 (Target Price Analyst Count)」
     15. 「目標價核心理由摘要 (Target Price Rationale)」
     16. 「最新自由現金流 (Free Cash Flow)」
@@ -82,172 +89,179 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
     接著，在下方簡述法人給出這些目標價的主要核心理由（看多或看空的原因）。
     最後再輸出 JSON。必須嚴格回傳包含上述 18 個欄位的 JSON 格式。百分比請轉換為小數（例如 25.5% 寫成 0.255，衰退5%寫成 -0.05），數值請直接輸出數字。若查無資料，該欄位請填 null。
     格式範例：
-     {{"pe": 15.2, "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.35, "target_price": 1050.0, "target_price_high": 1200.0, "target_price_avg": 1050.0, "target_price_low": 900.0, "target_price_analyst_count": 18, "target_price_rationale": "AI 伺服器需求強、毛利率改善但評價偏高", "debt_to_equity": 0.45, "mom": 0.015, "dividend_yield": 0.032, "data_period": "2024/03", "free_cash_flow": 1500000000, "current_ratio": 1.85, "shares_outstanding": 2500000000}}
+     {{"pe": 15.2, "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.35, "target_price": 1050.0, "target_price_high": 1200.0, "target_price_avg": 1050.0, "target_price_low": 900.0, "target_price_analyst_count": 18, "target_price_rationale": "AI 伺服器需求強、毛利率改善但評價偏高", "debt_to_equity": 0.45, "mom": 0.015, "dividend_yield": 0.032, "data_period": "2024/05/15", "free_cash_flow": 1500000000, "current_ratio": 1.85, "shares_outstanding": 2500000000}}
     絕對不要輸出 markdown 標記或其他文字。"""
     
-    payload = {
-        "contents": [{"parts": [{"text": f"請啟用搜尋引擎，查詢台股 {stock_name} ({stock_id}) 最新財報新聞、營收 MoM，以及 {target_year} 法人預估未來三年複合成長率(CAGR)、預測 EPS 與最新目標價"}]}],
-        "systemInstruction": {"parts": [{"text": system_prompt}]},
-        "tools": [{"googleSearch": {}}],
-        "generationConfig": {"responseMimeType": "application/json"}
-    }
-    payload_no_search = {
-        "contents": payload["contents"],
-        "systemInstruction": payload["systemInstruction"],
-        "generationConfig": payload["generationConfig"]
-    }
+    prompt_text = f"請啟用搜尋引擎，【務必尋找最新日期】查詢台股 {stock_name} ({stock_id}) 最新財報新聞、營收 MoM，以及 {target_year} 法人預估未來三年複合成長率(CAGR)、預測 EPS 與最新目標價。請務必確認並標示出資料的發布日期！"
+    
+    used_model = model_name
     try:
-        headers = {"Content-Type": "application/json"}
-        used_model = model_name
-        res = requests.post(url, headers=headers, json=payload, timeout=60)
-        if res.status_code == 404 and model_name != "gemini-2.5-flash":
-            fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-            res = requests.post(fallback_url, headers=headers, json=payload, timeout=60)
-            used_model = "gemini-2.5-flash"
-            
-        # Google Search grounding 在尖峰時段可能較慢，若逾時則自動改用無搜尋工具重試一次
-        if res.status_code in (408, 504, 500, 503):
-            res = requests.post(url, headers=headers, json=payload_no_search, timeout=60)
-
-        log_data_health("Gemini", res.status_code == 200, res.status_code)
-        if res.status_code != 200:
-            return {"error": f"API 連線被拒絕 (代碼 {res.status_code})。細節：{res.text[:150]}"}
-
-        text = (
-            res.json()
-            .get('candidates', [{}])[0]
-            .get('content', {})
-            .get('parts', [{}])[0]
-            .get('text', '')
-            .strip()
+        # 使用官方 SDK 取代 requests
+        response = client.models.generate_content(
+            model=used_model,
+            contents=prompt_text,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                response_mime_type="application/json",
+                tools=[{"google_search": {}}]  # 啟用官方設定的 Google 搜尋格式
+            )
         )
-        if not text:
-            return {"error": "AI 回傳內容為空，請稍後重試。"}
+        log_data_health("Gemini", True, 200)
+        text = response.text
+    except Exception as e:
+        log_data_health("Gemini", False, "Fallback")
+        try:
+            # 第一階段連線失敗 (如無權限或 404)，啟動保底降級機制
+            used_model = "gemini-2.5-flash"
+            response = client.models.generate_content(
+                model=used_model,
+                contents=prompt_text,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    response_mime_type="application/json"
+                )
+            )
+            log_data_health("Gemini", True, 200)
+            text = response.text
+        except Exception as e2:
+            return {"error": f"API 呼叫失敗，嘗試降級也失敗。細節：{str(e2)}"}
 
-        marker_match = re.search(r"\[TARGET_PRICE:\s*([^,\]]+)\s*,\s*([^,\]]+)\s*,\s*([^\]]+)\]", text)
-        marker_data = {}
-        if marker_match:
-            marker_data = {
-                "target_price_high": s_float(marker_match.group(1).replace("無", "")),
-                "target_price_avg": s_float(marker_match.group(2).replace("無", "")),
-                "target_price_low": s_float(marker_match.group(3).replace("無", "")),
-            }            
-        s_idx = text.find('{')
-        e_idx = text.rfind('}')
-        if s_idx != -1 and e_idx != -1:
-            clean_text = text[s_idx:e_idx+1]
+    if not text:
+        return {"error": "AI 回傳內容為空，請稍後重試。"}
+
+    marker_match = re.search(r"\[TARGET_PRICE:\s*([^,\]]+)\s*,\s*([^,\]]+)\s*,\s*([^\]]+)\]", text)
+    marker_data = {}
+    if marker_match:
+        marker_data = {
+            "target_price_high": s_float(marker_match.group(1).replace("無", "")),
+            "target_price_avg": s_float(marker_match.group(2).replace("無", "")),
+            "target_price_low": s_float(marker_match.group(3).replace("無", "")),
+        }            
+    
+    s_idx = text.find('{')
+    e_idx = text.rfind('}')
+    if s_idx != -1 and e_idx != -1:
+        clean_text = text[s_idx:e_idx+1]
+        try:
             parsed = json.loads(clean_text)
             if isinstance(parsed, dict):
                 parsed.update({k: v for k, v in marker_data.items() if v is not None and parsed.get(k) is None})
                 parsed["model_used"] = used_model
-                parsed["query_payload"] = json.dumps(payload, ensure_ascii=False, indent=2)
+                parsed["query_payload"] = "使用官方 google-genai SDK 呼叫，無須手刻 Payload"
             return parsed            
-        else:
-            return {"error": "AI 回傳的格式不正確，無法萃取 JSON 資料。"}
-            
-    except requests.exceptions.Timeout:
-        try:
-            # 最後保底：改用 2.5 Flash 並關閉搜尋工具，降低逾時風險
-            fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-            res = requests.post(fallback_url, headers={"Content-Type": "application/json"}, json=payload_no_search, timeout=45)
-            log_data_health("Gemini", res.status_code == 200, res.status_code)
-            if res.status_code == 200:
-                text = (
-                    res.json()
-                    .get('candidates', [{}])[0]
-                    .get('content', {})
-                    .get('parts', [{}])[0]
-                    .get('text', '')
-                    .strip()
-                )
-                s_idx = text.find('{')
-                e_idx = text.rfind('}')
-                if s_idx != -1 and e_idx != -1:
-                    parsed = json.loads(text[s_idx:e_idx+1])
-                    if isinstance(parsed, dict):
-                        parsed["model_used"] = "gemini-2.5-flash"
-                        parsed["query_payload"] = json.dumps(payload_no_search, ensure_ascii=False, indent=2)
-                    return parsed                    
-        except Exception:
-            pass
-        return {"error": "連線逾時 (超過 60 秒)，已嘗試自動降級模型仍失敗，請稍後再試。"}
-
-    except Exception as e: 
-        return {"error": f"發生未預期的例外狀況：{str(e)}"}
+        except json.JSONDecodeError:
+            return {"error": "AI 回傳的格式不正確，無法解析 JSON 資料。"}
+    else:
+        return {"error": "AI 回傳的格式不正確，無法萃取 JSON 資料。"}
 
 @st.cache_data(ttl=86400)
 def get_peers_from_ai(stock_name, stock_id, api_key):
     if not api_key: return []
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key.strip()}"
-    payload = {
-        "contents": [{"parts": [{"text": f"請尋找 {stock_name} ({stock_id}) 的同業競爭對手"}]}], 
-        "systemInstruction": {"parts": [{"text": "請列出與目標公司核心業務最直接競爭的 3~5 家台股上市櫃公司代號。必須是純數字 JSON 陣列格式：[\"2383\", \"3044\"]。絕對不要輸出其他文字。"}]},
-        "tools": [{"googleSearch": {}}]
-    }
     try:
-        res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=30)
-        log_data_health("Gemini", res.status_code == 200, res.status_code)
-        if res.status_code == 200:
-            clean_text = re.sub(r'```json\n?|```', '', res.json()['candidates'][0]['content']['parts'][0]['text']).strip()
-            peers = json.loads(clean_text)
-            if isinstance(peers, list): return [str(p) for p in peers][:4] 
-    except: pass
+        client = genai.Client(api_key=api_key.strip())
+        system_prompt = "請列出與目標公司核心業務最直接競爭的 3~5 家台股上市櫃公司代號。必須是純數字 JSON 陣列格式：[\"2383\", \"3044\"]。絕對不要輸出其他文字。"
+        
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=f"請尋找 {stock_name} ({stock_id}) 的同業競爭對手",
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                tools=[{"google_search": {}}]
+            )
+        )
+        log_data_health("Gemini", True, 200)
+        clean_text = re.sub(r'```json\n?|```', '', response.text).strip()
+        peers = json.loads(clean_text)
+        if isinstance(peers, list): return [str(p) for p in peers][:4] 
+    except Exception as e: 
+        log_data_health("Gemini", False, str(e))
     return []
 
 def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_name="gemini-2.5-flash"):
     if not api_key: return "ERROR: 未輸入金鑰"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key.strip()}"
-    system_prompt = """你是一位精通台股的資深產業分析師與操盤手。請針對目標公司的最新動態提供深度分析，包含產業前景、競爭優勢、系統風險及買賣點策略。請用 Markdown 格式與 Emoji。不要輸出 HTML。"""
-    payload = {
-        "contents": [{"parts": [{"text": f"請深度分析台股 {stock_name} ({stock_id})。關鍵數據：\n{context_data}"}]}], 
-        "systemInstruction": {"parts": [{"text": system_prompt}]}, 
-        "tools": [{"googleSearch": {}}]
-    }
     try:
-        res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=90)
-        fallback_msg = ""
-        if res.status_code == 404 and model_name != "gemini-2.5-flash":
-            fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key.strip()}"
-            res = requests.post(fallback_url, headers={"Content-Type": "application/json"}, json=payload, timeout=90)
-            fallback_msg = f"> 💡 **系統提示**：您指定的 `{model_name}` 尚未開放或輸入錯誤，系統已自動降級使用 `Gemini 2.5 Flash` 為您完成分析。\n\n---\n\n"
-        log_data_health("Gemini", res.status_code == 200, res.status_code)
-        if res.status_code == 200: 
-            ans = re.sub(r'```markdown\n?|```', '', res.json().get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')).strip()
-            return fallback_msg + ans
-        elif res.status_code == 429: return "⏳ API 呼叫太頻繁，請稍候再試或切換回 Flash 模型。"
-        else: return f"⚠️ API 連線失敗 (狀態碼: {res.status_code})"
-    except Exception as e: return f"連線異常: {str(e)}"
+        client = genai.Client(api_key=api_key.strip())
+        system_prompt = "你是一位精通台股的資深產業分析師與操盤手。請針對目標公司的最新動態提供深度分析，包含產業前景、競爭優勢、系統風險及買賣點策略。請用 Markdown 格式與 Emoji。不要輸出 HTML。"
+        
+        used_model = model_name
+        try:
+            response = client.models.generate_content(
+                model=used_model,
+                contents=f"請深度分析台股 {stock_name} ({stock_id})。關鍵數據：\n{context_data}",
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    tools=[{"google_search": {}}]
+                )
+            )
+            log_data_health("Gemini", True, 200)
+            ans = re.sub(r'```markdown\n?|```', '', response.text).strip()
+            return ans
+        except Exception as e:
+            # 自動降級邏輯
+            if model_name != "gemini-2.5-flash":
+                used_model = "gemini-2.5-flash"
+                response = client.models.generate_content(
+                    model=used_model,
+                    contents=f"請深度分析台股 {stock_name} ({stock_id})。關鍵數據：\n{context_data}",
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_prompt
+                    )
+                )
+                ans = re.sub(r'```markdown\n?|```', '', response.text).strip()
+                return f"> 💡 **系統提示**：高階模型尚未開放或連線受阻，系統已自動降級使用 `Gemini 2.5 Flash` 為您完成分析。\n\n---\n\n" + ans
+            else:
+                return f"⚠️ API 連線失敗: {str(e)}"
+    except Exception as e: 
+        return f"連線異常: {str(e)}"
 
 def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
     if not api_key: return "ERROR: 未輸入金鑰", []
-    api_key = api_key.strip()
-    headers = {"Content-Type": "application/json"}
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-    system_prompt = """你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。必須嚴格回傳 JSON 格式：{"reasoning": "...", "stocks": [{"id": "4位數代號", "name": "中文名稱", "type": "潛力", "why": "原因"}]}。"""
-    payload = {
-        "contents": [{"parts": [{"text": f"請深度分析台股議題：{topic}"}]}], 
-        "systemInstruction": {"parts": [{"text": system_prompt}]}, 
-        "tools": [{"googleSearch": {}}],
-        "generationConfig": {"responseMimeType": "application/json"}
-    }
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=60)
-        if response.status_code == 404 and model_name != "gemini-2.5-flash":
-            fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-            response = requests.post(fallback_url, headers=headers, json=payload, timeout=60)
-        log_data_health("Gemini", response.status_code == 200, response.status_code)
-        if response.status_code == 200:
-            res_json = response.json()
-            content = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
-            clean_json = re.sub(r'```json\n?|```', '', content).strip()
-            s_idx = clean_json.find('{')
-            e_idx = clean_json.rfind('}')
-            if s_idx != -1 and e_idx != -1: clean_json = clean_json[s_idx:e_idx+1]
-            grounding = res_json.get('candidates', [{}])[0].get('groundingMetadata', {})
-            links = [a.get('web', {}).get('uri') for a in grounding.get('groundingAttributions', []) if a.get('web', {}).get('uri')]
-            return json.loads(clean_json), list(set(links))
-        else: return f"API 錯誤 ({response.status_code})", []
-    except Exception as e: return f"連線異常: {str(e)}", []
+        client = genai.Client(api_key=api_key.strip())
+        system_prompt = "你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。必須嚴格回傳 JSON 格式：{\"reasoning\": \"...\", \"stocks\": [{\"id\": \"4位數代號\", \"name\": \"中文名稱\", \"type\": \"潛力\", \"why\": \"原因\"}]}。"
+        
+        used_model = model_name
+        try:
+            response = client.models.generate_content(
+                model=used_model,
+                contents=f"請深度分析台股議題：{topic}",
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    response_mime_type="application/json",
+                    tools=[{"google_search": {}}]
+                )
+            )
+            log_data_health("Gemini", True, 200)
+        except Exception as e:
+            used_model = "gemini-2.5-flash"
+            response = client.models.generate_content(
+                model=used_model,
+                contents=f"請深度分析台股議題：{topic}",
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    response_mime_type="application/json"
+                )
+            )
+            log_data_health("Gemini", True, 200)
+
+        clean_json = re.sub(r'```json\n?|```', '', response.text).strip()
+        s_idx = clean_json.find('{')
+        e_idx = clean_json.rfind('}')
+        if s_idx != -1 and e_idx != -1: 
+            clean_json = clean_json[s_idx:e_idx+1]
+        
+        # 官方 SDK Grounding 資料解析方式
+        links = []
+        try:
+            if response.candidates and response.candidates[0].grounding_metadata:
+                for chunk in response.candidates[0].grounding_metadata.grounding_chunks:
+                    if chunk.web and chunk.web.uri:
+                        links.append(chunk.web.uri)
+        except: pass
+        
+        return json.loads(clean_json), list(set(links))
+    except Exception as e: 
+        return f"連線異常: {str(e)}", []
 
 @st.cache_data(ttl=900) 
 def get_global_market_trend():
@@ -485,9 +499,7 @@ def get_finmind_financial_health(stock_id, fm_key=""):
 def get_stock_news(stock_id):
     news_data = []
     
-    # 方法 1: 使用 Google News RSS 抓取繁體中文台股新聞 (高穩定度與即時性)
     try:
-        # 組合精準搜尋字串，只找與財報、法說會、營收等基本面相關的新聞
         query = f"{stock_id} 台股 (財報 OR 法說會 OR 營收 OR 盈餘 OR EPS)"
         encoded_query = urllib.parse.quote(query)
         url = f"https://news.google.com/rss/search?q={encoded_query}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
@@ -505,7 +517,6 @@ def get_stock_news(stock_id):
                 timestamp = 0
                 if pubDate:
                     try:
-                        # 將 RSS 格式時間轉換為時間戳
                         parsed_date = email.utils.parsedate_tz(pubDate)
                         if parsed_date:
                             timestamp = int(email.utils.mktime_tz(parsed_date))
@@ -519,7 +530,6 @@ def get_stock_news(stock_id):
                 })
     except: pass
 
-    # 方法 2: 若 Google News 失敗，退回原本的 yfinance 備援 (同樣加入關鍵字過濾)
     if not news_data:
         for ext in [".TW", ".TWO"]:
             try:
@@ -528,7 +538,6 @@ def get_stock_news(stock_id):
                 if news:
                     for n in news:
                         title = n.get("title", "")
-                        # 簡易過濾 Yahoo 財經新聞，保留與基本面相關的
                         if any(kw in title for kw in ["財報", "法說", "營收", "EPS", "盈餘", "季報", "年報", "獲利"]):
                             news_data.append({
                                 "title": title,
