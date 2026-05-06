@@ -343,16 +343,25 @@ def reset_all_states_on_stock_change(stock_code):
     st.session_state.ai_industry_result = None
     st.session_state.run_screener = False
 
+# ==========================================
+# 🌟 這裡就是修正的部分：加入 .get() 安全讀取機制
+# ==========================================
 def on_stock_input_change():
-    new_stock = st.session_state.stock_input_widget
-    if new_stock != st.session_state.selected_stock: reset_all_states_on_stock_change(new_stock)
+    new_stock = st.session_state.get('stock_input_widget', '2330')
+    selected_stock = st.session_state.get('selected_stock', '2330')
+    
+    if new_stock != selected_stock: 
+        reset_all_states_on_stock_change(new_stock)
 
 def on_quick_select_change():
-    selected = st.session_state.quick_select
+    selected = st.session_state.get('quick_select', '-- 快速切換標的 --')
+    selected_stock = st.session_state.get('selected_stock', '2330')
+    
     if selected != "-- 快速切換標的 --":
         if not selected.startswith("🏷️"):
             q_code = selected.replace("　🔸 ", "").split(" ")[0].strip()
-            if q_code != st.session_state.selected_stock: reset_all_states_on_stock_change(q_code)
+            if q_code != selected_stock: 
+                reset_all_states_on_stock_change(q_code)
         st.session_state.quick_select = "-- 快速切換標的 --"
 
 def get_selected_model_id():
