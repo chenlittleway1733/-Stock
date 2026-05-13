@@ -1,4 +1,4 @@
-"""
+""" 
 共用常數、格式化工具、自選股與 Streamlit Session State 管理。
 由原始 app(1).py 拆分而來。
 """
@@ -92,6 +92,129 @@ def build_cmp_dual_str(o1, o2, a1, a2, fmt1="num", fmt2="num", suffix="AI推估"
 
 def clean_html(html_str):
     return re.sub(r'[\r\n\t]+', ' ', html_str).strip()
+
+
+# ==========================================
+# 1.1 財務資料合理性校驗 / 欄位錯位防呆
+# ==========================================
+def normalize_financial_ratio(val, default=None):
+    """將百分比欄位統一成小數格式：31.5 -> 0.315；0.315 -> 0.315。"""
+    v = s_float(val, default)
+    if v is None:
+        return default
+    # Yahoo / AI / 不同 API 有時會把百分比以 31.5 而非 0.315 回傳
+    if abs(v) > 1.5 and abs(v) <= 100:
+        return v / 100.0
+    return v
+
+
+def validate_and_correct_financial_metrics(system_vals, ai_vals=None, monthly_rev_df=None, stock_id="", stock_name=""):
+    """
+    財務資料品質閘門：
+    1) 營益率不可高於毛利率；
+    2) 最新單月 YoY 優先採用月營收資料，不直接吃 yfinance revenueGrowth；
+    3) D/E 若疑似單位錯置或與 AI/財報校對差距過大，先剔除系統值；
+    4) AI 交叉校對值也必須通過合理區間，否則設為 NULL，避免幻覺進入估值模型。
+
+    回傳：corrected_system, normalized_ai, warnings
+    """
+    ai_vals = ai_vals or {}
+    corrected = dict(system_vals or {})
+    ai_norm = dict(ai_vals or {})
+    warnings = []
+    label = f"{stock_name} ({stock_id})" if stock_name and stock_id else (stock_name or stock_id or "目前標的")
+
+    # 統一百分比欄位尺度
+    for key in ["gross_margin", "operating_margin", "rev_growth", "debt_to_equity"]:
+        corrected[key] = normalize_financial_ratio(corrected.get(key))
+        ai_norm[key] = normalize_financial_ratio(ai_norm.get(key))
+
+    def is_reasonable_ratio(v, lo=-1.0, hi=1.0):
+        return v is None or (lo <= v <= hi)
+
+    def margin_pair_is_valid(gm, om):
+        if not is_reasonable_ratio(gm, -1.0, 1.0) or not is_reasonable_ratio(om, -1.0, 1.0):
+            return False
+        if gm is None or om is None:
+            return True
+        # 營益率理論上不得高於毛利率；0.3% 容許極小四捨五入誤差
+        return om <= gm + 0.003
+
+    sys_gm = corrected.get("gross_margin")
+    sys_om = corrected.get("operating_margin")
+    ai_gm = ai_norm.get("gross_margin")
+    ai_om = ai_norm.get("operating_margin")
+
+    if not margin_pair_is_valid(sys_gm, sys_om):
+        warnings.append(
+            f"{label} 的毛利率/營益率校驗失敗：系統值 {to_val_str(sys_gm, 'pct')} / {to_val_str(sys_om, 'pct')} 不合理，已排除系統毛利率與營益率。"
+        )
+        corrected["gross_margin"] = None
+        corrected["operating_margin"] = None
+
+    if not margin_pair_is_valid(ai_gm, ai_om):
+        warnings.append(
+            f"{label} 的 AI 毛利率/營益率也未通過校驗：{to_val_str(ai_gm, 'pct')} / {to_val_str(ai_om, 'pct')}，已設為 NULL，避免 AI 幻覺進入估值。"
+        )
+        ai_norm["gross_margin"] = None
+        ai_norm["operating_margin"] = None
+
+    # 最新單月 YoY：優先用月營收表，不用 yfinance info 的 revenueGrowth 當月 YoY
+    try:
+        if monthly_rev_df is not None and not monthly_rev_df.empty and "YoY" in monthly_rev_df.columns:
+            monthly_yoy_pct = s_float(monthly_rev_df["YoY"].iloc[-1])
+            monthly_yoy = monthly_yoy_pct / 100.0 if monthly_yoy_pct is not None else None
+            if monthly_yoy is not None and -1.0 <= monthly_yoy <= 10.0:
+                old_sys_yoy = corrected.get("rev_growth")
+                if old_sys_yoy is not None and abs(old_sys_yoy - monthly_yoy) >= 0.10:
+                    warnings.append(
+                        f"{label} 的營收 YoY 已改用月營收資料：原 yfinance revenueGrowth={to_val_str(old_sys_yoy, 'pct')}，月營收 YoY={to_val_str(monthly_yoy, 'pct')}。"
+                    )
+                corrected["rev_growth"] = monthly_yoy
+    except Exception:
+        pass
+
+    # AI YoY 也做合理範圍防呆；極端值多半是抓到錯欄或摘要幻覺
+    ai_yoy = ai_norm.get("rev_growth")
+    if ai_yoy is not None and not (-1.0 <= ai_yoy <= 10.0):
+        warnings.append(
+            f"{label} 的 AI 營收 YoY={to_val_str(ai_yoy, 'pct')} 超出合理範圍，已設為 NULL。"
+        )
+        ai_norm["rev_growth"] = None
+
+    # D/E：系統值與 AI 值雙層防呆。D/E > 800% 直接視為高風險異常值，不進估值模型。
+    def debt_to_equity_is_valid(v):
+        return v is None or (0 <= v <= 8.0)
+
+    sys_de = corrected.get("debt_to_equity")
+    ai_de = ai_norm.get("debt_to_equity")
+
+    if not debt_to_equity_is_valid(ai_de):
+        warnings.append(
+            f"{label} 的 AI D/E={to_val_str(ai_de, 'pct')} 超出 800% 安全上限，已設為 NULL，避免 AI 幻覺污染模型。"
+        )
+        ai_norm["debt_to_equity"] = None
+        ai_de = None
+
+    if sys_de is not None:
+        if not debt_to_equity_is_valid(sys_de):
+            warnings.append(f"{label} 的 D/E 系統值 {to_val_str(sys_de, 'pct')} 超出合理範圍，已排除。")
+            corrected["debt_to_equity"] = None
+        elif ai_de is not None:
+            # 例如系統 0.76% vs AI 31.53%，極可能是單位或欄位錯位
+            if sys_de < 0.02 and ai_de >= 0.10:
+                warnings.append(
+                    f"{label} 的 D/E 疑似單位/欄位錯位：系統 {to_val_str(sys_de, 'pct')} vs AI {to_val_str(ai_de, 'pct')}，已排除系統 D/E。"
+                )
+                corrected["debt_to_equity"] = None
+            elif abs(sys_de - ai_de) >= max(0.15, abs(ai_de) * 0.80):
+                warnings.append(
+                    f"{label} 的 D/E 與交叉校對差距過大：系統 {to_val_str(sys_de, 'pct')} vs AI {to_val_str(ai_de, 'pct')}，已排除系統 D/E。"
+                )
+                corrected["debt_to_equity"] = None
+
+    # 最終防線：系統值被排除時，如果 AI 也不可用，後續 eff_de 會自然維持 None/NULL。
+    return corrected, ai_norm, warnings
 
 def get_watchlist():
     watchlist = []
