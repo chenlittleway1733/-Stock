@@ -1,4 +1,4 @@
-""" 
+"""20260514
 Streamlit 使用者介面層：
 包含側邊欄、主畫面、卡片、圖表與互動按鈕。
 由原始 app(1).py 拆分而來。
@@ -13,6 +13,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
+import streamlit.components.v1 as components
 from services import *
 from utils import *
 
@@ -331,6 +332,7 @@ def render_sidebar():
         ai_model_option = st.radio("使用AI版本", [
             "Gemini 3 Pro Preview (付費版)"
         ], key="ai_model_radio")
+        st.caption("🔒 已鎖定付費版高階模型；不自動降級到 2.5 Pro / 2.5 Flash，避免財報資料不準。")
     
         st.session_state.api_key = st.text_input("🔑 Gemini API Key", type="password", value=st.session_state.api_key)
     
@@ -417,7 +419,7 @@ def render_main_page(sidebar_state=None):
 
     if st.session_state.topic_results == "LOADING":
         with st.spinner(f"🤖 AI 正在連線推演「{topic_q}」..."):
-            data, links = get_ai_analysis_final(topic_q, st.session_state.api_key, st.session_state.get('selected_model', 'gemini-2.5-flash'))
+            data, links = get_ai_analysis_final(topic_q, st.session_state.api_key, st.session_state.get('selected_model', 'gemini-3.1-pro-preview'))
             if isinstance(data, dict):
                 st.session_state.topic_results = {"data": data, "links": links, "topic": topic_q}
                 st.session_state.show_whale = False
@@ -605,7 +607,7 @@ def render_main_page(sidebar_state=None):
                 st.markdown("#### 💼 財務基本面與獲利基準微調")
             with col_fin_btn:
                 if st.button("🪄 啟動 AI 全方位校對與補齊財報", disabled=not st.session_state.api_key, use_container_width=True, help="點此讓 AI 上網搜尋最新財報與估值指標，並與現有資料進行比對"):
-                    with st.spinner("AI 正在聯網為您強行抓取最新財報數據，請稍候... (約需 30-45 秒)"):
+                    with st.spinner("AI 正在聯網為您抓取最新財報數據，請稍候...（Pro Only 最多重試 3 次，約需 30-90 秒）"):
                         selected_model = get_selected_model_id()
                         fetched_data = get_financials_from_ai(c_name, curr_id, st.session_state.api_key, selected_model)
                     
@@ -618,18 +620,28 @@ def render_main_page(sidebar_state=None):
                                 st.stop()
 
                             model_label_map = {
-                                "gemini-3.1-flash-preview": "Gemini 3 Flash Preview",
-                                "gemini-3.1-flash-lite-preview": "Gemini 3 Flash-Lite Preview",
                                 "gemini-3.1-pro-preview": "Gemini 3 Pro Preview (付費版)",
-                                "gemini-2.5-flash": "Gemini 2.5 Flash (自動降級)",
-                                "gemini-2.5-pro": "Gemini 2.5 Pro (自動降級)",
                             }
                             model_id = fetched_data.get('model_used', selected_model)
-                            fetched_data['model_used'] = model_label_map.get(model_id, model_id)                            
+                            model_label = model_label_map.get(model_id, model_id)
+                            fallback_reason = fetched_data.get('fallback_reason') or ""
+                            search_enabled = fetched_data.get('ai_search_enabled', True)
+                            if fallback_reason:
+                                model_label = f"{model_label}｜{fallback_reason}"
+                            fetched_data['model_used'] = model_label
+                            if not search_enabled:
+                                st.warning("⚠️ 本次 AI 財報補齊未啟用 Google Search，資料不得納入極限高空價。")
+                            elif fallback_reason:
+                                st.warning(f"⚠️ {fallback_reason}")
                             st.session_state.ai_fetched_financials[curr_id] = fetched_data
                             st.rerun()
                         elif isinstance(fetched_data, dict) and "error" in fetched_data:
                             st.error(f"🚨 AI 抓取失敗：{fetched_data['error']}")
+                            if fetched_data.get("last_error"):
+                                st.caption(f"最後錯誤：{fetched_data.get('last_error')}")
+                            if fetched_data.get("attempts"):
+                                with st.expander("🧾 查看 Pro Only 同模型重試紀錄", expanded=False):
+                                    st.json(fetched_data.get("attempts"))
                         else:
                             st.error("🚨 AI 暫時無法找到確切數據，或請求遭拒。")
 
@@ -1364,8 +1376,76 @@ def render_main_page(sidebar_state=None):
             
             # 將原本的 AI 按鈕移除，並將提示詞區塊設為展開且全寬度顯示
             with st.expander("📋 點此複製【打包提示詞】至 Gemini Advanced 或 ChatGPT 發問", expanded=True):
-                st.markdown("<small style='color:gray;'>*請在下方文字框內點選，全選 (Ctrl+A / ⌘+A) 並複製，直接貼至付費版 Gemini Advanced 或是 ChatGPT 對話框，即可獲得同等專業的分析！*</small>", unsafe_allow_html=True)
-                st.text_area("提示詞內容", value=full_prompt_for_copy, height=300, label_visibility="collapsed")
+                st.markdown(
+                    "<small style='color:gray;'>*手機版可直接按下方按鈕複製；電腦版也可在文字框內全選 (Ctrl+A / ⌘+A) 並複製。*</small>",
+                    unsafe_allow_html=True
+                )
+
+                # 用 json.dumps 包裝提示詞，避免換行、引號或特殊符號造成 JavaScript 失效。
+                safe_prompt_js = json.dumps(full_prompt_for_copy, ensure_ascii=False)
+                components.html(
+                    f"""
+                    <div style="margin: 10px 0 12px 0; font-family: sans-serif;">
+                        <button
+                            onclick="copyPromptToClipboard()"
+                            style="
+                                width: 100%;
+                                padding: 13px 14px;
+                                border-radius: 10px;
+                                border: 1px solid #4b5563;
+                                background: #2563eb;
+                                color: white;
+                                font-size: 16px;
+                                font-weight: 700;
+                                cursor: pointer;
+                            "
+                        >
+                            📋 一鍵複製完整提示詞
+                        </button>
+                        <div id="copyStatus" style="margin-top: 8px; color: #16a34a; font-size: 14px;"></div>
+                    </div>
+
+                    <script>
+                    async function copyPromptToClipboard() {{
+                        const text = {safe_prompt_js};
+                        const status = document.getElementById("copyStatus");
+
+                        try {{
+                            await navigator.clipboard.writeText(text);
+                            status.innerText = "✅ 已複製完整提示詞，可直接貼到 Gemini Advanced 或 ChatGPT。";
+                        }} catch (err) {{
+                            const textarea = document.createElement("textarea");
+                            textarea.value = text;
+                            textarea.style.position = "fixed";
+                            textarea.style.left = "-9999px";
+                            textarea.style.top = "0";
+                            document.body.appendChild(textarea);
+                            textarea.focus();
+                            textarea.select();
+
+                            try {{
+                                document.execCommand("copy");
+                                status.innerText = "✅ 已複製完整提示詞，可直接貼上使用。";
+                            }} catch (fallbackErr) {{
+                                status.style.color = "#dc2626";
+                                status.innerText = "⚠️ 手機瀏覽器限制自動複製，請改用下方文字框長按複製。";
+                            }}
+
+                            document.body.removeChild(textarea);
+                        }}
+                    }}
+                    </script>
+                    """,
+                    height=105,
+                )
+
+                st.text_area(
+                    "提示詞內容",
+                    value=full_prompt_for_copy,
+                    height=300,
+                    label_visibility="collapsed",
+                    key=f"copy_prompt_textarea_{{curr_id}}"
+                )
             
             st.markdown("---")
 
