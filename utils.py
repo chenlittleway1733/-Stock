@@ -1,4 +1,4 @@
-""" 
+"""20260514
 共用常數、格式化工具、自選股與 Streamlit Session State 管理。
 由原始 app(1).py 拆分而來。
 """
@@ -488,9 +488,5 @@ def on_quick_select_change():
         st.session_state.quick_select = "-- 快速切換標的 --"
 
 def get_selected_model_id():
-    opt = st.session_state.get('ai_model_radio', 'Gemini 3 Flash Preview')
-    if "3 Pro" in opt or "3.1 Pro" in opt: return "gemini-3.1-pro-preview"
-    elif "3 Flash-Lite" in opt or "3.1 Flash-Lite" in opt: return "gemini-3.1-flash-lite-preview"
-    elif "3 Flash" in opt: return "gemini-3.1-flash-preview"
-    elif "2.5 Pro" in opt: return "gemini-2.5-pro"
-    else: return "gemini-2.5-flash"
+    """AI 財報/分析模型鎖定付費版高階模型，避免自動降級造成資料失真。"""
+    return "gemini-3.1-pro-preview"
