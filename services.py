@@ -1,4 +1,4 @@
-""" 
+"""20260514
 外部資料與模型服務層：
 yfinance、Fugle、FinMind、Yahoo、Gemini 等 API 存取都集中在這裡。
 由原始 app(1).py 拆分而來，已全面升級為最新的 google-genai 官方 SDK。
@@ -52,16 +52,25 @@ def fetch_fugle_kline(stock_id, api_key, timeframe="D"):
     return pd.DataFrame()
 
 def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1-pro-preview"):
-    if not api_key: return {"error": "未提供 API Key"}
-    
+    """
+    AI 財報校對與補齊。
+    v7 修正重點：
+    1) 僅允許 Gemini 3 Pro Preview 付費版 + Google Search。
+    2) 不自動降級到 2.5 Pro / 2.5 Flash / 離線保底，避免不準資料進入估值模型。
+    3) 尖峰時段採用「同模型 Pro Only Retry」：立即重試、等待 3 秒、等待 8 秒。
+    4) 全部失敗時只回傳 error 與 attempts，不產生 AI 財報數據。
+    """
+    if not api_key:
+        return {"error": "未提供 API Key"}
+
     try:
         client = genai.Client(api_key=api_key.strip())
     except Exception as e:
         return {"error": f"GenAI Client 初始化失敗：{str(e)}"}
-        
+
     current_year = datetime.date.today().year
     target_year = current_year if datetime.date.today().month < 9 else current_year + 1
-    
+
     system_prompt = f"""你是一個精準的財經數據提取機器人。請上網搜尋該台股公司「最新」、「最即時」的財報與市場數據，絕對不要使用過期的舊資料，提取以下指標：
     1. 「歷史本益比 (P/E)」
     2. 「近四季或最新年度 EPS (Trailing EPS)」
@@ -83,51 +92,97 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
     18. 「總發行股數或股本大小 (Shares Outstanding / Capital)」
     必須嚴格回傳包含上述 18 個欄位的 JSON 格式。百分比請轉換為小數（例如 25.5% 寫成 0.255，衰退5%寫成 -0.05），數值請直接輸出數字。若查無資料，該欄位請填 null。
     請務必搜尋近期各大券商對該公司的最新目標價。
-    並且【務必在報告的第一行】嚴格依照以下格式輸出數據(若查無資料請填 "無")：
-    [TARGET_PRICE: 最高價, 平均價, 最低價]
-    範例：[TARGET_PRICE: 1200, 1050, 900]
-    接著，在下方簡述法人給出這些目標價的主要核心理由（看多或看空的原因）。
-    最後再輸出 JSON。必須嚴格回傳包含上述 18 個欄位的 JSON 格式。百分比請轉換為小數（例如 25.5% 寫成 0.255，衰退5%寫成 -0.05），數值請直接輸出數字。若查無資料，該欄位請填 null。
-    格式範例：
-     {{"pe": 15.2, "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.35, "target_price": 1050.0, "target_price_high": 1200.0, "target_price_avg": 1050.0, "target_price_low": 900.0, "target_price_analyst_count": 18, "target_price_rationale": "AI 伺服器需求強、毛利率改善但評價偏高", "debt_to_equity": 0.45, "mom": 0.015, "dividend_yield": 0.032, "data_period": "2024/05/15", "free_cash_flow": 1500000000, "current_ratio": 1.85, "shares_outstanding": 2500000000}}
+    JSON 格式範例：
+    {{"pe": 15.2, "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.35, "target_price": 1050.0, "target_price_high": 1200.0, "target_price_avg": 1050.0, "target_price_low": 900.0, "target_price_analyst_count": 18, "target_price_rationale": "AI 伺服器需求強、毛利率改善但評價偏高", "debt_to_equity": 0.45, "mom": 0.015, "dividend_yield": 0.032, "data_period": "2024/05/15", "free_cash_flow": 1500000000, "current_ratio": 1.85, "shares_outstanding": 2500000000}}
     絕對不要輸出 markdown 標記或其他文字。"""
-    
+
     prompt_text = f"請啟用搜尋引擎，【務必尋找最新日期】查詢台股 {stock_name} ({stock_id}) 最新財報新聞、營收 MoM，以及 {target_year} 法人預估未來三年複合成長率(CAGR)、預測 EPS 與最新目標價。請務必確認並標示出資料的發布日期！"
-    
-    used_model = model_name
-    try:
-        # 使用官方 SDK 取代 requests
-        response = client.models.generate_content(
-            model=used_model,
-            contents=prompt_text,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                response_mime_type="application/json",
-                tools=[{"google_search": {}}]  # 啟用官方設定的 Google 搜尋格式
-            )
-        )
-        log_data_health("Gemini", True, 200)
-        text = response.text
-    except Exception as e:
-        log_data_health("Gemini", False, "Fallback")
+
+    def _make_config(search_enabled=True):
+        kwargs = {
+            "system_instruction": system_prompt,
+            "response_mime_type": "application/json",
+        }
+        if search_enabled:
+            kwargs["tools"] = [{"google_search": {}}]
+        return types.GenerateContentConfig(**kwargs)
+
+    def _is_non_retryable_error(err_text):
+        """授權/權限/模型不存在這類錯誤，短時間重試通常無效。"""
+        t = str(err_text).lower()
+        fatal_keywords = [
+            "api key not valid", "invalid api key", "api_key_invalid",
+            "permission_denied", "permission denied", "unauthenticated",
+            "401", "403", "not found", "model not found",
+            "billing", "quota exceeded"
+        ]
+        return any(k in t for k in fatal_keywords)
+
+    # Pro Only：只用付費版高階模型 + Google Search；不降級。
+    candidate_model = "gemini-3.1-pro-preview"
+    retry_delays = [0, 3, 8]
+    attempts = []
+    response = None
+    text = None
+    used_model = candidate_model
+    used_search = True
+    fallback_reason = ""
+    last_error = None
+
+    for idx, delay_sec in enumerate(retry_delays, start=1):
+        if delay_sec > 0:
+            time.sleep(delay_sec)
+
         try:
-            # 第一階段連線失敗 (如無權限或 404)，啟動保底降級機制
-            used_model = "gemini-2.5-flash"
             response = client.models.generate_content(
-                model=used_model,
+                model=candidate_model,
                 contents=prompt_text,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    response_mime_type="application/json"
-                )
+                config=_make_config(search_enabled=True)
             )
-            log_data_health("Gemini", True, 200)
             text = response.text
-        except Exception as e2:
-            return {"error": f"API 呼叫失敗，嘗試降級也失敗。細節：{str(e2)}"}
+            log_data_health("Gemini", True, 200)
+            attempts.append({
+                "attempt": idx,
+                "model": candidate_model,
+                "search_enabled": True,
+                "delay_before_retry_sec": delay_sec,
+                "ok": True,
+                "reason": "Pro Only 同模型聯網重試成功" if idx > 1 else "Pro Only 付費版高階模型聯網成功"
+            })
+            break
+        except Exception as e:
+            err_msg = str(e)
+            last_error = err_msg
+            log_data_health("Gemini", False, f"ERR:{candidate_model}:search:try{idx}")
+            attempts.append({
+                "attempt": idx,
+                "model": candidate_model,
+                "search_enabled": True,
+                "delay_before_retry_sec": delay_sec,
+                "ok": False,
+                "error": err_msg[:500],
+                "reason": "Pro Only 付費版高階模型聯網失敗；不降級，只重試同模型"
+            })
+            if _is_non_retryable_error(err_msg):
+                break
+
+    if response is None or text is None:
+        return {
+            "error": (
+                "Gemini 3 Pro Preview（付費版）聯網財報校對失敗。"
+                f"系統已用同一付費模型重試 {len(attempts)} 次，仍未成功；"
+                "已禁止降級到 2.5 Pro / 2.5 Flash / 離線保底，以避免不準數據進入極限高空價。"
+                "請稍後再試，或檢查 API 權限、配額與模型可用狀態。"
+            ),
+            "last_error": str(last_error)[:500] if last_error else None,
+            "attempts": attempts
+        }
 
     if not text:
-        return {"error": "AI 回傳內容為空，請稍後重試。"}
+        return {
+            "error": "Gemini 3 Pro Preview（付費版）回傳內容為空；系統不降級，請稍後重試。",
+            "attempts": attempts
+        }
 
     marker_match = re.search(r"\[TARGET_PRICE:\s*([^,\]]+)\s*,\s*([^,\]]+)\s*,\s*([^\]]+)\]", text)
     marker_data = {}
@@ -136,8 +191,8 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
             "target_price_high": s_float(marker_match.group(1).replace("無", "")),
             "target_price_avg": s_float(marker_match.group(2).replace("無", "")),
             "target_price_low": s_float(marker_match.group(3).replace("無", "")),
-        }            
-    
+        }
+
     s_idx = text.find('{')
     e_idx = text.rfind('}')
     if s_idx != -1 and e_idx != -1:
@@ -147,12 +202,32 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
             if isinstance(parsed, dict):
                 parsed.update({k: v for k, v in marker_data.items() if v is not None and parsed.get(k) is None})
                 parsed["model_used"] = used_model
-                parsed["query_payload"] = "使用官方 google-genai SDK 呼叫，無須手刻 Payload"
-            return parsed            
+                parsed["ai_search_enabled"] = bool(used_search)
+                parsed["fallback_reason"] = fallback_reason
+                parsed["attempts"] = attempts
+                parsed["retry_policy"] = "Pro Only：gemini-3.1-pro-preview + Google Search；最多 3 次；不降級。"
+                parsed["query_payload"] = json.dumps({
+                    "stock": f"{stock_name} ({stock_id})",
+                    "target_year": target_year,
+                    "model_used": used_model,
+                    "google_search_enabled": bool(used_search),
+                    "fallback_reason": fallback_reason or "無",
+                    "retry_policy": "Pro Only same-model retry: delays 0s, 3s, 8s; no downgrade.",
+                    "prompt": prompt_text,
+                }, ensure_ascii=False, indent=2)
+            return parsed
         except json.JSONDecodeError:
-            return {"error": "AI 回傳的格式不正確，無法解析 JSON 資料。"}
+            return {
+                "error": "AI 回傳的格式不正確，無法解析 JSON 資料。系統不降級，請稍後重試。",
+                "raw_text_preview": text[:500],
+                "attempts": attempts
+            }
     else:
-        return {"error": "AI 回傳的格式不正確，無法萃取 JSON 資料。"}
+        return {
+            "error": "AI 回傳的格式不正確，無法萃取 JSON 資料。系統不降級，請稍後重試。",
+            "raw_text_preview": text[:500],
+            "attempts": attempts
+        }
 
 @st.cache_data(ttl=86400)
 def get_peers_from_ai(stock_name, stock_id, api_key):
@@ -162,7 +237,7 @@ def get_peers_from_ai(stock_name, stock_id, api_key):
         system_prompt = "請列出與目標公司核心業務最直接競爭的 3~5 家台股上市櫃公司代號。必須是純數字 JSON 陣列格式：[\"2383\", \"3044\"]。絕對不要輸出其他文字。"
         
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.1-pro-preview",
             contents=f"請尋找 {stock_name} ({stock_id}) 的同業競爭對手",
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -177,13 +252,13 @@ def get_peers_from_ai(stock_name, stock_id, api_key):
         log_data_health("Gemini", False, str(e))
     return []
 
-def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_name="gemini-2.5-flash"):
+def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_name="gemini-3.1-pro-preview"):
     if not api_key: return "ERROR: 未輸入金鑰"
     try:
         client = genai.Client(api_key=api_key.strip())
         system_prompt = "你是一位精通台股的資深產業分析師與操盤手。請針對目標公司的最新動態提供深度分析，包含產業前景、競爭優勢、系統風險及買賣點策略。請用 Markdown 格式與 Emoji。不要輸出 HTML。"
         
-        used_model = model_name
+        used_model = "gemini-3.1-pro-preview"
         try:
             response = client.models.generate_content(
                 model=used_model,
@@ -197,30 +272,18 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
             ans = re.sub(r'```markdown\n?|```', '', response.text).strip()
             return ans
         except Exception as e:
-            # 自動降級邏輯
-            if model_name != "gemini-2.5-flash":
-                used_model = "gemini-2.5-flash"
-                response = client.models.generate_content(
-                    model=used_model,
-                    contents=f"請深度分析台股 {stock_name} ({stock_id})。關鍵數據：\n{context_data}",
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_prompt
-                    )
-                )
-                ans = re.sub(r'```markdown\n?|```', '', response.text).strip()
-                return f"> 💡 **系統提示**：高階模型尚未開放或連線受阻，系統已自動降級使用 `Gemini 2.5 Flash` 為您完成分析。\n\n---\n\n" + ans
-            else:
-                return f"⚠️ API 連線失敗: {str(e)}"
+            log_data_health("Gemini", False, f"ERR:{used_model}:search")
+            return f"⚠️ Gemini 3 Pro Preview（付費版）聯網分析失敗；系統已禁止降級到 2.5 系列，以避免不準資料。細節: {str(e)}"
     except Exception as e: 
         return f"連線異常: {str(e)}"
 
-def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
+def get_ai_analysis_final(topic, api_key, model_name="gemini-3.1-pro-preview"):
     if not api_key: return "ERROR: 未輸入金鑰", []
     try:
         client = genai.Client(api_key=api_key.strip())
         system_prompt = "你是一位精通台股產業鏈的專業分析師。請針對議題推薦 3 檔「潛力權值股」與 3 檔「中小型飆股」。必須嚴格回傳 JSON 格式：{\"reasoning\": \"...\", \"stocks\": [{\"id\": \"4位數代號\", \"name\": \"中文名稱\", \"type\": \"潛力\", \"why\": \"原因\"}]}。"
         
-        used_model = model_name
+        used_model = "gemini-3.1-pro-preview"
         try:
             response = client.models.generate_content(
                 model=used_model,
@@ -233,16 +296,8 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-2.5-flash"):
             )
             log_data_health("Gemini", True, 200)
         except Exception as e:
-            used_model = "gemini-2.5-flash"
-            response = client.models.generate_content(
-                model=used_model,
-                contents=f"請深度分析台股議題：{topic}",
-                config=types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    response_mime_type="application/json"
-                )
-            )
-            log_data_health("Gemini", True, 200)
+            log_data_health("Gemini", False, f"ERR:{used_model}:search")
+            return f"Gemini 3 Pro Preview（付費版）聯網議題推演失敗；系統已禁止降級到 2.5 系列，以避免不準資料。細節：{str(e)}", []
 
         clean_json = re.sub(r'```json\n?|```', '', response.text).strip()
         s_idx = clean_json.find('{')
