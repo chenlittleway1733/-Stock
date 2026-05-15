@@ -1,4 +1,4 @@
-"""20260514
+"""
 Streamlit 使用者介面層：
 包含側邊欄、主畫面、卡片、圖表與互動按鈕。
 由原始 app(1).py 拆分而來。
@@ -410,7 +410,7 @@ def render_main_page(sidebar_state=None):
     # ==========================================
     # 5. 主畫面開始
     # ==========================================
-    st.markdown("## 📈 WAY AI 投資戰情室 版本1.22")
+    st.markdown("## 📈 WAY AI 投資戰情室 版本1.23")
 
     if st.session_state.fugle_key and not f_ok:
         st.error("🚨 **系統警報**：您輸入的「富果 (Fugle) API Key」驗證失敗！請至左側欄檢查金鑰是否輸入正確。")
@@ -563,6 +563,83 @@ def render_main_page(sidebar_state=None):
             st.markdown(clean_html(quote_html), unsafe_allow_html=True)
 
             # ==========================================
+            # 📌 主要 ETF 持有概況 + 獨立 AI ETF 補查
+            # ==========================================
+            st.markdown("#### 📌 主要 ETF 持有概況")
+            with st.expander(f"查看含有 {c_name} ({curr_id}) 的 ETF", expanded=False):
+                st.caption("一般頁面僅做快速查詢，不使用 AI、不掃描 MoneyDJ / Pocket / CMoney 快取，避免等待過久。此區主要來自 Yahoo 個股 ETF 頁，可能只涵蓋主要 / 前十大 ETF，不代表完整 ETF 持股清單。")
+
+                try:
+                    etf_holders = get_stock_etf_holders(curr_id, c_name)
+                except Exception as e:
+                    etf_holders = []
+                    st.warning(f"⚠️ ETF 快速資料源暫時無法取得：{str(e)[:120]}")
+
+                def _render_etf_holder_table(rows, title, source_tag):
+                    rows = rows or []
+                    if not rows:
+                        return False
+                    table_rows = []
+                    for r in rows:
+                        if not isinstance(r, dict):
+                            continue
+                        weight = r.get("weight")
+                        try:
+                            weight_text = f"{float(weight):.2f}%" if weight is not None and str(weight).strip() != "" else "N/A"
+                        except Exception:
+                            weight_text = str(weight) if weight else "N/A"
+                        table_rows.append({
+                            "ETF名稱": r.get("etf_name") or "",
+                            "代號": r.get("etf_code") or "",
+                            "持股比例": weight_text,
+                            "資料日期": r.get("data_date") or "來源未揭露",
+                            "來源": r.get("source") or source_tag,
+                            "資料性質": r.get("data_type") or source_tag,
+                        })
+                    if not table_rows:
+                        return False
+                    st.markdown(title)
+                    df_etf = pd.DataFrame(table_rows)
+                    st.dataframe(df_etf, use_container_width=True, hide_index=True)
+                    return True
+
+                has_system_etf = _render_etf_holder_table(etf_holders, "**主要 / 前十大 ETF 快速查詢**", "主要/前十大快速查詢")
+                if not has_system_etf:
+                    st.info("目前快速資料源查無 ETF 持有資料，或網站版面暫時無法解析。")
+
+                st.caption("⚠️ 此區不保證完整。像 00981A 這類主動式 ETF 可能因 Yahoo 個股頁只列主要/前十大而未出現；需要完整交叉檢查時，請按下方 AI 按鈕。")
+
+                st.markdown("---")
+                st.markdown("#### 🤖 AI 查完整 ETF 持有狀況")
+                st.caption("此按鈕與『AI 全方位校對與補齊財報』分開執行；只有按下時才會使用 AI + 搜尋補查 ETF，不會拖慢財報校對。")
+
+                if "ai_etf_holders" not in st.session_state:
+                    st.session_state.ai_etf_holders = {}
+
+                if st.button("🤖 AI 查完整 ETF 持有狀況", disabled=not st.session_state.api_key, key=f"ai_etf_lookup_{curr_id}", use_container_width=True, help="獨立查詢 ETF 持股；會特別檢查主動式 ETF，例如 00981A、00987A、00988A、00400A、00403A。"):
+                    with st.spinner("AI 正在獨立查詢 ETF 持有狀況，請稍候...（不會執行財報校對）"):
+                        ai_etf_data = get_etf_holders_from_ai(curr_id, c_name, st.session_state.api_key, get_selected_model_id())
+                        st.session_state.ai_etf_holders[curr_id] = ai_etf_data
+                    st.rerun()
+
+                ai_etf_data = st.session_state.ai_etf_holders.get(curr_id) if isinstance(st.session_state.get("ai_etf_holders"), dict) else None
+                if isinstance(ai_etf_data, dict) and ai_etf_data.get("error"):
+                    st.error(f"AI ETF 查詢失敗：{ai_etf_data.get('error')}")
+                elif isinstance(ai_etf_data, dict):
+                    ai_etf_rows = ai_etf_data.get("etf_holders_ai", [])
+                    if ai_etf_rows:
+                        _render_etf_holder_table(ai_etf_rows, "**🤖 AI 完整 ETF 補查結果**", "AI完整ETF補查")
+                        st.caption("⚠️ AI ETF 資料為獨立聯網補查結果，只作交叉比對；正式持股仍請以投信公告、PCF 或 ETF 官方持股明細為準。")
+                    else:
+                        st.info("AI 已查詢，但沒有回傳可用的 ETF 持股清單。")
+                    if ai_etf_data.get("summary"):
+                        st.caption(f"AI 摘要：{ai_etf_data.get('summary')}")
+                else:
+                    st.caption("尚未執行 AI ETF 補查。")
+
+            st.markdown("---")
+
+            # ==========================================
             # 🌍 國際連動與動態時間趨勢推估
             # ==========================================
             st.markdown("<br>", unsafe_allow_html=True)
@@ -607,7 +684,7 @@ def render_main_page(sidebar_state=None):
                 st.markdown("#### 💼 財務基本面與獲利基準微調")
             with col_fin_btn:
                 if st.button("🪄 啟動 AI 全方位校對與補齊財報", disabled=not st.session_state.api_key, use_container_width=True, help="點此讓 AI 上網搜尋最新財報與估值指標，並與現有資料進行比對"):
-                    with st.spinner("AI 正在聯網為您抓取最新財報數據，請稍候...（Pro Only 最多重試 3 次，約需 30-90 秒）"):
+                    with st.spinner("AI 正在聯網為您強行抓取最新財報數據，請稍候...（Pro Only 最多重試 3 次，約需 30-90 秒）"):
                         selected_model = get_selected_model_id()
                         fetched_data = get_financials_from_ai(c_name, curr_id, st.session_state.api_key, selected_model)
                     
