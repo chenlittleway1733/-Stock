@@ -1,5 +1,4 @@
 """
-
 Streamlit 使用者介面層：
 包含側邊欄、主畫面、卡片、圖表與互動按鈕。
 由原始 app(1).py 拆分而來。
@@ -411,7 +410,7 @@ def render_main_page(sidebar_state=None):
     # ==========================================
     # 5. 主畫面開始
     # ==========================================
-    st.markdown("## 📈 WAY AI 投資戰情室 版本1.23")
+    st.markdown("## 📈 WAY AI 投資戰情室 版本1.22")
 
     if st.session_state.fugle_key and not f_ok:
         st.error("🚨 **系統警報**：您輸入的「富果 (Fugle) API Key」驗證失敗！請至左側欄檢查金鑰是否輸入正確。")
@@ -707,6 +706,9 @@ def render_main_page(sidebar_state=None):
                             if fallback_reason:
                                 model_label = f"{model_label}｜{fallback_reason}"
                             fetched_data['model_used'] = model_label
+                            # 綁定本次 AI 財報資料所屬標的，避免切換股票後舊資料被誤套用。
+                            fetched_data['_stock_id'] = str(curr_id)
+                            fetched_data['_stock_name'] = str(c_name)
                             if not search_enabled:
                                 st.warning("⚠️ 本次 AI 財報補齊未啟用 Google Search，資料不得納入極限高空價。")
                             elif fallback_reason:
@@ -724,6 +726,12 @@ def render_main_page(sidebar_state=None):
                             st.error("🚨 AI 暫時無法找到確切數據，或請求遭拒。")
 
                 temp_ai_fin = st.session_state.ai_fetched_financials.get(curr_id, {})
+                # 防止舊版 session 或切換股票後殘留的 AI 財報資料誤套到目前標的。
+                if isinstance(temp_ai_fin, dict) and temp_ai_fin:
+                    bound_stock_id = str(temp_ai_fin.get('_stock_id') or curr_id)
+                    if bound_stock_id != str(curr_id):
+                        st.session_state.ai_fetched_financials.pop(curr_id, None)
+                        temp_ai_fin = {}
                 has_ai_fin_fetch = bool(temp_ai_fin)
                 if temp_ai_fin.get('model_used'):
                     st.markdown(f"<div style='text-align:right; color:#FFD700; font-size:0.85rem; margin-top:5px;'>🤖 驅動核心: <b>{temp_ai_fin['model_used']}</b></div>", unsafe_allow_html=True)
@@ -785,30 +793,36 @@ def render_main_page(sidebar_state=None):
                 st.warning("⚠️ **全球連線受阻**：目前免費資料庫限制了部分股票的抓取。👉 **解決方案**：請點擊上方【🪄 啟動 AI 全方位校對與補齊財報】讓 AI 強制為您抓回最新數據！")
         
             ai_fin = st.session_state.ai_fetched_financials.get(curr_id, {})
-            ai_pe = s_float(ai_fin.get('pe'))
-            ai_pb = s_float(ai_fin.get('pb'))
-            ai_t_eps = s_float(ai_fin.get('trailing_eps'))
-            ai_f_eps_calc = s_float(ai_fin.get('forward_eps'))
-            ai_yoy = s_float(ai_fin.get('yoy'))
-            ai_gm = s_float(ai_fin.get('gross_margin'))
-            ai_om = s_float(ai_fin.get('operating_margin'))
-            ai_roe = s_float(ai_fin.get('roe'))
-            ai_de = s_float(ai_fin.get('debt_to_equity'))
-            ai_dy = s_float(ai_fin.get('dividend_yield'))
+            if isinstance(ai_fin, dict) and ai_fin:
+                bound_stock_id = str(ai_fin.get('_stock_id') or curr_id)
+                if bound_stock_id != str(curr_id):
+                    ai_fin = {}
+                    st.session_state.ai_fetched_financials.pop(curr_id, None)
+            has_ai_fin_fetch = bool(ai_fin)
+            ai_pe = s_float(ai_fin.get('pe')) if has_ai_fin_fetch else None
+            ai_pb = s_float(ai_fin.get('pb')) if has_ai_fin_fetch else None
+            ai_t_eps = s_float(ai_fin.get('trailing_eps')) if has_ai_fin_fetch else None
+            ai_f_eps_calc = s_float(ai_fin.get('forward_eps')) if has_ai_fin_fetch else None
+            ai_yoy = s_float(ai_fin.get('yoy')) if has_ai_fin_fetch else None
+            ai_gm = s_float(ai_fin.get('gross_margin')) if has_ai_fin_fetch else None
+            ai_om = s_float(ai_fin.get('operating_margin')) if has_ai_fin_fetch else None
+            ai_roe = s_float(ai_fin.get('roe')) if has_ai_fin_fetch else None
+            ai_de = s_float(ai_fin.get('debt_to_equity')) if has_ai_fin_fetch else None
+            ai_dy = s_float(ai_fin.get('dividend_yield')) if has_ai_fin_fetch else None
             
             # 接取剛增加的三項防禦/主力籌碼指標
-            ai_fcf = s_float(ai_fin.get('free_cash_flow'))
-            ai_cr = s_float(ai_fin.get('current_ratio'))
-            ai_shares = s_float(ai_fin.get('shares_outstanding'))
+            ai_fcf = s_float(ai_fin.get('free_cash_flow')) if has_ai_fin_fetch else None
+            ai_cr = s_float(ai_fin.get('current_ratio')) if has_ai_fin_fetch else None
+            ai_shares = s_float(ai_fin.get('shares_outstanding')) if has_ai_fin_fetch else None
         
             # 🚀 接收 AI 抓到的目標價、MoM 與 Dividend Yield，並覆蓋錯誤資料
-            ai_target_price = s_float(ai_fin.get('target_price'))
-            ai_hi_val = s_float(ai_fin.get('target_price_high'))
-            ai_me_val = s_float(ai_fin.get('target_price_avg')) or ai_target_price
-            ai_lo_val = s_float(ai_fin.get('target_price_low'))
-            ai_analyst_count = ai_fin.get('target_price_analyst_count')
-            ai_target_rationale = str(ai_fin.get('target_price_rationale') or "").strip()
-            ai_mom = normalize_financial_ratio(ai_fin.get('mom'))
+            ai_target_price = s_float(ai_fin.get('target_price')) if has_ai_fin_fetch else None
+            ai_hi_val = s_float(ai_fin.get('target_price_high')) if has_ai_fin_fetch else None
+            ai_me_val = (s_float(ai_fin.get('target_price_avg')) or ai_target_price) if has_ai_fin_fetch else None
+            ai_lo_val = s_float(ai_fin.get('target_price_low')) if has_ai_fin_fetch else None
+            ai_analyst_count = ai_fin.get('target_price_analyst_count') if has_ai_fin_fetch else None
+            ai_target_rationale = str(ai_fin.get('target_price_rationale') or "").strip() if has_ai_fin_fetch else ""
+            ai_mom = normalize_financial_ratio(ai_fin.get('mom')) if has_ai_fin_fetch else None
             if ai_mom is not None: 
                 latest_mom_val = ai_mom * 100
 
@@ -875,7 +889,7 @@ def render_main_page(sidebar_state=None):
                 latest_mom_str = "N/A"
         
             # 設定 AI 標籤與時間後綴
-            raw_ai_period = str(ai_fin.get('data_period', '')).replace('None', '').strip()
+            raw_ai_period = str(ai_fin.get('data_period', '')).replace('None', '').strip() if has_ai_fin_fetch else ""
             ai_label = "AI捉取"
             ai_period_val = f"({raw_ai_period})" if raw_ai_period else ""
         
@@ -901,8 +915,10 @@ def render_main_page(sidebar_state=None):
             if ai_pe and ai_pe > 0 and ai_pb and ai_pb > 0:
                 ai_roe = ai_pb / ai_pe
         
-            if ai_f_eps_calc is None and eff_t_eps is not None and eff_eg is not None and -1 <= eff_eg <= 5:
-                ai_f_eps_calc = eff_t_eps * (1 + eff_eg)
+            # 只有已按下 AI 財報補齊且 AI 有基礎欄位時，才推算 AI Forward EPS。
+            # 未按 AI 按鈕時，不得把系統值包裝成「AI推估」。
+            if has_ai_fin_fetch and ai_f_eps_calc is None and ai_t_eps is not None and ai_yoy is not None and -1 <= ai_yoy <= 5:
+                ai_f_eps_calc = ai_t_eps * (1 + ai_yoy)
             
             if sys_f_eps_calc is None and t_eps is not None and earn_growth is not None and -1 <= earn_growth <= 5:
                 sys_f_eps_calc = t_eps * (1 + earn_growth)
@@ -962,7 +978,7 @@ def render_main_page(sidebar_state=None):
             sys_forward_pe = s_float(info.get('forwardPE'))
             if sys_forward_pe is None and eff_f_eps is not None and eff_f_eps > 0: sys_forward_pe = curr_p / eff_f_eps
         
-            ai_fpe = curr_p / ai_f_eps_calc if ai_f_eps_calc and ai_f_eps_calc > 0 else None
+            ai_fpe = curr_p / ai_f_eps_calc if has_ai_fin_fetch and ai_f_eps_calc and ai_f_eps_calc > 0 else None
             eff_forward_pe = sys_forward_pe if sys_forward_pe is not None else ai_fpe
         
             if eff_f_eps is not None and t_eps is not None and t_eps > 0:
@@ -976,13 +992,14 @@ def render_main_page(sidebar_state=None):
             orig_peg = sys_forward_pe / (real_cg * 100) if sys_forward_pe is not None and real_cg is not None and real_cg > 0 else None
         
             ai_cg = None
-            if ai_f_eps_calc is not None and ai_t_eps is not None and ai_t_eps > 0:
-                safe_base_eps_ai = 0.5 if ai_t_eps < 0.5 else ai_t_eps
-                ai_cg = (ai_f_eps_calc - safe_base_eps_ai) / safe_base_eps_ai
-            else:
-                ai_cg = ai_yoy
+            if has_ai_fin_fetch:
+                if ai_f_eps_calc is not None and ai_t_eps is not None and ai_t_eps > 0:
+                    safe_base_eps_ai = 0.5 if ai_t_eps < 0.5 else ai_t_eps
+                    ai_cg = (ai_f_eps_calc - safe_base_eps_ai) / safe_base_eps_ai
+                else:
+                    ai_cg = ai_yoy
             
-            ai_peg = ai_fpe / (ai_cg * 100) if ai_fpe is not None and ai_cg is not None and ai_cg > 0 else None
+            ai_peg = ai_fpe / (ai_cg * 100) if has_ai_fin_fetch and ai_fpe is not None and ai_cg is not None and ai_cg > 0 else None
         
             eff_peg = orig_peg if orig_peg is not None else ai_peg
             if real_cg is not None and real_cg <= 0: eff_peg = -999
@@ -997,7 +1014,7 @@ def render_main_page(sidebar_state=None):
             
             extreme_target_price = eff_f_eps * target_pe_cap if eff_f_eps is not None else None
 
-            if ai_f_eps_calc is not None and ai_cg is not None and ai_cg > 0:
+            if has_ai_fin_fetch and ai_f_eps_calc is not None and ai_cg is not None and ai_cg > 0:
                 ai_raw_mult = (ai_cg * 100) * target_peg_adj
                 ai_capped_mult = min(ai_raw_mult, target_pe_cap)
                 ai_target_price_est = ai_f_eps_calc * ai_capped_mult
@@ -1005,7 +1022,7 @@ def render_main_page(sidebar_state=None):
             else:
                 ai_target_price_est = None; ai_is_capped = False
 
-            ai_extreme_target_price = ai_f_eps_calc * target_pe_cap if ai_f_eps_calc is not None else None
+            ai_extreme_target_price = ai_f_eps_calc * target_pe_cap if has_ai_fin_fetch and ai_f_eps_calc is not None else None
         
             # 手動組合區域
             time_str = f", {ai_period_val}" if ai_period_val else ""
@@ -1078,7 +1095,10 @@ def render_main_page(sidebar_state=None):
                 # 🚀 修正處：將計算出來的結果回填給純文字變數 tp_est_str，讓提示詞抓得到
                 ai_tp_txt = f"{ai_target_price_est:.1f}元" if ai_target_price_est else "N/A"
                 ai_ext_txt = f"{ai_extreme_target_price:.1f}元" if ai_extreme_target_price else "N/A"
-                tp_est_str = f"合理估值: {sys_tp_str} (AI推估: {ai_tp_txt}) | 極限高空價: {sys_ext_str} (AI推估: {ai_ext_txt}) | 帶入 Cap: {target_pe_cap:.0f}x"               
+                if has_ai_fin_fetch:
+                    tp_est_str = f"合理估值: {sys_tp_str} (AI推估: {ai_tp_txt}) | 極限高空價: {sys_ext_str} (AI推估: {ai_ext_txt}) | 帶入 Cap: {target_pe_cap:.0f}x"
+                else:
+                    tp_est_str = f"合理估值: {sys_tp_str} | 極限高空價: {sys_ext_str} | 帶入 Cap: {target_pe_cap:.0f}x"
                 target_price_html = f"<div style='color:#aaa; font-size:0.85rem; border-top:1px solid #444; padding-top:8px; margin-top:8px;'>🎯 合理估值 (PEG 推算): <b style='color:#fff; font-size:1.1rem;'>{sys_tp_str}</b> <br>{ai_tp_est_html}<br>🚀 <span style='color:#ff4d4d; font-weight:bold;'>極限高空價 (Forward EPS × Cap): <span style='font-size:1.2rem;'>{sys_ext_str}</span> <br>{ai_ext_str}</span><br><div style='background:#2c2c2c; padding:4px 8px; border-radius:4px; margin-top:4px;'><small style='color:#00bfff;'>🐛 [底層運算除錯] 帶入 EPS: {debug_eps:.2f} | 帶入 Cap: {target_pe_cap:.0f}x</small></div>{cap_warning_html}</div>"
             val_html = f"""
             <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom:20px;'>
@@ -1522,7 +1542,7 @@ def render_main_page(sidebar_state=None):
                     value=full_prompt_for_copy,
                     height=300,
                     label_visibility="collapsed",
-                    key=f"copy_prompt_textarea_{{curr_id}}"
+                    key=f"copy_prompt_textarea_{curr_id}"
                 )
             
             st.markdown("---")
