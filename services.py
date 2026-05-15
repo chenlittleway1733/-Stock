@@ -1,4 +1,4 @@
-"""
+""" 
 外部資料與模型服務層：
 yfinance、Fugle、FinMind、Yahoo、Gemini 等 API 存取都集中在這裡。
 由原始 app(1).py 拆分而來，已全面升級為最新的 google-genai 官方 SDK。
