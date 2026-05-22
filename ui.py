@@ -330,7 +330,7 @@ def render_sidebar():
         topic_q = st.text_input("輸入議題 (如: 代理人AI、矽光子)")
     
         ai_model_option = st.radio("使用AI版本", [
-            "Gemini 3 Pro Preview (付費版)"
+            "Gemini 3.1 Pro Preview (付費版)"
         ], key="ai_model_radio")
         st.caption("🔒 已鎖定付費版高階模型；不自動降級到 2.5 Pro / 2.5 Flash，避免財報資料不準。")
     
