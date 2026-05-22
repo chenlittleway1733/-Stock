@@ -410,7 +410,7 @@ def render_main_page(sidebar_state=None):
     # ==========================================
     # 5. 主畫面開始
     # ==========================================
-    st.markdown("## 📈 WAY AI 投資戰情室 版本1.25(最新更新日期:2026/05/19)")
+    st.markdown("## 📈 WAY AI 投資戰情室 版本1.22")
 
     if st.session_state.fugle_key and not f_ok:
         st.error("🚨 **系統警報**：您輸入的「富果 (Fugle) API Key」驗證失敗！請至左側欄檢查金鑰是否輸入正確。")
@@ -689,7 +689,7 @@ def render_main_page(sidebar_state=None):
                         fetched_data = get_financials_from_ai(c_name, curr_id, st.session_state.api_key, selected_model)
                     
                         if isinstance(fetched_data, dict) and "error" not in fetched_data:
-                            core_fin_keys = ["pe", "trailing_eps", "forward_eps", "pb", "gross_margin", "operating_margin", "roe", "revenue_yoy", "revenue_mom", "earnings_cagr", "eps_growth_yoy", "target_price", "dividend_yield", "yoy", "mom"]
+                            core_fin_keys = ["pe", "trailing_eps", "forward_eps", "pb", "gross_margin", "operating_margin", "roe", "yoy", "target_price", "mom", "dividend_yield"]
                             has_effective_fin_data = any(fetched_data.get(k) not in (None, "", "null") for k in core_fin_keys)
                             if not has_effective_fin_data:
                                 st.warning("⚠️ AI 本次有回應，但未抓到可用財報欄位（可能是來源暫無資料或回傳皆為 null）。請稍後重試或切換標的。")
@@ -697,7 +697,7 @@ def render_main_page(sidebar_state=None):
                                 st.stop()
 
                             model_label_map = {
-                                "gemini-3.1-pro-preview": "Gemini 3 Pro Preview (付費版)",
+                                "gemini-3.1-pro-preview": "Gemini 3.1 Pro Preview (付費版)",
                             }
                             model_id = fetched_data.get('model_used', selected_model)
                             model_label = model_label_map.get(model_id, model_id)
@@ -754,18 +754,11 @@ def render_main_page(sidebar_state=None):
             fm_health = get_finmind_financial_health(curr_id, st.session_state.finmind_key)
         
             if df_rev_bk is not None and not df_rev_bk.empty:
-                latest_rev_month = normalize_revenue_month(df_rev_bk['Month'].iloc[-1]) if 'Month' in df_rev_bk.columns else "未知"
-                latest_mom_val = s_float(df_rev_bk['MoM'].iloc[-1]) if 'MoM' in df_rev_bk.columns else None
-                expected_rev_month = expected_latest_revenue_month()
-                if revenue_month_is_older(latest_rev_month, expected_rev_month):
-                    st.warning(
-                        f"⚠️ 月營收資料可能過舊：目前抓到 {latest_rev_month}，但理論上應已有 {expected_rev_month}。"
-                        "請按左側『🔄 重新整理快取』，或檢查 Yahoo / FinMind 資料源。"
-                    )
+                latest_rev_month = df_rev_bk['Month'].iloc[-1]
+                latest_mom_val = s_float(df_rev_bk['MoM'].iloc[-1])
             else:
                 latest_rev_month = "無資料"
                 latest_mom_val = None
-                expected_rev_month = expected_latest_revenue_month()
         
             pe_ratio = s_float(info.get('trailingPE'))
             if (pe_ratio is None or pe_ratio > 1000) and df_per_bk is not None and not df_per_bk.empty:
@@ -806,19 +799,15 @@ def render_main_page(sidebar_state=None):
                     ai_fin = {}
                     st.session_state.ai_fetched_financials.pop(curr_id, None)
             has_ai_fin_fetch = bool(ai_fin)
-            raw_ai_period = str(ai_fin.get('data_period', '')).replace('None', '').strip() if has_ai_fin_fetch else ""
             ai_pe = s_float(ai_fin.get('pe')) if has_ai_fin_fetch else None
             ai_pb = s_float(ai_fin.get('pb')) if has_ai_fin_fetch else None
             ai_t_eps = s_float(ai_fin.get('trailing_eps')) if has_ai_fin_fetch else None
             ai_f_eps_calc = s_float(ai_fin.get('forward_eps')) if has_ai_fin_fetch else None
-            ai_yoy = s_float(ai_fin.get('revenue_yoy') if ai_fin.get('revenue_yoy') is not None else ai_fin.get('yoy')) if has_ai_fin_fetch else None
-            ai_cagr = s_float(ai_fin.get('earnings_cagr')) if has_ai_fin_fetch else None
-            ai_eps_growth = s_float(ai_fin.get('eps_growth_yoy')) if has_ai_fin_fetch else None
-            ai_rev_month = normalize_revenue_month(ai_fin.get('revenue_month')) if has_ai_fin_fetch else ""
+            ai_yoy = s_float(ai_fin.get('yoy')) if has_ai_fin_fetch else None
             ai_gm = s_float(ai_fin.get('gross_margin')) if has_ai_fin_fetch else None
             ai_om = s_float(ai_fin.get('operating_margin')) if has_ai_fin_fetch else None
             ai_roe = s_float(ai_fin.get('roe')) if has_ai_fin_fetch else None
-            ai_de = normalize_debt_to_equity(ai_fin.get('debt_to_equity')) if has_ai_fin_fetch else None
+            ai_de = s_float(ai_fin.get('debt_to_equity')) if has_ai_fin_fetch else None
             ai_dy = s_float(ai_fin.get('dividend_yield')) if has_ai_fin_fetch else None
             
             # 接取剛增加的三項防禦/主力籌碼指標
@@ -833,11 +822,9 @@ def render_main_page(sidebar_state=None):
             ai_lo_val = s_float(ai_fin.get('target_price_low')) if has_ai_fin_fetch else None
             ai_analyst_count = ai_fin.get('target_price_analyst_count') if has_ai_fin_fetch else None
             ai_target_rationale = str(ai_fin.get('target_price_rationale') or "").strip() if has_ai_fin_fetch else ""
-            ai_mom = normalize_financial_ratio(ai_fin.get('revenue_mom') if ai_fin.get('revenue_mom') is not None else ai_fin.get('mom')) if has_ai_fin_fetch else None
-            # v1.24：AI MoM 只作備援，不能覆蓋系統月營收；避免 AI 抓到 2026/03 卻蓋掉 2026/04。
-            if (df_rev_bk is None or df_rev_bk.empty) and ai_mom is not None:
+            ai_mom = normalize_financial_ratio(ai_fin.get('mom')) if has_ai_fin_fetch else None
+            if ai_mom is not None: 
                 latest_mom_val = ai_mom * 100
-                latest_rev_month = ai_rev_month or raw_ai_period or "AI補齊"
 
             # ==========================================
             # 🧯 資料品質閘門：避免欄位錯位直接進估值模型
@@ -852,10 +839,6 @@ def render_main_page(sidebar_state=None):
                 "gross_margin": ai_gm,
                 "operating_margin": ai_om,
                 "rev_growth": ai_yoy,
-                "revenue_yoy": ai_yoy,
-                "revenue_mom": ai_mom,
-                "earnings_cagr": ai_cagr,
-                "eps_growth_yoy": ai_eps_growth,
                 "debt_to_equity": ai_de,
             }
             corrected_sys, corrected_ai, dq_warnings = validate_and_correct_financial_metrics(
@@ -873,15 +856,8 @@ def render_main_page(sidebar_state=None):
             sys_de = corrected_sys.get("debt_to_equity")
             ai_gm = corrected_ai.get("gross_margin")
             ai_om = corrected_ai.get("operating_margin")
-            ai_yoy = corrected_ai.get("revenue_yoy") if corrected_ai.get("revenue_yoy") is not None else corrected_ai.get("rev_growth")
-            ai_mom = corrected_ai.get("revenue_mom")
-            ai_cagr = corrected_ai.get("earnings_cagr")
-            ai_eps_growth = corrected_ai.get("eps_growth_yoy")
+            ai_yoy = corrected_ai.get("rev_growth")
             ai_de = corrected_ai.get("debt_to_equity")
-
-            # v1.24：按下 AI 財報補齊後，毛利率/營益率若有明確 data_period，估值模型採用 AI 最新財報值；
-            # 顯示層仍保留「系統值 / AI值」對照，方便看出 10.45% vs 12.01% 這類差異。
-            gm_should_prefer_ai = bool(has_ai_fin_fetch and ai_gm is not None and raw_ai_period)
 
             # 明確宣告「顯示層專用」變數，避免日後維護時誤拿校驗前欄位組 Markdown。
             display_rev_growth = rev_growth
@@ -892,49 +868,6 @@ def render_main_page(sidebar_state=None):
             display_ai_operating_margin = ai_om
             display_debt_to_equity = sys_de
             display_ai_debt_to_equity = ai_de
-
-            # v1.26：按下 AI 全方位校對後，若 AI 有明確財報期間，毛利率/營益率主值採最新 AI 財報值。
-            # 但仍保留 AI 對照值，讓打包提示詞與卡片可看到系統舊值 vs AI 新值的差異。
-            if gm_should_prefer_ai:
-                if ai_gm is not None:
-                    display_gross_margin = ai_gm
-                if ai_om is not None:
-                    display_operating_margin = ai_om
-
-            # v1.27：D/E 與財報期間強相關。若按下 AI 校對且 AI 有明確 data_period，
-            # 當系統值被排除、或系統值與 AI 最新財報差距明顯時，主值改採 AI，並保留系統原值。
-            de_should_prefer_ai = False
-            if has_ai_fin_fetch and ai_de is not None and raw_ai_period:
-                if sys_de is None:
-                    de_should_prefer_ai = True
-                elif abs(sys_de - ai_de) >= max(0.50, abs(sys_de) * 0.50):
-                    de_should_prefer_ai = True
-
-            if de_should_prefer_ai:
-                display_debt_to_equity = ai_de
-
-            # v1.25：同一月份的系統月營收與 AI 聯網值若明顯不一致，代表快取/來源口徑可能錯位。
-            # 例如技嘉 2376：系統抓到 2026/04 但 YoY/MoM 仍像 2026/03，AI 查到同月公開速報值。
-            # 此時畫面、估值與打包提示詞改用 AI 同月份校正值，並保留警告，避免錯數據進 prompt。
-            revenue_conflict_note = ""
-            if has_ai_fin_fetch and ai_rev_month and latest_rev_month not in ["無資料", "未知", "AI補齊"]:
-                sys_mom_ratio = (latest_mom_val / 100.0) if latest_mom_val is not None else None
-                yoy_gap = abs((rev_growth or 0) - ai_yoy) if (rev_growth is not None and ai_yoy is not None) else 0
-                mom_gap = abs(sys_mom_ratio - ai_mom) if (sys_mom_ratio is not None and ai_mom is not None) else 0
-                if ai_rev_month == latest_rev_month and (yoy_gap >= 0.005 or mom_gap >= 0.005):
-                    old_yoy_txt = to_val_str(rev_growth, 'pct')
-                    old_mom_txt = f"{latest_mom_val:.2f}%" if latest_mom_val is not None else "N/A"
-                    if ai_yoy is not None:
-                        rev_growth = ai_yoy
-                        display_rev_growth = ai_yoy
-                    if ai_mom is not None:
-                        latest_mom_val = ai_mom * 100
-                    revenue_conflict_note = (
-                        f"⚠️ {c_name} ({curr_id}) 同月份營收資料交叉校對不一致："
-                        f"系統 YoY/MoM={old_yoy_txt}/{old_mom_txt}，"
-                        f"AI 聯網 YoY/MoM={to_val_str(ai_yoy, 'pct')}/{to_val_str(ai_mom, 'pct')}，"
-                        f"已改用 AI 的 {ai_rev_month} 同月份值進入畫面與打包提示詞。"
-                    )
 
             if dq_warnings:
                 # 右下角短提示：讓操盤手知道資料已被校正，不是靜默改值
@@ -950,36 +883,15 @@ def render_main_page(sidebar_state=None):
                     for w in dq_warnings:
                         st.warning(w)
         
-            if revenue_conflict_note:
-                st.warning(revenue_conflict_note)
-            elif has_ai_fin_fetch and ai_rev_month and latest_rev_month not in ["無資料", "未知", "AI補齊"] and ai_rev_month != latest_rev_month:
-                st.warning(
-                    f"⚠️ AI 營收月份與系統月營收不一致：AI={ai_rev_month}，系統={latest_rev_month}。"
-                    "營收 YoY/MoM 顯示仍以系統月營收為主，AI 只保留為交叉校對。"
-                )
-
-            if de_should_prefer_ai and sys_de is not None:
-                st.warning(
-                    f"⚠️ {c_name} ({curr_id}) D/E 採用邏輯調整："
-                    f"系統 D/E={to_val_str(sys_de, 'pct')}，AI 最新財報({raw_ai_period}) D/E={to_val_str(ai_de, 'pct')}；"
-                    "因差距明顯，已改用 AI 最新財報值進入畫面與打包提示詞。"
-                )
-
             if latest_mom_val is not None:
                 latest_mom_str = f"{latest_mom_val:.2f}%"
             else:
                 latest_mom_str = "N/A"
-
-            # 給打包提示詞用：MoM 也納入 AI 交叉校對，避免 prompt 只看到系統值。
-            latest_mom_ratio_for_prompt = latest_mom_val / 100.0 if latest_mom_val is not None else None
         
             # 設定 AI 標籤與時間後綴
+            raw_ai_period = str(ai_fin.get('data_period', '')).replace('None', '').strip() if has_ai_fin_fetch else ""
             ai_label = "AI捉取"
             ai_period_val = f"({raw_ai_period})" if raw_ai_period else ""
-            # v1.26：月營收欄位使用 revenue_month；財報欄位才使用 data_period。
-            ai_rev_period_val = ai_rev_month or latest_rev_month or raw_ai_period
-            ai_rev_period_suffix = f"({ai_rev_period_val})" if ai_rev_period_val else ""
-            mom_prompt_str = build_cmp_str(latest_mom_ratio_for_prompt, ai_mom, 'pct', ai_label, show_ai_missing=has_ai_fin_fetch, period=ai_rev_period_suffix)
         
             # 🚀 在目標價 html 生成前，先宣告給 prompt 用的純文字變數，絕對防禦 NameError
             ai_tp_str = f"{ai_target_price:.1f}" if ai_target_price is not None else "未捕捉到"
@@ -990,11 +902,9 @@ def render_main_page(sidebar_state=None):
             eff_pb = pb_ratio if pb_ratio is not None else ai_pb
             eff_t_eps = t_eps if t_eps is not None else ai_t_eps
             eff_rg = rev_growth if rev_growth is not None else ai_yoy
-            # 獲利成長只能用 earningsGrowth / AI earnings_cagr / AI eps_growth_yoy，不再用單月營收 YoY 代替。
-            eff_eg = earn_growth if earn_growth is not None else (ai_cagr if ai_cagr is not None else ai_eps_growth)
-            # 若已啟動 AI 且 data_period 比系統/Yahoo 來源更新，可讓 AI 毛利率進估值；否則維持系統優先。
-            eff_gm = ai_gm if gm_should_prefer_ai else (gross_margin if gross_margin is not None else ai_gm)
-            eff_om = ai_om if gm_should_prefer_ai and ai_om is not None else (op_margin if op_margin is not None else ai_om)
+            eff_eg = earn_growth if earn_growth is not None else ai_yoy
+            eff_gm = gross_margin if gross_margin is not None else ai_gm
+            eff_om = op_margin if op_margin is not None else ai_om
             eff_roe = roe if roe is not None else ai_roe
             eff_de = sys_de if sys_de is not None else ai_de
 
@@ -1007,9 +917,8 @@ def render_main_page(sidebar_state=None):
         
             # 只有已按下 AI 財報補齊且 AI 有基礎欄位時，才推算 AI Forward EPS。
             # 未按 AI 按鈕時，不得把系統值包裝成「AI推估」。
-            ai_growth_for_forward_eps = ai_cagr if ai_cagr is not None else ai_eps_growth
-            if has_ai_fin_fetch and ai_f_eps_calc is None and ai_t_eps is not None and ai_growth_for_forward_eps is not None and -1 <= ai_growth_for_forward_eps <= 5:
-                ai_f_eps_calc = ai_t_eps * (1 + ai_growth_for_forward_eps)
+            if has_ai_fin_fetch and ai_f_eps_calc is None and ai_t_eps is not None and ai_yoy is not None and -1 <= ai_yoy <= 5:
+                ai_f_eps_calc = ai_t_eps * (1 + ai_yoy)
             
             if sys_f_eps_calc is None and t_eps is not None and earn_growth is not None and -1 <= earn_growth <= 5:
                 sys_f_eps_calc = t_eps * (1 + earn_growth)
@@ -1078,7 +987,7 @@ def render_main_page(sidebar_state=None):
                     is_base_normalized = True
                 else: safe_base_eps = t_eps
                 real_cg = (eff_f_eps - safe_base_eps) / safe_base_eps
-            else: real_cg = eff_eg
+            else: real_cg = earn_growth
         
             orig_peg = sys_forward_pe / (real_cg * 100) if sys_forward_pe is not None and real_cg is not None and real_cg > 0 else None
         
@@ -1088,7 +997,7 @@ def render_main_page(sidebar_state=None):
                     safe_base_eps_ai = 0.5 if ai_t_eps < 0.5 else ai_t_eps
                     ai_cg = (ai_f_eps_calc - safe_base_eps_ai) / safe_base_eps_ai
                 else:
-                    ai_cg = ai_growth_for_forward_eps
+                    ai_cg = ai_yoy
             
             ai_peg = ai_fpe / (ai_cg * 100) if has_ai_fin_fetch and ai_fpe is not None and ai_cg is not None and ai_cg > 0 else None
         
@@ -1133,26 +1042,10 @@ def render_main_page(sidebar_state=None):
         
             pe_str = build_cmp_str(pe_ratio, ai_pe, 'x', ai_label, show_ai_missing=has_ai_fin_fetch, period=ai_period_val)
             # ✅ 顯示字串只吃 validate_and_correct_financial_metrics() 校正後的 display_* 變數。
-            rg_str = build_cmp_str(display_rev_growth, display_ai_yoy, 'pct', ai_label, show_ai_missing=has_ai_fin_fetch, period=ai_rev_period_suffix)
+            rg_str = build_cmp_str(display_rev_growth, display_ai_yoy, 'pct', ai_label, show_ai_missing=has_ai_fin_fetch, period=ai_period_val)
             gm_om_str = build_cmp_dual_str(display_gross_margin, display_operating_margin, display_ai_gross_margin, display_ai_operating_margin, 'pct', 'pct', ai_label, show_ai_missing=has_ai_fin_fetch, period=ai_period_val)
-            if gm_should_prefer_ai and (ai_gm is not None or ai_om is not None):
-                gm_om_str = f"{to_val_str(display_gross_margin, 'pct')} / {to_val_str(display_operating_margin, 'pct')}"
-                sys_gm_txt = to_val_str(gross_margin, 'pct')
-                sys_om_txt = to_val_str(op_margin, 'pct')
-                gm_om_str += f"<br><span style='color:#FFD700; font-size:0.85rem;'>(採 AI 最新財報{', ' + ai_period_val if ai_period_val else ''}；系統原值: {sys_gm_txt} / {sys_om_txt})</span>"
             roe_str = build_cmp_str(roe, ai_roe, 'pct', ai_label, show_ai_missing=has_ai_fin_fetch, period=ai_period_val)
-            if de_should_prefer_ai:
-                sys_de_txt = to_val_str(sys_de, 'pct') if sys_de is not None else "NULL"
-                de_str = to_val_str(display_debt_to_equity, 'pct')
-                de_str += f"<br><span style='color:#FFD700; font-size:0.85rem;'>(採 AI 最新財報{', ' + ai_period_val if ai_period_val else ''}；系統原值: {sys_de_txt})</span>"
-            else:
-                # v1.28：若 AI 沒抓到 D/E，但系統 D/E 通過校驗，不再顯示「AI找不到數據」污染卡片與打包提示詞。
-                # 直接說明沿用系統值，避免誤以為 D/E 是 AI 最新財報值。
-                if has_ai_fin_fetch and display_ai_debt_to_equity is None and display_debt_to_equity is not None:
-                    de_str = to_val_str(display_debt_to_equity, 'pct')
-                    de_str += "<br><span style='color:#FFD700; font-size:0.85rem;'>(AI 未取得 D/E，暫沿用系統值)</span>"
-                else:
-                    de_str = build_cmp_str(display_debt_to_equity, display_ai_debt_to_equity, 'pct', ai_label, show_ai_missing=has_ai_fin_fetch, period=ai_period_val)
+            de_str = build_cmp_str(display_debt_to_equity, display_ai_debt_to_equity, 'pct', ai_label, show_ai_missing=has_ai_fin_fetch, period=ai_period_val)
             pb_str = build_cmp_str(pb_ratio, ai_pb, 'x', ai_label, show_ai_missing=has_ai_fin_fetch, period=ai_period_val)
         
             rg_color = "#ff4d4d" if eff_rg and eff_rg > 0 else ("#00cc66" if eff_rg and eff_rg < 0 else "#fff")
@@ -1525,7 +1418,7 @@ def render_main_page(sidebar_state=None):
 【B. 財務動能（原始/AI/推估整合）】
 - EPS(目前/預估): {panel_eps}
 - 營收年增率 YoY [{latest_rev_month}]: {panel_rg}
-- 最新單月營收月增率 MoM [{latest_rev_month}]: {_nullize_text(mom_prompt_str)}
+- 最新單月營收月增率 MoM [{latest_rev_month}]: {_nullize_text(latest_mom_str)}
 - 預估獲利成長 YoY: {panel_eg}
 - 毛利率 / 營益率: {panel_gmom}
 - ROE (恆等式校正): {panel_roe}
@@ -1649,7 +1542,7 @@ def render_main_page(sidebar_state=None):
                     value=full_prompt_for_copy,
                     height=300,
                     label_visibility="collapsed",
-                    key=f"copy_prompt_textarea_{curr_id}_{abs(hash(full_prompt_for_copy))}"
+                    key=f"copy_prompt_textarea_{curr_id}"
                 )
             
             st.markdown("---")
