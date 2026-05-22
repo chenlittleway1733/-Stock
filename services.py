@@ -919,35 +919,28 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
     2. 「近四季或最新年度 EPS (Trailing EPS)」
     3. 「法人預估 {target_year} 年度 EPS (Forward EPS)」
     4. 「股價淨值比 (P/B)」
-    5. 「最新一季或最新財報毛利率」
-    6. 「最新一季或最新財報營益率」
+    5. 「毛利率」
+    6. 「營益率」
     7. 「ROE(股東權益報酬率)」
-    8. 「最新單月營收年增率 (Revenue YoY)」：必須是最新已公布月份的單月營收 YoY，不可用累計營收 YoY、不可用 yfinance revenueGrowth、不可用 EPS 成長率替代。
-    9. 「最新單月營收月增率 (Revenue MoM)」：必須與 revenue_yoy 使用同一個 revenue_month。
-    10. 「最新單月營收所屬年月 (Revenue Month)」：格式必須為 YYYY/MM，例如 2026/04。
-    11. 「累計營收年增率 (Cumulative Revenue YoY)」：若新聞有揭露 1~N 月累計營收年增率才填，否則 null。
-    12. 「法人預估未來 1~3 年獲利複合成長率 (Earnings CAGR)」：不可填單月營收 YoY；若查無法人獲利 CAGR，請填 null。
-    13. 「最新 EPS 年增率 (EPS Growth YoY)」：若查無最新季度或年度 EPS 年增率，請填 null。
-    14. 「國內外法人最新預估目標價 (Target Price)」
-    15. 「負債權益比 (Debt-to-Equity Ratio / D/E / 槓桿比率)」：請優先找最新財報的「負債總額 / 權益總額」。若來源寫 2.8 倍，JSON 請填 2.8；若來源寫 280%，JSON 請填 2.8；若來源寫 132.1%，JSON 請填 1.321。不要把 2.8 倍誤填成 0.028。
-    16. 「預估現金殖利率 (Dividend Yield)」(例如：擬配發現金股利2元，最新股價900元，殖利率應為 0.0022)
-    17. 「最新財報資料所屬年月或具體日期 (Data Period)」(例如：2026Q1、2026/05/15)
-    18. 「目標價統計分析師人數 (Target Price Analyst Count)」
-    19. 「目標價核心理由摘要 (Target Price Rationale)」
-    20. 「最新自由現金流 (Free Cash Flow)」
-    21. 「最新流動比率 (Current Ratio)」
-    22. 「總發行股數或股本大小 (Shares Outstanding / Capital)」
-
-    必須嚴格回傳包含上述財務欄位的 JSON 格式。百分比請轉換為小數（例如 25.5% 寫成 0.255，衰退5%寫成 -0.05），數值請直接輸出數字。若查無資料，該欄位請填 null。
-    特別注意 debt_to_equity 欄位一律以「倍數」回傳：132.1% = 1.321，280% = 2.8，2.8 倍 = 2.8。若新聞只有「槓桿比率」且定義為負債/權益，也可作為 debt_to_equity。
+    8. 「法人預估未來 1~3 年獲利複合成長率 (CAGR)，若無則用最新營收 YoY 替代」
+    9. 「國內外法人最新預估目標價 (Target Price)」
+    10. 「負債權益比 (Debt-to-Equity Ratio)」
+    11. 「最新單月營收月增率(MoM)」
+    12. 「預估現金殖利率 (Dividend Yield)」(例如：擬配發現金股利2元，最新股價900元，殖利率應為 0.0022)
+    13. 「最新資料所屬年月或具體日期 (Data Period)」(請務必標示出你查到這些最新數據的具體發布日期或所屬時間，例如：2024年4月或2024/05/15)
+    14. 「目標價統計分析師人數 (Target Price Analyst Count)」
+    15. 「目標價核心理由摘要 (Target Price Rationale)」
+    16. 「最新自由現金流 (Free Cash Flow)」
+    17. 「最新流動比率 (Current Ratio)」
+    18. 「總發行股數或股本大小 (Shares Outstanding / Capital)」
+    必須嚴格回傳包含上述 18 個財務欄位的 JSON 格式。百分比請轉換為小數（例如 25.5% 寫成 0.255，衰退5%寫成 -0.05），數值請直接輸出數字。若查無資料，該欄位請填 null。
     請務必搜尋近期各大券商對該公司的最新目標價。
     注意：本函式只負責財報與估值校對，不要查詢 ETF 持股；ETF 持股由獨立按鈕 get_etf_holders_from_ai() 執行。
-    嚴格禁止把 revenue_yoy 同時當作 earnings_cagr 或 eps_growth_yoy；這三個欄位語意不同。
     JSON 格式範例：
-    {{"pe": 15.2, "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "revenue_yoy": 0.35, "revenue_mom": 0.015, "revenue_month": "2026/04", "cumulative_revenue_yoy": 0.28, "earnings_cagr": 0.22, "eps_growth_yoy": 0.18, "target_price": 1050.0, "target_price_high": 1200.0, "target_price_avg": 1050.0, "target_price_low": 900.0, "target_price_analyst_count": 18, "target_price_rationale": "AI 伺服器需求強、毛利率改善但評價偏高", "debt_to_equity": 0.45, "dividend_yield": 0.032, "data_period": "2026Q1", "free_cash_flow": 1500000000, "current_ratio": 1.85, "shares_outstanding": 2500000000}}
+    {{"pe": 15.2, "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.35, "target_price": 1050.0, "target_price_high": 1200.0, "target_price_avg": 1050.0, "target_price_low": 900.0, "target_price_analyst_count": 18, "target_price_rationale": "AI 伺服器需求強、毛利率改善但評價偏高", "debt_to_equity": 0.45, "mom": 0.015, "dividend_yield": 0.032, "data_period": "2024/05/15", "free_cash_flow": 1500000000, "current_ratio": 1.85, "shares_outstanding": 2500000000}}
     絕對不要輸出 markdown 標記或其他文字。"""
 
-    prompt_text = f"請啟用搜尋引擎，【務必尋找最新日期】查詢台股 {stock_name} ({stock_id}) 最新財報新聞、最新單月營收 YoY/MoM 與所屬月份、{target_year} 法人預測 EPS、未來 1~3 年獲利 CAGR、EPS 年增率、最新目標價，以及最新財報的負債權益比/槓桿比率。請務必確認 revenue_yoy 與 revenue_mom 來自同一個 revenue_month，debt_to_equity 必須以倍數回傳，並標示財報 data_period。不要查詢 ETF 持股，ETF 持股由獨立功能處理。"
+    prompt_text = f"請啟用搜尋引擎，【務必尋找最新日期】查詢台股 {stock_name} ({stock_id}) 最新財報新聞、營收 MoM，以及 {target_year} 法人預估未來三年複合成長率(CAGR)、預測 EPS 與最新目標價。請務必確認並標示出資料的發布日期！不要查詢 ETF 持股，ETF 持股由獨立功能處理。"
 
     def _make_config(search_enabled=True):
         kwargs = {
@@ -1051,16 +1044,6 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
         try:
             parsed = json.loads(clean_text)
             if isinstance(parsed, dict):
-                # v1.24 欄位相容：新版拆開 revenue_yoy / revenue_mom / earnings_cagr，舊版仍可能只回 yoy / mom。
-                if parsed.get("revenue_yoy") is None and parsed.get("yoy") is not None:
-                    parsed["revenue_yoy"] = parsed.get("yoy")
-                if parsed.get("revenue_mom") is None and parsed.get("mom") is not None:
-                    parsed["revenue_mom"] = parsed.get("mom")
-                # 保留舊欄位，讓舊 UI / 舊 session 不會斷；但新版 UI 不再把 yoy 當獲利 CAGR。
-                if parsed.get("yoy") is None and parsed.get("revenue_yoy") is not None:
-                    parsed["yoy"] = parsed.get("revenue_yoy")
-                if parsed.get("mom") is None and parsed.get("revenue_mom") is not None:
-                    parsed["mom"] = parsed.get("revenue_mom")
                 parsed.update({k: v for k, v in marker_data.items() if v is not None and parsed.get(k) is None})
                 parsed["model_used"] = used_model
                 parsed["ai_search_enabled"] = bool(used_search)
@@ -2289,7 +2272,7 @@ def get_etf_holders_from_ai(stock_id, stock_name, api_key, model_name="gemini-3.
     return {
         "etf_holders_ai": rows,
         "summary": parsed.get("summary", "AI 已完成 ETF 持股補查。"),
-        "model_used": "Gemini 3 Pro Preview (付費版)",
+        "model_used": "Gemini 3.1 Pro Preview (付費版)",
         "ai_search_enabled": True,
         "query_payload": json.dumps({"stock": f"{stock_name} ({stock_id})", "prompt": prompt_text, "task": "獨立 AI ETF 持股查詢"}, ensure_ascii=False, indent=2),
         "attempts": attempts,
