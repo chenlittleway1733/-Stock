@@ -1518,10 +1518,22 @@ def build_valuation_separation_report(
             "可信度/限制": industry_profile.get("warning_note", "若分類不準，請人工調整 stocklist.txt 或產業模型規則。"),
         },
         {
-            "估值類型": "Dynamic Cap 2.0 最終建議倍率",
+            "估值類型": "Dynamic Cap 2.0 可操作倍率",
             "數值": "NULL" if dynamic_cap_pack.get("final_cap") is None else f"{float(dynamic_cap_pack.get('final_cap')):.1f}x",
-            "用途": "用於取代舊版單一毛利率 Cap；由產業基準、成長、毛利、ROE、題材、市值與折扣係數計算。",
+            "用途": "中性可操作倍率；已納入資料可信度、估值風險與流動性折扣。",
             "可信度/限制": dynamic_cap_pack.get("explanation", "若為 P/B 週期模型，P/E Cap 僅作輔助。"),
+        },
+        {
+            "估值類型": "Dynamic Cap 2.0 可操作倍率區間",
+            "數值": "NULL" if dynamic_cap_pack.get("operable_cap_low") is None else f"{float(dynamic_cap_pack.get('operable_cap_low')):.1f}x～{float(dynamic_cap_pack.get('operable_cap_high')):.1f}x",
+            "用途": "循環復甦股與資料分歧情境下，不只看單點倍率，而是看保守～中性～偏樂觀可操作範圍。",
+            "可信度/限制": "此區間不等於公式極限價；高於區間時不宜追價。",
+        },
+        {
+            "估值類型": "Dynamic Cap 2.0 公式/樂觀倍率",
+            "數值": "NULL" if dynamic_cap_pack.get("formula_cap") is None else f"公式 {float(dynamic_cap_pack.get('formula_cap')):.1f}x｜樂觀 {float(dynamic_cap_pack.get('optimistic_cap')):.1f}x｜Hard {float(dynamic_cap_pack.get('hard_ceiling_cap')):.1f}x",
+            "用途": "公式合理倍率與樂觀情境倍率分開顯示，避免把折扣後可操作倍率誤當公式極限價。",
+            "可信度/限制": "Hard ceiling 僅為強制上限，不作買進目標。",
         },
         {
             "估值類型": "可操作估值區間",

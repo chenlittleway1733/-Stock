@@ -1,5 +1,5 @@
 """
-Dynamic Cap 2.0 係數校準模型（第 17-B-1 階段）。
+Dynamic Cap 2.0 係數校準模型（第 17-B-4 階段）。
 
 設計原則：
 - 不再採用「產業基準 + 各項絕對倍數」加總，避免倍率連續堆高。
@@ -99,24 +99,28 @@ CALIBRATION_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "max_growth_factor": 1.18, "max_quality_factor": 1.12, "max_theme_factor": 1.10, "max_scale_factor": 1.04,
         "gross_margin_baseline": 0.22, "gross_margin_good": 0.28, "gross_margin_excellent": 0.35,
         "baked_in_themes": ["先進封裝", "cowos"], "geopolitical_factor": 0.96,
+        "recovery_sensitive": True,
     },
     "PROBE_TEST_INTERFACE": {
         "base_pe": 34.0, "floor_pe": 22.0, "soft_ceiling_pe": 50.0, "hard_ceiling_pe": 60.0,
         "max_growth_factor": 1.22, "max_quality_factor": 1.20, "max_theme_factor": 1.12, "max_scale_factor": 1.08,
         "gross_margin_baseline": 0.38, "gross_margin_good": 0.45, "gross_margin_excellent": 0.52,
         "baked_in_themes": ["測試", "探針"], "geopolitical_factor": 0.97,
+        "recovery_sensitive": True,
     },
     "SEMICAP_COWOS_EQUIPMENT": {
         "base_pe": 32.0, "floor_pe": 20.0, "soft_ceiling_pe": 48.0, "hard_ceiling_pe": 58.0,
         "max_growth_factor": 1.22, "max_quality_factor": 1.18, "max_theme_factor": 1.12, "max_scale_factor": 1.08,
         "gross_margin_baseline": 0.30, "gross_margin_good": 0.38, "gross_margin_excellent": 0.45,
         "baked_in_themes": ["cowos", "先進封裝", "設備"], "geopolitical_factor": 0.96,
+        "recovery_sensitive": True,
     },
     "FAB_FACILITY_MATERIALS": {
         "base_pe": 26.0, "floor_pe": 16.0, "soft_ceiling_pe": 38.0, "hard_ceiling_pe": 45.0,
         "max_growth_factor": 1.16, "max_quality_factor": 1.12, "max_theme_factor": 1.08, "max_scale_factor": 1.05,
         "gross_margin_baseline": 0.24, "gross_margin_good": 0.30, "gross_margin_excellent": 0.36,
         "baked_in_themes": ["廠務", "材料"], "geopolitical_factor": 0.96,
+        "recovery_sensitive": True,
     },
     "ABF_SUBSTRATE": {
         "base_pe": 30.0, "floor_pe": 18.0, "soft_ceiling_pe": 45.0, "hard_ceiling_pe": 55.0,
@@ -124,12 +128,14 @@ CALIBRATION_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "gross_margin_baseline": 0.23, "gross_margin_good": 0.30, "gross_margin_excellent": 0.38,
         "baked_in_themes": ["abf", "ai載板", "hpc", "載板"],
         "cyclical_low_base_cap": True,
+        "recovery_sensitive": True,
     },
     "SERVER_PCB_BOARD": {
         "base_pe": 28.0, "floor_pe": 16.0, "soft_ceiling_pe": 42.0, "hard_ceiling_pe": 52.0,
         "max_growth_factor": 1.18, "max_quality_factor": 1.14, "max_theme_factor": 1.10, "max_scale_factor": 1.06,
         "gross_margin_baseline": 0.18, "gross_margin_good": 0.24, "gross_margin_excellent": 0.30,
         "baked_in_themes": ["ai伺服器", "高階pcb"],
+        "recovery_sensitive": True,
     },
     "AI_SERVER_ODM": {
         "base_pe": 24.0, "floor_pe": 14.0, "soft_ceiling_pe": 34.0, "hard_ceiling_pe": 42.0,
@@ -160,6 +166,7 @@ CALIBRATION_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "max_growth_factor": 1.20, "max_quality_factor": 1.18, "max_theme_factor": 1.12, "max_scale_factor": 1.08,
         "gross_margin_baseline": 0.26, "gross_margin_good": 0.32, "gross_margin_excellent": 0.40,
         "baked_in_themes": ["水冷", "液冷", "散熱"],
+        "recovery_sensitive": "partial",
     },
     "OPTICAL_COMM_SILICON_PHOTONICS": {
         "base_pe": 36.0, "floor_pe": 22.0, "soft_ceiling_pe": 55.0, "hard_ceiling_pe": 68.0,
@@ -184,6 +191,7 @@ CALIBRATION_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "max_growth_factor": 1.18, "max_quality_factor": 1.14, "max_theme_factor": 1.10, "max_scale_factor": 1.06,
         "gross_margin_baseline": 0.28, "gross_margin_good": 0.36, "gross_margin_excellent": 0.45,
         "baked_in_themes": ["機器人", "自動化"],
+        "recovery_sensitive": True,
     },
     "SPACE_LEO_SATELLITE": {
         "base_pe": 30.0, "floor_pe": 16.0, "soft_ceiling_pe": 45.0, "hard_ceiling_pe": 55.0,
@@ -196,6 +204,7 @@ CALIBRATION_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "max_growth_factor": 1.16, "max_quality_factor": 1.14, "max_theme_factor": 1.08, "max_scale_factor": 1.05,
         "gross_margin_baseline": 0.22, "gross_margin_good": 0.30, "gross_margin_excellent": 0.38,
         "baked_in_themes": ["車用", "電動車"],
+        "recovery_sensitive": "partial",
     },
     "GRID_POWER_STORAGE": {
         "base_pe": 28.0, "floor_pe": 16.0, "soft_ceiling_pe": 38.0, "hard_ceiling_pe": 46.0,
@@ -493,10 +502,13 @@ def data_confidence_factor(warnings: List[Dict[str, Any]] = None, dq_warnings: L
     dq_warnings = dq_warnings or []
     danger = sum(1 for w in warnings if str(w.get("嚴重度", "")).lower() == "danger")
     count = len(warnings) + len(dq_warnings)
+    # 17-B-4：一項重大分歧不再直接打到 ×0.80，避免從過度樂觀修成過度保守。
     if danger >= 2 or count >= 5:
         f, label = 0.70, "低 / 資料異常"
-    elif danger >= 1 or count >= 3:
-        f, label = 0.80, "偏低"
+    elif count >= 3:
+        f, label = 0.82, "偏低"
+    elif danger >= 1:
+        f, label = 0.90, "中 / 重大分歧"
     elif count == 2:
         f, label = 0.90, "中"
     elif count == 1:
@@ -505,6 +517,62 @@ def data_confidence_factor(warnings: List[Dict[str, Any]] = None, dq_warnings: L
         f, label = 1.00, "高"
     return {"factor": f, "label": label, "reason": f"分歧警告 {len(warnings)} 項、資料校驗提醒 {len(dq_warnings)} 項"}
 
+
+def detect_cycle_recovery_state(
+    industry_profile: Dict[str, Any],
+    calibration: Dict[str, Any],
+    growth_pack: Dict[str, Any],
+    gross_margin: Any = None,
+    roe: Any = None,
+    revenue_yoy: Any = None,
+) -> Dict[str, Any]:
+    """判斷是否屬於循環復甦 / 訂單週期復甦。避免低基期股被成長與品質雙重誤判。"""
+    p = industry_profile or {}
+    key = str(p.get("model_key") or p.get("taxon_key") or "")
+    recovery_keys = {
+        "ABF_SUBSTRATE", "SERVER_PCB_BOARD", "OSAT_TESTING", "PROBE_TEST_INTERFACE",
+        "SEMICAP_COWOS_EQUIPMENT", "FAB_FACILITY_MATERIALS", "THERMAL_LIQUID_COOLING",
+        "EV_AUTO_ELECTRONICS", "ROBOTICS_AUTOMATION",
+    }
+    sensitive = p.get("recovery_sensitive") or calibration.get("recovery_sensitive") or bool(p.get("cyclical")) or key in recovery_keys
+    if not sensitive:
+        return {"state": "normal_growth", "label": "一般成長", "quality_floor": None, "growth_cap": None, "reason": "非循環復甦敏感產業"}
+
+    growth = growth_pack.get("growth") if isinstance(growth_pack, dict) else None
+    gm = _pct01(gross_margin)
+    roev = _pct01(roe)
+    rev = _pct01(revenue_yoy)
+    gm_base = _sf(calibration.get("gross_margin_baseline"))
+
+    weak_quality = False
+    weak_notes = []
+    if gm is not None and gm_base is not None and gm < gm_base:
+        weak_quality = True
+        weak_notes.append(f"毛利率 {_fmt_pct(gm)} 低於產業基準 {_fmt_pct(gm_base)}")
+    if roev is not None and roev < 0.10:
+        weak_quality = True
+        weak_notes.append(f"ROE {_fmt_pct(roev)} 尚未恢復")
+
+    rev_ok = rev is None or rev >= -0.05
+    if growth is not None and growth >= 0.50 and weak_quality and rev_ok:
+        return {
+            "state": "cycle_recovery",
+            "label": "循環復甦",
+            "quality_floor": 0.93,
+            "growth_cap": 1.15,
+            "reason": "Forward EPS / 營收顯示復甦，但當期品質指標尚未完全恢復；" + "、".join(weak_notes),
+        }
+    if growth is not None and growth >= 1.00 and bool(p.get("cyclical")):
+        return {
+            "state": "low_base_recovery",
+            "label": "低基期修復",
+            "quality_floor": 0.92,
+            "growth_cap": 1.12,
+            "reason": "循環產業 Forward EPS 高成長，疑似低基期修復，成長係數與品質扣分同時保守化。",
+        }
+    if bool(p.get("cyclical")):
+        return {"state": "cyclical_normal", "label": "循環一般", "quality_floor": None, "growth_cap": 1.12, "reason": "循環產業，避免把單期 EPS 當長期結構性成長。"}
+    return {"state": "normal_growth", "label": "一般成長", "quality_floor": None, "growth_cap": None, "reason": "未偵測到明確復甦狀態"}
 
 def valuation_risk_factor(current_price: Any = None, operable_low: Any = None, operable_high: Any = None) -> Dict[str, Any]:
     cp = _sf(current_price)
@@ -643,26 +711,26 @@ def calculate_dynamic_cap_v2(
     eps_positive = any((_sf(x) or 0) > 0 for x in [consensus_forward_eps, system_forward_eps, ai_forward_eps, ttm_eps, ai_ttm_eps])
     warn_count = len(divergence_warnings or []) + len(dq_warnings or [])
 
-    # 17-B-2：低軌衛星、機器人、生技等條件式 P/E 模型，若 EPS / 訂單未落地，直接切換事件模型。
+    # 17-B-4：低軌衛星、機器人、生技等條件式 P/E 模型，若 EPS / 訂單未落地，直接切換事件模型。
     if p.get("event_model_if_eps_unstable") and not eps_positive:
         pack = build_event_theme_pack(p)
-        note = p.get("event_switch_note") or "EPS / 訂單未落地，依 17-B-2 校準規則改用事件模型。"
+        note = p.get("event_switch_note") or "EPS / 訂單未落地，依 17-B-4 校準規則改用事件模型。"
         pack["warnings"] = list(pack.get("warnings") or []) + [note]
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-B-2"})
+        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-B-4"})
         return pack
 
     if pe_app is False or primary_valuation in {"event_chip", "theme_event"}:
         pack = build_event_theme_pack(p)
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-B-2"})
+        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-B-4"})
         return pack
     if primary_valuation.startswith("pb") or primary_valuation in {"pb", "pb_roe"}:
         pack = build_pb_cycle_pack(current_price, pb_ratio, p)
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-B-2"})
+        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-B-4"})
         return pack
 
     base = _sf(c.get("base_pe"), 20.0) or 20.0
     rows: List[Dict[str, Any]] = []
-    _add_row(rows, "基準", "產業基準倍率", f"{base:.1f}x", f"{p.get('model_label', p.get('display_name', '一般產業'))} 17-B-2 校準後 base_pe；非買進追價倍率")
+    _add_row(rows, "基準", "產業基準倍率", f"{base:.1f}x", f"{p.get('model_label', p.get('display_name', '一般產業'))} 17-B-4 校準後 base_pe；非買進追價倍率")
 
     liq = liquidity_factor(hist_data, info)
     g = growth_factor_hierarchical(
@@ -686,6 +754,17 @@ def calculate_dynamic_cap_v2(
         warning_count=warn_count,
         calibration=c,
     )
+    # 17-B-4：循環復甦股通用判斷，避免「未來 EPS 加分」與「當期低 ROE/毛利重扣」雙殺。
+    recovery = detect_cycle_recovery_state(p, c, g, gross_margin=gross_margin, roe=roe, revenue_yoy=revenue_yoy)
+    if recovery.get("growth_cap") is not None and float(g.get("factor", 1) or 1) > float(recovery.get("growth_cap")):
+        g = dict(g)
+        g["factor"] = float(recovery.get("growth_cap"))
+        g["reason"] = str(g.get("reason", "")) + f"；17-B-4 {recovery.get('label')} 狀態，成長係數上限 ×{float(recovery.get('growth_cap')):.2f}"
+    if recovery.get("quality_floor") is not None and float(q.get("factor", 1) or 1) < float(recovery.get("quality_floor")):
+        q = dict(q)
+        q["factor"] = float(recovery.get("quality_floor"))
+        q["reason"] = str(q.get("reason", "")) + f"；17-B-4 {recovery.get('label')} 狀態，避免復甦股被當期低毛利/低ROE雙殺，品質係數下限 ×{float(recovery.get('quality_floor')):.2f}"
+
     th = theme_order_factor(themes, p, eps_positive=eps_positive, data_warning_count=warn_count, calibration=c)
     sc = scale_growth_flex_factor(info.get("marketCap"), eps_positive=eps_positive, liquidity_ok=(liq.get("factor", 1) >= 0.85), calibration=c)
     geo = geopolitical_factor(p, c)
@@ -698,6 +777,8 @@ def calculate_dynamic_cap_v2(
         ("地緣政治 / 供應鏈風險係數", geo),
     ]:
         _add_factor(rows, name, float(pack.get("factor", 1.0) or 1.0), pack.get("reason", ""))
+
+    _add_row(rows, "復甦判斷", "循環 / 訂單復甦狀態", recovery.get("label", "一般成長"), recovery.get("reason", ""))
 
     raw_cap = base * float(g.get("factor", 1) or 1) * float(q.get("factor", 1) or 1) * float(th.get("factor", 1) or 1) * float(sc.get("factor", 1) or 1) * float(geo.get("factor", 1) or 1)
     fc = pe_floor_ceiling(p, c)
@@ -728,6 +809,21 @@ def calculate_dynamic_cap_v2(
         f"折扣前 {pre_clip_cap:.1f}x；floor {fc['floor']:.0f}x / soft ceiling {fc['soft_ceiling']:.0f}x / hard ceiling {fc['hard_ceiling']:.0f}x",
     )
 
+    # 17-B-4：倍率分層。final_cap 是可操作中性倍率；raw/soft/hard 分別作公式合理、樂觀與極限參考。
+    formula_cap = min(raw_cap, fc["soft_ceiling"])
+    optimistic_cap = fc["soft_ceiling"]
+    hard_cap = fc["hard_ceiling"]
+    operable_cap_low = max(fc["floor"], final_cap * 0.95)
+    if recovery.get("state") in {"cycle_recovery", "low_base_recovery", "cyclical_normal"}:
+        operable_cap_high = min(formula_cap, final_cap * 1.18, fc["soft_ceiling"])
+    else:
+        operable_cap_high = min(formula_cap, final_cap * 1.12, fc["soft_ceiling"])
+    if operable_cap_high < operable_cap_low:
+        operable_cap_high = operable_cap_low
+
+    if recovery.get("state") in {"cycle_recovery", "low_base_recovery"}:
+        warnings.append("循環復甦股：請同時看保守/中性/樂觀倍率區間，不宜只用單點 Cap 判斷。")
+
     if p.get("pe_trap_warning"):
         warnings.append("本產業存在 P/E 陷阱，低 P/E 不一定代表低估")
     if warn_count >= 3:
@@ -738,7 +834,7 @@ def calculate_dynamic_cap_v2(
     return {
         "available": True,
         "valuation_mode": primary_valuation,
-        "model_version": "Dynamic Cap 2.0 calibration 17-B-2",
+        "model_version": "Dynamic Cap 2.0 calibration 17-B-4",
         "base_multiple": base,
         "growth_premium": g,  # 保留舊 key，實際為 growth factor pack
         "gross_margin_premium": q,  # 保留舊 key，實際為 quality factor pack
@@ -750,6 +846,12 @@ def calculate_dynamic_cap_v2(
         "valuation_risk_factor": vr,
         "liquidity_factor": liq,
         "raw_cap": raw_cap,
+        "formula_cap": formula_cap,
+        "optimistic_cap": optimistic_cap,
+        "hard_cap": hard_cap,
+        "operable_cap_low": operable_cap_low,
+        "operable_cap_high": operable_cap_high,
+        "cycle_recovery_state": recovery,
         "pre_clip_cap": pre_clip_cap,
         "final_cap": final_cap,
         "floor_cap": fc["floor"],
@@ -760,5 +862,5 @@ def calculate_dynamic_cap_v2(
         "warnings": warnings,
         "industry_profile": p,
         "report": pd.DataFrame(rows),
-        "explanation": "Dynamic Cap 2.0 17-B-2：已同步全產業校準表，產業基準 × 成長/品質/題材/規模/地緣係數，再乘資料、估值與流動性折扣，最後套用產業 hard ceiling。",
+        "explanation": "Dynamic Cap 2.0 17-B-4：已加入循環復甦判斷、分歧折扣校準、公式/可操作/極限倍率分離與 hard ceiling 顯示修正。",
     }
