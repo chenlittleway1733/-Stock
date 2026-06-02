@@ -1,5 +1,5 @@
 """
-產業估值模型模組（第 17-A 階段）。
+產業估值模型模組（第 17-C-7C 階段）。
 
 資料流：
 1. stock_mapping.py 明確指定：股票 → primary_taxon + themes
@@ -181,6 +181,7 @@ def get_industry_valuation_profile(stock_id, stock_name="", sector="", industry=
     if mapping:
         taxon_key = mapping.get("primary_taxon", "GENERAL")
         themes = list(mapping.get("themes", []))
+        hybrid_taxons = list(mapping.get("hybrid_taxons", []) or [])
         mapping_source = "stock_mapping.py"
         mapped_name = mapping.get("name", stock_name)
         classification_source = "stock_mapping.py"
@@ -192,6 +193,7 @@ def get_industry_valuation_profile(stock_id, stock_name="", sector="", industry=
         if ai_ic and (not category or fallback_taxon in {"GENERAL", "THEME_EVENT"} or ai_ic.get("confidence") in {"high", "medium"}):
             taxon_key = ai_ic.get("taxon", "GENERAL")
             themes = list(ai_ic.get("themes") or [])
+            hybrid_taxons = []
             mapping_source = "ai_suggested_pending_review"
             classification_source = "AI 建議分類（待人工確認）"
             classification_confidence = ai_ic.get("confidence", "low")
@@ -201,6 +203,7 @@ def get_industry_valuation_profile(stock_id, stock_name="", sector="", industry=
         else:
             taxon_key = fallback_taxon
             themes = []
+            hybrid_taxons = []
             mapping_source = "keyword_fallback"
             classification_source = "stocklist/keyword fallback"
             classification_confidence = "medium" if category else "low"
@@ -218,6 +221,8 @@ def get_industry_valuation_profile(stock_id, stock_name="", sector="", industry=
         "stock_name": _safe_str(mapped_name),
         "themes": themes,
         "themes_text": "、".join(themes) if themes else "—",
+        "hybrid_taxons": hybrid_taxons,
+        "hybrid_taxons_text": "；".join([f"{h.get('taxon')} {float(h.get('weight', 0) or 0):.0%}" for h in hybrid_taxons if isinstance(h, dict)]) if hybrid_taxons else "—",
         "matched_category": category or "未在 stocklist.txt 找到分類",
         "stocklist_category": category or "未在 stocklist.txt 找到分類",
         "mapping_source": mapping_source,
@@ -272,6 +277,8 @@ def build_industry_valuation_model_report(profile):
         {"項目": "優先觀察指標", "內容": p.get("primary_metrics", "—")},
         {"項目": "P/E 參考區間", "內容": pe_range_text},
         {"項目": "Dynamic Cap floor / soft / hard", "內容": f"{p.get('floor_pe', '—')}x / {p.get('soft_ceiling_pe', '—')}x / {p.get('hard_ceiling_pe', '—')}x"},
+        {"項目": "混合產業權重", "內容": p.get("hybrid_taxons_text", "—")},
+        {"項目": "混合權重說明", "內容": p.get("hybrid_note", "—") or "—"},
         {"項目": "校準來源", "內容": p.get("calibration_source", "taxonomy")},
         {"項目": "P/B 參考區間", "內容": pb_range_text},
         {"項目": "P/E 模型適用性", "內容": p.get("pe_applicability_text", "—")},

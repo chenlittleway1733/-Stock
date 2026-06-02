@@ -1,0 +1,54 @@
+第 17-C-7C：分產業擴大其他 AI 股
+
+本次在 17-C-7B 第一批基礎上，依產業批次擴大 hybrid_taxons。
+原則：
+1. 不把所有 AI 題材股都直接改成高倍率主分類。
+2. 若公司已是高 AI 主分類，維持主分類，不重複混合。
+3. 權重依「AI 營收 / EPS 落地程度、產業純度、是否仍為原本本業」分層。
+4. 機器人、低軌、CPO 題材仍需 EPS landing check，未落地不可用高 P/E 追價。
+
+本次新增 / 調整 hybrid 分組：
+
+一、ODM / EMS 第二批
+- 和碩 4938：PC_NB_ODM + AI_SERVER_ODM 10%
+- 仁寶 2324：PC_NB_ODM + AI_SERVER_ODM 8%
+
+二、伺服器機構件 / 機殼
+- 勤誠 8210：SERVER_CHASSIS_RAIL + AI_SERVER_ODM 30%
+- 晟銘電 3013：SERVER_CHASSIS_RAIL + AI_SERVER_ODM 20%
+- 迎廣 6117：SERVER_CHASSIS_RAIL + AI_SERVER_ODM 20%
+
+三、高速連接器 / 線束
+- 嘉澤 3533：CONNECTOR_CABLE + AI_SERVER_BOARD_SYSTEM 20%
+- 貿聯-KY 3665：CONNECTOR_CABLE + AI_SERVER_BOARD_SYSTEM 15% + EV_AUTO_ELECTRONICS 10%
+
+四、網通 / 交換器 / 邊緣通訊
+- 智邦 2345：NETWORK_SWITCH + AI_SERVER_BOARD_SYSTEM 25%
+- 啟碁 6285：NETWORK_SWITCH + AI_SERVER_BOARD_SYSTEM 8%
+- 明泰 3380：NETWORK_SWITCH + AI_SERVER_BOARD_SYSTEM 5%
+
+五、封測 / 測試 / 設備 / 廠務
+- 日月光投控 3711：OSAT_TESTING + SEMICAP_COWOS_EQUIPMENT 12%
+- 京元電子 2449：OSAT_TESTING + PROBE_AI_ASIC 10%
+- 致茂 2360：TEST_AUTOMATION_EQUIPMENT + SEMICAP_COWOS_EQUIPMENT 12%
+- 由田 3455：TEST_AUTOMATION_EQUIPMENT + SEMICAP_COWOS_EQUIPMENT 10%
+- 均豪 5443：TEST_AUTOMATION_EQUIPMENT + SEMICAP_COWOS_EQUIPMENT 12%
+- 漢唐 2404：FAB_FACILITY_MATERIALS + SEMICAP_COWOS_EQUIPMENT 10%
+- 帆宣 6196：FAB_FACILITY_MATERIALS + SEMICAP_COWOS_EQUIPMENT 10%
+
+六、IC / Server BMC / 記憶體 IP
+- 信驊 5274：IC_DESIGN_PLATFORM_AI_EDGE + IC_DESIGN_ASIC_HIGH_VISIBILITY 15%
+- 愛普* 6531：IC_DESIGN_IP_ROYALTY + MEMORY_CYCLE 5%（提醒記憶體循環風險，不作高估值加分）
+
+七、機器人 / 自動化低權重題材
+- 廣運 6125：ROBOTICS_AUTOMATION + AI_SERVER_ODM 5%
+
+本次刻意維持主分類、不再重複 hybrid：
+- 欣興、南電、景碩：ABF_SUBSTRATE，本身已含 AI/HPC 載板與循環復甦邏輯。
+- 台光電、台燿、聯茂：CCL_HIGH_SPEED_MATERIALS，本身已含 AI server 高速材料。
+- 波若威、華星光、光聖：OPTICAL_COMM_SILICON_PHOTONICS，本身已含 AI data center / CPO 題材。
+- 奇鋐、雙鴻、健策、高力：THERMAL_LIQUID_COOLING，本身已含液冷/AI 散熱。
+- 緯穎、神達：AI_SERVER_ODM，本身已是 AI server 主分類。
+
+後續建議：
+17-C-7D 可做「hybrid 權重可視化稽核表」，列出所有 hybrid 股票的主分類、混合分類、權重、混合後 base/soft/hard，方便人工檢查是否過度加分。

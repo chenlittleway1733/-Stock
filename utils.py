@@ -1456,7 +1456,7 @@ def build_valuation_separation_report(
 
     原則：
     - 公式合理估值 / 公式極限價：純公式輸出，不直接作買賣依據。
-    - 可操作估值區間：用保守 EPS、法人樣本數與分歧警告折減後產生。
+    - 可操作估值區間：用估值採用 Forward EPS、法人樣本數、分歧警告與產業折減後產生。
     - 此函式只提供風險調整後區間，不取代人工投資判斷。
     """
     target_conf = classify_target_price_confidence(analyst_count)
@@ -1548,7 +1548,7 @@ def build_valuation_separation_report(
             "估值類型": "系統公式合理估值",
             "數值": format_quality_value(system_formula_fair_value, "price"),
             "用途": "純公式輸出，用於觀察估值中樞，不直接作買賣依據。",
-            "可信度/限制": "受 Forward EPS、成長率與 PEG 參數影響。",
+            "可信度/限制": "第 17-C-6a 後採 Forward EPS × 公式倍率；PEG 僅作輔助檢查，不直接推公式價。",
         },
         {
             "估值類型": "AI公式合理估值",

@@ -1587,6 +1587,28 @@ INDUSTRY_TAXONOMY["IC_DESIGN_ASIC_IP"].update({
 })
 
 
+
+# ===== 第 17-C-7B：第一批高確定性 AI 混合股所需補充分類 =====
+INDUSTRY_TAXONOMY.update({
+    "EMS_PLATFORM_CONTRACT_MANUFACTURING": {
+        "display_name": "大型 EMS / 平台型電子製造服務",
+        "parent": "電子代工 / 系統製造",
+        "primary_valuation": "forward_pe_pb_cycle",
+        "secondary_valuation": ["gross_margin", "operating_margin", "fcf", "order_visibility", "business_mix"],
+        "valuation_focus": ["Forward P/E", "營益率", "FCF", "AI Server / EV / 消費電子業務組合"],
+        "base_pe": 14, "pe_range": (8, 32), "floor_pe": 8, "soft_ceiling_pe": 24, "hard_ceiling_pe": 32,
+        "cyclical": True, "pe_applicable": True, "pe_trap_warning": "secondary_only", "theme_premium_allowed": True,
+        "max_growth_factor": 1.10, "max_quality_factor": 1.08, "max_theme_factor": 1.05, "max_scale_factor": 1.02,
+        "gross_margin_baseline": 0.06, "gross_margin_good": 0.09, "gross_margin_excellent": 0.12,
+        "baked_in_themes": ["EMS", "電子製造服務", "平台型製造"],
+        "geopolitical_factor": 0.97,
+        "risk_flags": ["低毛利", "消費電子循環", "客戶集中", "AI/EV 新業務比重不確定"],
+        "note": "大型 EMS 平台股專用；AI Server/EV 若已明確貢獻，請透過 hybrid_taxons 加權，而非直接改成純 AI Server。",
+        "calibration_source": "17-C-7B 第一批混合股補充分類"
+    },
+})
+
+
 def get_taxonomy(taxon_key: str):
     """安全取得產業分類設定。"""
     if not taxon_key:

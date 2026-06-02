@@ -1,5 +1,5 @@
 """
-Dynamic Cap 2.0 係數校準模型（第 17-C-6 階段）。
+Dynamic Cap 2.0 係數校準模型（第 17-C-7A 階段）。
 
 設計原則：
 - 不再採用「產業基準 + 各項絕對倍數」加總，避免倍率連續堆高。
@@ -454,6 +454,128 @@ CALIBRATION_DEFAULTS.update({
     },
 })
 
+
+
+
+# ===== 第 17-C-7C：第一批 AI 混合股補充預設校準 =====
+CALIBRATION_DEFAULTS.update({
+    "EMS_PLATFORM_CONTRACT_MANUFACTURING": {
+        "base_pe": 14.0, "floor_pe": 8.0, "soft_ceiling_pe": 24.0, "hard_ceiling_pe": 32.0,
+        "max_growth_factor": 1.10, "max_quality_factor": 1.08, "max_theme_factor": 1.05, "max_scale_factor": 1.02,
+        "gross_margin_baseline": 0.06, "gross_margin_good": 0.09, "gross_margin_excellent": 0.12,
+        "baked_in_themes": ["ems", "電子製造服務", "平台型製造"],
+        "geopolitical_factor": 0.97,
+        "recovery_sensitive": True,
+    },
+})
+
+# ===== 第 17-C-7A：混合產業權重估值引擎 =====
+def _safe_weight(x: Any) -> float:
+    v = _sf(x, 0.0) or 0.0
+    return max(0.0, min(float(v), 0.50))
+
+
+def _weighted_value(primary: Any, hybrids: List[Dict[str, Any]], key: str, primary_weight: float) -> Optional[float]:
+    base = _sf(primary)
+    if base is None:
+        return None
+    total = base * primary_weight
+    for h in hybrids:
+        hv = _sf(h.get(key))
+        if hv is not None:
+            total += hv * float(h.get("effective_weight", h.get("weight", 0)) or 0)
+    return total
+
+
+def _build_hybrid_calibration(industry_profile: Dict[str, Any], primary_calibration: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """建立混合產業權重後的校準參數。
+
+    原則：
+    - hybrid_taxons 必須由 stock_mapping.py 人工指定，不由 AI 自動亂加。
+    - total_weight 硬上限 0.50。
+    - 若 classification 非 confirmed 或 Forward EPS 缺值/有嚴重分歧，後續可在此擴充折半；17-C-7A 先建立引擎。
+    - 若 hybrid taxon 與 primary 相同，或已明顯內含 baked_in_themes，跳過避免重複加分。
+    """
+    p = industry_profile or {}
+    hybrids_raw = p.get("hybrid_taxons") or []
+    if not isinstance(hybrids_raw, list) or not hybrids_raw:
+        return dict(primary_calibration), {"enabled": False, "reason": "未設定混合產業權重", "hybrids": []}
+
+    primary_key = str(p.get("model_key") or p.get("taxon_key") or "").strip().upper()
+    primary_baked = {str(x).lower() for x in (primary_calibration.get("baked_in_themes") or [])}
+    valid = []
+    total_weight = 0.0
+    reasons = []
+
+    for h in hybrids_raw:
+        if not isinstance(h, dict):
+            continue
+        taxon = str(h.get("taxon") or "").strip().upper()
+        weight = _safe_weight(h.get("weight"))
+        if not taxon or weight <= 0:
+            continue
+        if taxon == primary_key:
+            reasons.append(f"{taxon} 與主分類相同，跳過避免重複加分")
+            continue
+        hc = dict(CALIBRATION_DEFAULTS.get(taxon, {}))
+        # 若 DEFAULTS 沒有，仍可用 taxonomy 參數；避免 import 循環，使用 dynamic defaults 為主。
+        if not hc:
+            reasons.append(f"{taxon} 找不到校準參數，跳過")
+            continue
+        # 內含題材防重複：若 hybrid taxon baked themes 已全部包含在 primary baked，降低至 0。
+        hybrid_baked = {str(x).lower() for x in (hc.get("baked_in_themes") or [])}
+        if hybrid_baked and primary_baked and hybrid_baked.issubset(primary_baked):
+            reasons.append(f"{taxon} 題材已內含於主分類，跳過")
+            continue
+        if total_weight + weight > 0.50:
+            weight = max(0.0, 0.50 - total_weight)
+        if weight <= 0:
+            continue
+        hc["taxon"] = taxon
+        hc["weight"] = weight
+        hc["effective_weight"] = weight
+        hc["reason"] = str(h.get("reason") or "")
+        valid.append(hc)
+        total_weight += weight
+        if total_weight >= 0.50:
+            break
+
+    if not valid:
+        return dict(primary_calibration), {"enabled": False, "reason": "混合產業權重全部被跳過；" + "；".join(reasons), "hybrids": []}
+
+    primary_weight = max(0.50, 1.0 - total_weight)
+    c = dict(primary_calibration)
+
+    for key in ["base_pe", "floor_pe", "soft_ceiling_pe", "hard_ceiling_pe",
+                "gross_margin_baseline", "gross_margin_good", "gross_margin_excellent",
+                "max_growth_factor", "max_quality_factor", "max_theme_factor", "max_scale_factor"]:
+        v = _weighted_value(primary_calibration.get(key), valid, key, primary_weight)
+        if v is not None:
+            c[key] = round(v, 4)
+
+    # 風險與 baked theme 合併，避免題材係數再次過度加分。
+    baked = list(primary_calibration.get("baked_in_themes") or [])
+    for h in valid:
+        baked.extend(h.get("baked_in_themes") or [])
+    if baked:
+        c["baked_in_themes"] = sorted(set(str(x) for x in baked if str(x).strip()))
+
+    note_parts = [
+        f"主分類權重 {primary_weight:.0%}",
+        *[f"{h.get('taxon')} {float(h.get('effective_weight', 0)):.0%}" + (f"（{h.get('reason')}）" if h.get("reason") else "") for h in valid],
+    ]
+    summary = {
+        "enabled": True,
+        "primary_weight": primary_weight,
+        "total_hybrid_weight": total_weight,
+        "hybrids": [{"taxon": h.get("taxon"), "weight": h.get("effective_weight"), "reason": h.get("reason", "")} for h in valid],
+        "reason": "；".join(note_parts + reasons),
+        "mixed_base_pe": c.get("base_pe"),
+        "mixed_soft_ceiling_pe": c.get("soft_ceiling_pe"),
+        "mixed_hard_ceiling_pe": c.get("hard_ceiling_pe"),
+    }
+    return c, summary
+
 def _calibration(industry_profile: Dict[str, Any]) -> Dict[str, Any]:
     key = str(industry_profile.get("model_key") or industry_profile.get("taxon_key") or "GENERAL")
     c = dict(CALIBRATION_DEFAULTS.get(key, CALIBRATION_DEFAULTS.get("GENERAL", {})))
@@ -468,7 +590,11 @@ def _calibration(industry_profile: Dict[str, Any]) -> Dict[str, Any]:
             c[k] = industry_profile.get(k)
     if c.get("base_pe") is None:
         c["base_pe"] = _sf(industry_profile.get("base_pe"), 20.0) or 20.0
-    return c
+
+    # 17-C-7A：若 stock_mapping.py 有人工指定 hybrid_taxons，混合 base/soft/hard 與係數上限。
+    mixed, summary = _build_hybrid_calibration(industry_profile, c)
+    mixed["hybrid_summary"] = summary
+    return mixed
 
 
 def _growth_to_factor(growth: Optional[float]) -> float:
@@ -1084,7 +1210,7 @@ def calculate_dynamic_cap_v2(
     # 若 TTM 與 Forward 都尚未穩定轉正，全面停用 P/E 估值；若 TTM 為負但有明確正 Forward EPS，可保留 Forward P/E 但列高風險。
     if primary_valuation in {"forward_pe", "pe_pb_crosscheck", "forward_pe_pb_cycle"} and ((adopted_forward_eps is None or adopted_forward_eps <= 0) and (adopted_ttm_eps is None or adopted_ttm_eps <= 0)):
         pack = build_turnaround_event_pack(p, "EPS 尚未穩定轉正，Dynamic Cap 停用 P/E 估值，改用轉機 / 事件模型。")
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "model_version": "Dynamic Cap 2.0 calibration 17-C-6"})
+        pack.update({"stock_id": stock_id, "stock_name": stock_name, "model_version": "Dynamic Cap 2.0 calibration 17-C-7C"})
         return pack
 
     # 17-B-4：低軌衛星、機器人、生技等條件式 P/E 模型，若 EPS / 訂單未落地，直接切換事件模型。
@@ -1092,21 +1218,26 @@ def calculate_dynamic_cap_v2(
         pack = build_event_theme_pack(p)
         note = p.get("event_switch_note") or "EPS / 訂單未落地，依 17-B-4 校準規則改用事件模型。"
         pack["warnings"] = list(pack.get("warnings") or []) + [note]
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-6"})
+        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-7C"})
         return pack
 
     if pe_app is False or primary_valuation in {"event_chip", "theme_event"}:
         pack = build_event_theme_pack(p)
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-6"})
+        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-7C"})
         return pack
     if primary_valuation.startswith("pb") or primary_valuation in {"pb", "pb_roe"}:
         pack = build_pb_cycle_pack(current_price, pb_ratio, p)
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-6"})
+        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-7C"})
         return pack
 
     base = _sf(c.get("base_pe"), 20.0) or 20.0
     rows: List[Dict[str, Any]] = []
-    _add_row(rows, "基準", "產業基準倍率", f"{base:.1f}x", f"{p.get('model_label', p.get('display_name', '一般產業'))} 17-C-6 校準後 base_pe；非買進追價倍率")
+    _add_row(rows, "基準", "產業基準倍率", f"{base:.1f}x", f"{p.get('model_label', p.get('display_name', '一般產業'))} 17-C-7C 校準後 base_pe；非買進追價倍率")
+    hybrid_summary = c.get("hybrid_summary") or {}
+    if hybrid_summary.get("enabled"):
+        _add_row(rows, "基準", "混合產業權重", f"base {hybrid_summary.get('mixed_base_pe'):.1f}x / soft {hybrid_summary.get('mixed_soft_ceiling_pe'):.1f}x / hard {hybrid_summary.get('mixed_hard_ceiling_pe'):.1f}x", hybrid_summary.get("reason", ""))
+    elif p.get("hybrid_taxons"):
+        _add_row(rows, "基準", "混合產業權重", "未啟用", hybrid_summary.get("reason", "混合分類未通過防呆"))
 
     liq = liquidity_factor(hist_data, info)
     g = growth_factor_hierarchical(
@@ -1235,7 +1366,7 @@ def calculate_dynamic_cap_v2(
     return {
         "available": True,
         "valuation_mode": primary_valuation,
-        "model_version": "Dynamic Cap 2.0 calibration 17-C-6",
+        "model_version": "Dynamic Cap 2.0 calibration 17-C-7C",
         "base_multiple": base,
         "growth_premium": g,  # 保留舊 key，實際為 growth factor pack
         "gross_margin_premium": q,  # 保留舊 key，實際為 quality factor pack

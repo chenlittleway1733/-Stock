@@ -1,0 +1,33 @@
+第 17-C-7A：混合產業權重估值引擎
+
+本次完成內容：
+1. stock_mapping.py 支援 hybrid_taxons 欄位格式：
+   "hybrid_taxons": [
+       {"taxon": "IC_DESIGN_ASIC_HIGH_VISIBILITY", "weight": 0.25, "reason": "AI ASIC 營收/EPS 貢獻明確"}
+   ]
+
+2. industry_model.py 會把 hybrid_taxons 帶入 industry_profile，並在產業估值模型明細顯示：
+   - 混合產業權重
+   - 混合權重說明
+
+3. dynamic_cap_model.py 新增混合權重引擎：
+   - primary_weight = 1 - sum(hybrid_weight)
+   - 混合 base / floor / soft / hard
+   - 混合 max_growth / max_quality / max_theme / max_scale
+   - 混合毛利率基準門檻
+   - total hybrid weight 最高 0.50
+   - hybrid taxon 與主分類相同時跳過
+   - 找不到 taxon 校準參數時跳過
+   - baked_in_themes 會合併，避免題材係數重複加分
+
+4. Dynamic Cap 倍率拆解表新增「混合產業權重」列：
+   - 顯示混合後 base / soft / hard
+   - 顯示主分類權重與混合分類權重
+
+5. UI / 打包提示詞新增混合產業權重資訊。
+
+重要原則：
+- 17-C-7A 只建立通用引擎，不大批加入股票權重。
+- 17-C-7B 再放入第一批高確定性 AI 混合股，例如聯發科、廣達、緯創、台光電等。
+- hybrid 權重必須由人工 mapping 指定，不由 AI 自動亂給。
+- 若公司已是高階 AI 主分類，例如 PROBE_AI_ASIC、THERMAL_LIQUID、IC_DESIGN_ASIC_HIGH_VISIBILITY，不應再混合相同題材，避免重複加分。

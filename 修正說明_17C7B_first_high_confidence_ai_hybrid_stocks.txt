@@ -1,0 +1,54 @@
+第 17-C-7B：加入第一批高確定性 AI 混合股
+
+本次完成內容：
+1. 在 17-C-7A 混合權重引擎基礎上，加入第一批人工指定 hybrid_taxons。
+2. 加入原則：
+   - 只加入「本業仍在、但 AI 新成長曲線已影響估值中樞」的複合型公司。
+   - 已經是高階 AI 主分類者，不再混合相同 AI 題材，避免重複加分。
+   - 權重人工指定，不由 AI 自動判斷。
+
+第一批新增 hybrid：
+- 聯發科 2454：
+  主分類 IC_DESIGN_PLATFORM_AI_EDGE
+  混合 IC_DESIGN_ASIC_HIGH_VISIBILITY 25%
+  原因：AI ASIC 2026 營收貢獻與法人 EPS 共識已開始反映；仍非純 AI ASIC。
+
+- 廣達 2382：
+  主分類 PC_NB_ODM
+  混合 AI_SERVER_ODM 45%
+  原因：AI 伺服器為主要成長動能，但仍保留 NB/ODM 本業權重。
+
+- 緯創 3231：
+  主分類 PC_NB_ODM
+  混合 AI_SERVER_ODM 40%
+  原因：AI 伺服器成長曲線明確，但仍屬 ODM/EMS 複合型。
+
+- 鴻海 2317：
+  主分類 EMS_PLATFORM_CONTRACT_MANUFACTURING
+  混合 AI_SERVER_ODM 25% + EV_AUTO_ELECTRONICS 5%
+  原因：AI server 提高估值中樞，EV 先給低權重，但整體仍是大型 EMS 平台。
+
+- 英業達 2356：
+  主分類 PC_NB_ODM
+  混合 AI_SERVER_ODM 25%
+  原因：AI/伺服器有貢獻，但純度低於廣達與緯創。
+
+- 富世達 6805：
+  主分類 SERVER_CHASSIS_RAIL
+  混合 THERMAL_LIQUID 20%
+  原因：AI server 機構件與液冷題材已影響估值，但仍非純液冷散熱。
+
+本次刻意不加入 hybrid 的高 AI 主分類：
+- 緯穎 6669：已是 AI_SERVER_ODM
+- 台光電 2383、台燿 6274：已是 CCL_HIGH_SPEED_MATERIALS
+- 奇鋐 3017、雙鴻 3324、健策 3653：已是 THERMAL_LIQUID_COOLING
+- 光聖 6442：已是 OPTICAL_COMM_SILICON_PHOTONICS
+- 技嘉 2376、微星 2377：已是 AI_SERVER_BOARD_SYSTEM
+
+新增 taxonomy：
+- EMS_PLATFORM_CONTRACT_MANUFACTURING：大型 EMS / 平台型電子製造服務
+  base 14 / soft 24 / hard 32
+  用於鴻海等複合型大型 EMS，再透過 hybrid 混合 AI server / EV。
+
+後續 17-C-7C 建議：
+分產業擴大其他 AI 股，包括 AI Server ODM/EMS 第二批、PCB/CCL/載板、散熱/機構件、光通訊/CPO、CoWoS設備/檢測、機器人/軟體/AI應用。
