@@ -4,6 +4,7 @@ yfinance、Fugle、FinMind、Yahoo、Gemini 等 API 存取都集中在這裡。
 由原始 app(1).py 拆分而來，已全面升級為最新的 google-genai 官方 SDK。
 """
 import datetime
+import email.utils
 import io
 import json
 import math
@@ -23,7 +24,7 @@ from google import genai
 from google.genai import types
 
 # 從 utils 引入需要的工具
-from utils import s_float, log_data_health
+from utils import s_float, log_data_health, log_exception, validate_ai_financial_json
 
 # ==========================================
 # 3. 外部 API 與模型模組
@@ -49,7 +50,9 @@ def fetch_fugle_kline(stock_id, api_key, timeframe="D"):
                 return df[['Open', 'High', 'Low', 'Close', 'Volume']].sort_index()
             else:
                 log_data_health("Fugle", False, res.status_code)
-    except: pass
+    except Exception as e:
+        log_exception("Fugle", f"fetch_fugle_kline:{stock_id}:{timeframe}", e)
+        log_data_health("Fugle", False, f"ERR:{str(e)[:120]}")
 
     return pd.DataFrame()
 
@@ -168,51 +171,6 @@ def _extract_etf_holders_from_text(raw_text, source_name):
     return _normalize_etf_holders(rows, default_source="系統抓取")
 
 
-@st.cache_data(ttl=86400)
-def get_stock_etf_holders(stock_id):
-    """
-    查詢「哪些 ETF 持有此股票」。
-    重要：此函式只使用公開網頁資料源，不呼叫 AI；AI 補查只會在 get_financials_from_ai() 被按鈕觸發時執行。
-    回傳格式：
-    [{etf_code, etf_name, weight, shares, data_date, source, data_type, note}]
-    """
-    stock_id = str(stock_id).strip()
-    if not stock_id:
-        return []
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-        "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8",
-    }
-
-    sources = [
-        ("Yahoo股市", f"https://tw.stock.yahoo.com/quote/{stock_id}.TW/etf"),
-        ("FindBillion", f"https://www.findbillion.com/twstock/{stock_id}/etf"),
-    ]
-
-    best_rows = []
-    for source_name, url in sources:
-        try:
-            res = requests.get(url, headers=headers, timeout=12)
-            if res.status_code != 200 or not res.text:
-                log_data_health(source_name, False, res.status_code)
-                continue
-            rows = _extract_etf_holders_from_text(res.text, source_name)
-            if rows:
-                log_data_health(source_name, True, res.status_code)
-                for r in rows:
-                    r["source_url"] = url
-                # 取資料較多者；若 Yahoo 有資料優先直接用 Yahoo。
-                if not best_rows or len(rows) > len(best_rows) or source_name == "Yahoo股市":
-                    best_rows = rows
-                if source_name == "Yahoo股市" and len(rows) >= 3:
-                    break
-            else:
-                log_data_health(source_name, False, "NO_ETF_ROWS")
-        except Exception as e:
-            log_data_health(source_name, False, f"ERR:{str(e)[:80]}")
-
-    return _normalize_etf_holders(best_rows, default_source="系統抓取")[:20]
 
 
 
@@ -697,64 +655,8 @@ def fetch_cmoney_etf_holdings(etf_code, etf_name=""):
     return _parse_holdings_tables_from_html(html, etf_code, etf_name, "CMoney", url)
 
 
-def update_etf_holdings_cache(force=False, max_etfs=None):
-    """
-    更新 ETF → 成分股快取。一般查詢不使用 AI / 不用 Google。
-    max_etfs 可在測試時限制掃描檔數；正式環境建議 None。
-    """
-    cached = _read_json_file(ETF_HOLDINGS_CACHE_FILE, {})
-    if (not force) and cached.get("updated_date") == _today_str() and cached.get("holdings"):
-        return cached
-
-    master = discover_etf_master_list(force=force)
-    if max_etfs:
-        master = master[:int(max_etfs)]
-
-    holdings = []
-    errors = []
-    for i, item in enumerate(master, start=1):
-        code = item.get("etf_code", "").upper()
-        name = item.get("etf_name", "")
-        if not code:
-            continue
-        rows = []
-        # MoneyDJ 優先；抓不到才試 Pocket。
-        try:
-            rows = fetch_moneydj_etf_holdings(code, name)
-        except Exception as e:
-            errors.append({"etf_code": code, "source": "MoneyDJ", "error": str(e)[:160]})
-        if not rows:
-            try:
-                rows = fetch_pocket_etf_holdings(code, name)
-            except Exception as e:
-                errors.append({"etf_code": code, "source": "Pocket", "error": str(e)[:160]})
-        if not rows:
-            try:
-                rows = fetch_cmoney_etf_holdings(code, name)
-            except Exception as e:
-                errors.append({"etf_code": code, "source": "CMoney", "error": str(e)[:160]})
-        holdings.extend(rows)
-        # 禮貌延遲，避免對外部網站造成壓力。
-        time.sleep(0.25)
-
-    cache = {
-        "version": ETF_CACHE_VERSION,
-        "updated_date": _today_str(),
-        "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "master_count": len(master),
-        "holdings_count": len(holdings),
-        "holdings": holdings,
-        "errors_sample": errors[:30],
-    }
-    _write_json_file(ETF_HOLDINGS_CACHE_FILE, cache)
-    return cache
 
 
-def load_etf_holdings_cache(auto_update=True):
-    cache = _read_json_file(ETF_HOLDINGS_CACHE_FILE, {})
-    if auto_update and (cache.get("updated_date") != _today_str() or not cache.get("holdings")):
-        cache = update_etf_holdings_cache(force=False)
-    return cache
 
 
 def update_etf_master_list_cache(force=True):
@@ -790,113 +692,92 @@ def get_etf_master_cache_status():
     }
 
 
-def get_etf_cache_status():
-    cache = _read_json_file(ETF_HOLDINGS_CACHE_FILE, {})
-    master = _read_json_file(ETF_MASTER_CACHE_FILE, {})
-    return {
-        "cache_version": cache.get("version", "尚未建立"),
-        "updated_date": cache.get("updated_date", "尚未更新"),
-        "updated_at": cache.get("updated_at", "尚未更新"),
-        "is_today": cache.get("updated_date") == _today_str(),
-        "master_count": cache.get("master_count", master.get("count", 0)),
-        "holdings_count": cache.get("holdings_count", len(cache.get("holdings", [])) if isinstance(cache.get("holdings"), list) else 0),
-        "errors_count": len(cache.get("errors_sample", [])) if isinstance(cache.get("errors_sample"), list) else 0,
-    }
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_stock_etf_holders(stock_id, stock_name=None, force_refresh=False):
+
+AI_FINANCIAL_FIELD_LABELS = {
+    "pe": "歷史本益比 P/E",
+    "trailing_eps": "近四季 EPS（legacy）",
+    "forward_eps": "法人預估 EPS（legacy）",
+    "latest_quarter_eps": "最新單季 EPS",
+    "ttm_eps": "近四季 TTM EPS",
+    "fiscal_year_eps": "最近完整年度 EPS",
+    "forward_eps_system": "系統預估 Forward EPS",
+    "forward_eps_ai": "AI 抓取/推估 Forward EPS",
+    "forward_eps_consensus": "法人共識 Forward EPS",
+    "pb": "股價淨值比 P/B",
+    "gross_margin": "毛利率",
+    "operating_margin": "營益率",
+    "roe": "ROE",
+    "yoy": "營收/獲利成長率 YoY/CAGR",
+    "target_price": "目標價",
+    "target_price_high": "目標價高標",
+    "target_price_avg": "目標價均值",
+    "target_price_low": "目標價低標",
+    "target_price_analyst_count": "目標價分析師人數",
+    "target_price_rationale": "目標價理由",
+    "debt_to_equity": "負債權益比 D/E",
+    "mom": "最新單月營收 MoM",
+    "dividend_yield": "預估現金殖利率",
+    "data_period": "資料期間",
+    "free_cash_flow": "自由現金流",
+    "current_ratio": "流動比率",
+    "shares_outstanding": "總發行股數/股本",
+}
+
+def _normalize_ai_source_metadata(parsed):
     """
-    從 ETF 成分股快取反查「哪些 ETF 持有此股票」。
-    注意：此函式一般查詢不呼叫 AI、不用 Google 搜尋。
-    若快取沒有資料，才用 Yahoo/FindBillion 個股反查作為最後補漏。
+    將 AI 回傳的來源欄位統一整理到 _ai_source_trace。
+    支援新格式 _sources / field_sources，也相容 source_urls 這類舊式總表。
     """
-    stock_id = str(stock_id).strip()
-    if not stock_id:
-        return []
+    if not isinstance(parsed, dict):
+        return parsed
 
-    if force_refresh:
-        cache = update_etf_holdings_cache(force=True)
-    else:
-        cache = load_etf_holdings_cache(auto_update=True)
+    raw_sources = parsed.get("_sources") or parsed.get("field_sources") or parsed.get("sources") or {}
+    global_urls = parsed.get("source_urls") or parsed.get("reference_urls") or []
+    if isinstance(global_urls, str):
+        global_urls = [global_urls]
 
-    holdings = cache.get("holdings", []) if isinstance(cache, dict) else []
-    results = []
-    target_name_key = _normalize_tw_name(stock_name or "")
-    if not target_name_key:
-        try:
-            target_name_key = _normalize_tw_name(get_chinese_name(stock_id) or "")
-        except Exception:
-            target_name_key = ""
-
-    for r in holdings:
-        row_code = str(r.get("stock_code", "")).strip()
-        row_name_key = _normalize_tw_name(r.get("stock_name", ""))
-        if row_code == stock_id or (target_name_key and row_name_key and target_name_key == row_name_key):
-            results.append({
-                "etf_code": _normalize_etf_code(r.get("etf_code")),
-                "etf_name": r.get("etf_name", ""),
-                "weight": r.get("weight"),
-                "shares": r.get("shares"),
-                "data_date": r.get("data_date") or "來源未揭露",
-                "source": r.get("source") or "ETF成分股快取",
-                "source_url": r.get("source_url", ""),
-                "data_type": "ETF成分股快取反查",
-                "note": "由 ETF 持股明細反查，不是 Yahoo 個股頁結果",
-            })
-
-    # 去重：同一 ETF 若多來源重複，優先保留 MoneyDJ / 有比例者。
-    pref = {"MoneyDJ": 0, "Pocket": 1, "TWSE": 2, "Yahoo股市": 3, "FindBillion": 4}
-    dedup = {}
-    for r in results:
-        code = r.get("etf_code")
-        old = dedup.get(code)
-        if old is None:
-            dedup[code] = r
+    trace = {}
+    for key, label in AI_FINANCIAL_FIELD_LABELS.items():
+        meta = raw_sources.get(key) if isinstance(raw_sources, dict) else None
+        if isinstance(meta, dict):
+            source = str(meta.get("source") or meta.get("publisher") or meta.get("title") or "AI聯網搜尋").strip()
+            published_date = str(meta.get("published_date") or meta.get("date") or meta.get("data_date") or meta.get("period") or parsed.get("data_period") or "").strip()
+            source_url = str(meta.get("source_url") or meta.get("url") or meta.get("link") or "").strip()
+            note = str(meta.get("note") or meta.get("quote") or meta.get("description") or "").strip()
+        elif isinstance(meta, str) and meta.strip():
+            source = meta.strip()
+            published_date = str(parsed.get("data_period") or "").strip()
+            source_url = ""
+            note = ""
         else:
-            old_rank = pref.get(str(old.get("source")), 99)
-            new_rank = pref.get(str(r.get("source")), 99)
-            if (old.get("weight") is None and r.get("weight") is not None) or new_rank < old_rank:
-                dedup[code] = r
-    results = list(dedup.values())
-    results.sort(key=lambda x: (x.get("weight") is None, -(x.get("weight") or 0)))
+            source = "AI聯網搜尋" if parsed.get(key) not in (None, "", "null") else ""
+            published_date = str(parsed.get("data_period") or "").strip() if source else ""
+            source_url = ""
+            note = ""
 
-    if results:
-        return results[:80]
-
-    # 最後補漏：保留舊 Yahoo/FindBillion 個股頁解析，但明確標示來源。
-    # 這不是主資料源，只避免快取建置失敗時完全沒資料。
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-            "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8",
+        trace[key] = {
+            "field": key,
+            "label": label,
+            "value": parsed.get(key),
+            "source": source,
+            "published_date": published_date,
+            "source_url": source_url,
+            "note": note,
         }
-        sources = [
-            ("Yahoo股市", f"https://tw.stock.yahoo.com/quote/{stock_id}.TW/etf"),
-            ("FindBillion", f"https://www.findbillion.com/twstock/{stock_id}/etf"),
-        ]
-        best_rows = []
-        for source_name, url in sources:
-            try:
-                res = requests.get(url, headers=headers, timeout=12)
-                if res.status_code != 200:
-                    continue
-                rows = _extract_etf_holders_from_text(res.text, source_name)
-                for rr in rows:
-                    rr["data_date"] = rr.get("data_date") or "來源未揭露"
-                    rr["data_type"] = "個股頁補漏"
-                    rr["note"] = "ETF 快取未命中，改用個股頁補漏"
-                if rows and (not best_rows or len(rows) > len(best_rows)):
-                    best_rows = rows
-            except Exception:
-                continue
-        return best_rows[:20]
-    except Exception:
-        return []
+
+    if global_urls:
+        parsed["source_urls"] = [str(u).strip() for u in global_urls if str(u).strip()]
+
+    parsed["_ai_source_trace"] = trace
+    parsed["source_summary"] = "已要求 AI 逐欄回傳來源、發布日期與網址；若單欄來源缺漏，請以原始回報與 source_urls 交叉檢查。"
+    return parsed
+
 
 def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1-pro-preview"):
     """
-    AI 財報校對與補齊。
+    AI 財報校對與補齊.
     v7 修正重點：
     1) 僅允許 Gemini 3 Pro Preview 付費版 + Google Search。
     2) 不自動降級到 2.5 Pro / 2.5 Flash / 離線保底，避免不準資料進入估值模型。
@@ -916,28 +797,47 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
 
     system_prompt = f"""你是一個精準的財經數據提取機器人。請上網搜尋該台股公司「最新」、「最即時」的財報與市場數據，絕對不要使用過期的舊資料，提取以下指標：
     1. 「歷史本益比 (P/E)」
-    2. 「近四季或最新年度 EPS (Trailing EPS)」
-    3. 「法人預估 {target_year} 年度 EPS (Forward EPS)」
-    4. 「股價淨值比 (P/B)」
-    5. 「毛利率」
-    6. 「營益率」
-    7. 「ROE(股東權益報酬率)」
-    8. 「法人預估未來 1~3 年獲利複合成長率 (CAGR)，若無則用最新營收 YoY 替代」
-    9. 「國內外法人最新預估目標價 (Target Price)」
-    10. 「負債權益比 (Debt-to-Equity Ratio)」
-    11. 「最新單月營收月增率(MoM)」
-    12. 「預估現金殖利率 (Dividend Yield)」(例如：擬配發現金股利2元，最新股價900元，殖利率應為 0.0022)
-    13. 「最新資料所屬年月或具體日期 (Data Period)」(請務必標示出你查到這些最新數據的具體發布日期或所屬時間，例如：2024年4月或2024/05/15)
-    14. 「目標價統計分析師人數 (Target Price Analyst Count)」
-    15. 「目標價核心理由摘要 (Target Price Rationale)」
-    16. 「最新自由現金流 (Free Cash Flow)」
-    17. 「最新流動比率 (Current Ratio)」
-    18. 「總發行股數或股本大小 (Shares Outstanding / Capital)」
-    必須嚴格回傳包含上述 18 個財務欄位的 JSON 格式。百分比請轉換為小數（例如 25.5% 寫成 0.255，衰退5%寫成 -0.05），數值請直接輸出數字。若查無資料，該欄位請填 null。
+    2. 「最新單季 EPS (latest_quarter_eps)」：最新已公告季度 EPS，例如 2026Q1 EPS。
+    3. 「近四季 EPS 合計 (ttm_eps / trailing_eps)」：用於歷史 P/E。
+    4. 「最近完整年度 EPS (fiscal_year_eps)」：最近完整會計年度 EPS。
+    5. 「法人預估 {target_year} 年度 EPS (forward_eps_ai / forward_eps_consensus)」：若有多家法人共識請填 forward_eps_consensus；若只有 AI 從單一新聞/券商抓取或推估，請填 forward_eps_ai。
+    6. 「股價淨值比 (P/B)」
+    7. 「毛利率」
+    8. 「營益率」
+    9. 「ROE(股東權益報酬率)」
+    10. 「法人預估未來 1~3 年獲利複合成長率 (CAGR)，若無則用最新營收 YoY 替代」
+    11. 「國內外法人最新預估目標價 (Target Price)」
+    12. 「負債權益比 (Debt-to-Equity Ratio)」
+    13. 「最新單月營收月增率(MoM)」
+    14. 「預估現金殖利率 (Dividend Yield)」(例如：擬配發現金股利2元，最新股價900元，殖利率應為 0.0022)
+    15. 「最新資料所屬年月或具體日期 (Data Period)」(請務必標示出你查到這些最新數據的具體發布日期或所屬時間，例如：2024年4月或2024/05/15)
+    16. 「目標價統計分析師人數 (Target Price Analyst Count)」
+    17. 「目標價核心理由摘要 (Target Price Rationale)」
+    18. 「最新自由現金流 (Free Cash Flow)」
+    19. 「最新流動比率 (Current Ratio)」
+    20. 「總發行股數或股本大小 (Shares Outstanding / Capital)」
+    EPS 欄位請務必拆欄，不可把「最新單季 EPS」、「近四季 TTM EPS」、「完整年度 EPS」、「Forward EPS」混在同一欄：
+    - latest_quarter_eps：最新已公告季度 EPS。
+    - ttm_eps：近四季 EPS 合計。
+    - fiscal_year_eps：最近完整年度 EPS。
+    - forward_eps_ai：AI 從最新新聞/券商報告抓取或推估的 {target_year} EPS。
+    - forward_eps_consensus：多家法人共識 EPS；若無明確共識請填 null。
+    - trailing_eps 與 forward_eps 為向下相容 legacy 欄位，trailing_eps 可同 ttm_eps，forward_eps 可同 forward_eps_consensus 或 forward_eps_ai。
+
+    必須嚴格回傳包含上述財務欄位的 JSON 格式。百分比請轉換為小數（例如 25.5% 寫成 0.255，衰退5%寫成 -0.05），數值請直接輸出數字。若查無資料，該欄位請填 null。
     請務必搜尋近期各大券商對該公司的最新目標價。
+
+    重要：除了 18 個財務欄位，請額外回傳「_sources」物件，逐欄標示每個數值的來源。
+    _sources 內每個欄位必須包含：
+    - source：來源名稱，例如 Yahoo股市、Goodinfo、公開資訊觀測站、券商報告、公司法說會、MoneyDJ、鉅亨網等。
+    - published_date：該資料發布日期、法說日期、報導日期或財報所屬期間。
+    - source_url：可查證網址；若搜尋工具無法提供網址，請填空字串。
+    - note：簡短說明該欄位採用邏輯，例如「近四季合計」、「2026法人均值」、「最新月營收」。
+    若某欄位查無資料，數值填 null，_sources 該欄位也要保留，但 source 與 source_url 可填空字串。
+
     注意：本函式只負責財報與估值校對，不要查詢 ETF 持股；ETF 持股由獨立按鈕 get_etf_holders_from_ai() 執行。
     JSON 格式範例：
-    {{"pe": 15.2, "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.35, "target_price": 1050.0, "target_price_high": 1200.0, "target_price_avg": 1050.0, "target_price_low": 900.0, "target_price_analyst_count": 18, "target_price_rationale": "AI 伺服器需求強、毛利率改善但評價偏高", "debt_to_equity": 0.45, "mom": 0.015, "dividend_yield": 0.032, "data_period": "2024/05/15", "free_cash_flow": 1500000000, "current_ratio": 1.85, "shares_outstanding": 2500000000}}
+    {{"pe": 15.2, "latest_quarter_eps": 1.35, "ttm_eps": 5.4, "fiscal_year_eps": 4.9, "forward_eps_system": null, "forward_eps_ai": 6.0, "forward_eps_consensus": 6.2, "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.35, "target_price": 1050.0, "target_price_high": 1200.0, "target_price_avg": 1050.0, "target_price_low": 900.0, "target_price_analyst_count": 18, "target_price_rationale": "AI 伺服器需求強、毛利率改善但評價偏高", "debt_to_equity": 0.45, "mom": 0.015, "dividend_yield": 0.032, "data_period": "2026/05/15", "free_cash_flow": 1500000000, "current_ratio": 1.85, "shares_outstanding": 2500000000, "_sources": {{"pe": {{"source": "Yahoo股市", "published_date": "2026/05/31", "source_url": "https://example.com", "note": "最新可得本益比"}}, "ttm_eps": {{"source": "最新財報/公開資訊觀測站", "published_date": "2026Q1", "source_url": "https://example.com", "note": "近四季 EPS 合計"}}, "forward_eps_consensus": {{"source": "券商/法人預估彙整", "published_date": "2026/05/20", "source_url": "https://example.com", "note": "{target_year} 年度 EPS 共識預估"}}, "target_price_avg": {{"source": "券商目標價彙整", "published_date": "2026/05/20", "source_url": "https://example.com", "note": "最新法人目標價均值"}}}}, "source_urls": ["https://example.com"]}}
     絕對不要輸出 markdown 標記或其他文字。"""
 
     prompt_text = f"請啟用搜尋引擎，【務必尋找最新日期】查詢台股 {stock_name} ({stock_id}) 最新財報新聞、營收 MoM，以及 {target_year} 法人預估未來三年複合成長率(CAGR)、預測 EPS 與最新目標價。請務必確認並標示出資料的發布日期！不要查詢 ETF 持股，ETF 持股由獨立功能處理。"
@@ -1045,6 +945,9 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
             parsed = json.loads(clean_text)
             if isinstance(parsed, dict):
                 parsed.update({k: v for k, v in marker_data.items() if v is not None and parsed.get(k) is None})
+                parsed = _normalize_ai_source_metadata(parsed)
+                parsed = validate_ai_financial_json(parsed, stock_id=stock_id, stock_name=stock_name)
+                parsed = _normalize_ai_source_metadata(parsed)
                 parsed["model_used"] = used_model
                 parsed["ai_search_enabled"] = bool(used_search)
                 parsed["fallback_reason"] = fallback_reason
@@ -1156,7 +1059,8 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-3.1-pro-preview"):
                 for chunk in response.candidates[0].grounding_metadata.grounding_chunks:
                     if chunk.web and chunk.web.uri:
                         links.append(chunk.web.uri)
-        except: pass
+        except Exception as e:
+            log_exception("Gemini", "topic_search:grounding_metadata", e)
         
         return json.loads(clean_json), list(set(links))
     except Exception as e: 
@@ -1186,7 +1090,8 @@ def get_global_market_trend():
                     c = float(hist['Close'].iloc[-1])
                     p = float(hist['Close'].iloc[-2])
                     if not math.isnan(c) and not math.isnan(p) and p != 0: return c, (c - p) / p * 100
-            except: pass
+            except Exception as e:
+                log_exception("Yahoo", "get_global_market_trend:get_price_and_pct", e)
             return 0.0, 0.0
 
         sox_price, sox_pct = get_price_and_pct(tickers.tickers['^SOX'])
@@ -1201,10 +1106,38 @@ def get_global_market_trend():
         else: trend, color = f"❄️ 悲觀警戒 ({target_day}台股面臨回檔壓力)", "#00cc66"
             
         return {"sox_p": sox_price, "sox": sox_pct, "tsm_p": tsm_price, "tsm": tsm_pct, "nq_p": nq_price, "nq": nq_pct, "ewt_p": ewt_price, "ewt": ewt_pct, "trend": trend, "color": color, "target_day": target_day, "time_status": time_status}
-    except: return None
+    except Exception as e:
+        log_exception("Yahoo", "get_global_market_trend", e)
+        return None
 
 @st.cache_data(ttl=43200)
 def get_monthly_revenue(stock_id, fm_key=""):
+    """取得月營收資料，並明確保留「實際公告月份」。
+
+    重要原則：
+    - Month / actual_revenue_month 一律來自資料來源回傳的月份，不使用查詢當月推定。
+    - UI 顯示時應使用 actual_revenue_month，避免 6/1 查詢時誤標成 5 月營收。
+    - 保留舊欄位 Month/Revenue/YoY/MoM，確保既有評分與圖表相容。
+    """
+
+    def _standardize_revenue_df(df, source="", source_url="", source_date=None):
+        if df is None or df.empty:
+            return df
+        out = df.copy()
+        if "Month" in out.columns:
+            out["actual_revenue_month"] = out["Month"].astype(str)
+            out["revenue_month"] = out["actual_revenue_month"]
+        if "Revenue" in out.columns:
+            out["monthly_revenue"] = out["Revenue"]
+        if "YoY" in out.columns:
+            out["monthly_yoy"] = out["YoY"]
+        if "MoM" in out.columns:
+            out["monthly_mom"] = out["MoM"]
+        out["revenue_source"] = source
+        out["source_url"] = source_url
+        out["source_date"] = source_date or datetime.date.today().isoformat()
+        return out
+
     try:
         y_url = f"https://tw.stock.yahoo.com/quote/{stock_id}/revenue"
         y_res = requests.get(y_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
@@ -1229,38 +1162,40 @@ def get_monthly_revenue(stock_id, fm_key=""):
                             if ext: res.extend(ext)
                         return res
                     return []
-                    
+
                 rev_list = find_rev_list(raw_json)
                 valid_revs = [r for r in rev_list if isinstance(r.get('yearMonth'), str) and re.match(r'\d{4}/\d{2}', r.get('yearMonth'))]
-                
+
                 if valid_revs:
                     valid_revs.sort(key=lambda x: x['yearMonth'], reverse=True)
                     latest = valid_revs[0]
                     mon = latest.get('yearMonth')
-                    
+
                     def get_raw(field):
                         val = latest.get(field)
                         if isinstance(val, dict): return val.get('raw', 0)
                         return float(val) if val is not None else 0
-                        
+
                     rev_raw = get_raw('revenue')
                     yoy_raw = get_raw('yearOverYear')
                     mom_raw = get_raw('monthOverMonth')
-                    
+
                     if mon and rev_raw:
-                        return pd.DataFrame([{
-                            'Month': mon, 
-                            'Revenue': round(rev_raw / 100000000, 2), 
-                            'YoY': round(yoy_raw * 100, 2), 
+                        df = pd.DataFrame([{
+                            'Month': mon,
+                            'Revenue': round(rev_raw / 100000000, 2),
+                            'YoY': round(yoy_raw * 100, 2),
                             'MoM': round(mom_raw * 100, 2)
                         }])
-    except: pass
-    
+                        return _standardize_revenue_df(df, source="Yahoo 股市月營收", source_url=y_url)
+    except Exception as e:
+        log_exception("Yahoo", f"get_monthly_revenue:yahoo:{stock_id}", e)
+
     try:
         today = datetime.date.today()
         start_str = f"{today.year - 2}-{today.month:02d}-01"
         url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockMonthRevenue&data_id={stock_id}&start_date={start_str}"
-        if fm_key: url += f"&token={fm_key}" 
+        if fm_key: url += f"&token={fm_key}"
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         ok = (res.status_code == 200)
         status_val = res.status_code
@@ -1270,6 +1205,7 @@ def get_monthly_revenue(stock_id, fm_key=""):
         if data.get('status') == 200 and data.get('data'):
             df = pd.DataFrame(data['data'])
             df['date'] = pd.to_datetime(df['date'])
+            # 只排除查詢當月；實際最新月份仍以 FinMind 回傳的 date 為準，不自行套用 current_date。
             current_month_start = pd.to_datetime(f"{today.year}-{today.month:02d}-01")
             df = df[df['date'] < current_month_start].sort_values('date').reset_index(drop=True)
             df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce')
@@ -1277,14 +1213,17 @@ def get_monthly_revenue(stock_id, fm_key=""):
             else: df['YoY'] = df['revenue'].pct_change(periods=12) * 100
             df['MoM'] = df['revenue'].pct_change(periods=1) * 100
             df['Month'] = df['date'].dt.strftime('%Y/%m')
-            df['Revenue'] = df['revenue'] / 100000000 
+            df['Revenue'] = df['revenue'] / 100000000
             final_df = df.dropna(subset=['YoY']).tail(12).copy()
             if not final_df.empty:
                 final_df['Revenue'] = final_df['Revenue'].round(2)
                 final_df['YoY'] = final_df['YoY'].round(2)
                 final_df['MoM'] = final_df['MoM'].round(2)
-                return final_df[['Month', 'Revenue', 'YoY', 'MoM']].reset_index(drop=True)
-    except: pass
+                final_df = final_df[['Month', 'Revenue', 'YoY', 'MoM']].reset_index(drop=True)
+                return _standardize_revenue_df(final_df, source="FinMind TaiwanStockMonthRevenue", source_url=url.split('&token=')[0])
+    except Exception as e:
+        log_exception("FinMind", f"get_monthly_revenue:finmind:{stock_id}", e)
+        log_data_health("FinMind", False, f"ERR:{str(e)[:120]}")
     return None
 
 @st.cache_data(ttl=43200)
@@ -1303,7 +1242,9 @@ def get_pe_pb_data(stock_id, fm_key=""):
                 df['PER'] = pd.to_numeric(df['PER'], errors='coerce')
                 df['PBR'] = pd.to_numeric(df.get('PBR'), errors='coerce') 
                 return df[df['PER'] > 0].dropna(subset=['date', 'PER']).reset_index(drop=True)
-    except: pass
+    except Exception as e:
+        log_exception("FinMind", f"get_pe_pb_data:{stock_id}", e)
+        log_data_health("FinMind", False, f"ERR:{str(e)[:120]}")
     return None
 
 @st.cache_data(ttl=43200)
@@ -1335,7 +1276,8 @@ def get_finmind_financial_health(stock_id, fm_key=""):
                     for v_key in v_dict.keys():
                         if k in v_key:
                             try: return float(str(v_dict[v_key]).replace(',', '').replace('%', ''))
-                            except: pass
+                            except Exception as e:
+                                log_exception("FinMind", f"get_finmind_financial_health:get_val:{stock_id}", e)
                 return 0.0
                 
             rev_l = get_val(vals_l, '營業收入', '淨收益', '收益')
@@ -1391,7 +1333,9 @@ def get_finmind_financial_health(stock_id, fm_key=""):
             res_dict['f_score'] = f_score
             res_dict['cfo_l'] = cfo_l
             return res_dict
-    except: pass
+    except Exception as e:
+        log_exception("FinMind", f"get_finmind_financial_health:{stock_id}", e)
+        log_data_health("FinMind", False, f"ERR:{str(e)[:120]}")
     return {}
 
 @st.cache_data(ttl=1800)
@@ -1419,7 +1363,8 @@ def get_stock_news(stock_id):
                         parsed_date = email.utils.parsedate_tz(pubDate)
                         if parsed_date:
                             timestamp = int(email.utils.mktime_tz(parsed_date))
-                    except: pass
+                    except Exception as e:
+                        log_exception("Yahoo", f"get_stock_news:parse_pubdate:{stock_id}", e)
                     
                 news_data.append({
                     "title": title,
@@ -1427,7 +1372,8 @@ def get_stock_news(stock_id):
                     "link": link,
                     "timestamp": timestamp
                 })
-    except: pass
+    except Exception as e:
+        log_exception("Yahoo", f"get_stock_news:rss:{stock_id}", e)
 
     if not news_data:
         for ext in [".TW", ".TWO"]:
@@ -1445,7 +1391,8 @@ def get_stock_news(stock_id):
                                 "timestamp": n.get("providerPublishTime", 0)
                             })
                     break 
-            except: pass
+            except Exception as e:
+                log_exception("Yahoo", f"get_stock_news:yfinance:{stock_id}{ext}", e)
             
     if news_data:
         news_data.sort(key=lambda x: x["timestamp"], reverse=True)
@@ -1466,7 +1413,8 @@ def get_fallback_info(stock_id):
                 info['realtime_low'] = fi.get('day_low')
                 info['realtime_volume'] = fi.get('last_volume')
                 break
-        except: pass
+        except Exception as e:
+            log_exception("Yahoo", f"get_fallback_info:fast_info:{stock_id}{ext}", e)
         
     try:
         url = f"https://tw.stock.yahoo.com/quote/{stock_id}"
@@ -1508,7 +1456,8 @@ def get_fallback_info(stock_id):
             
         sec_match = re.search(r'href="/class-quote\?category=([^"&]+)', text)
         if sec_match: info['sector'] = urllib.parse.unquote(sec_match.group(1))
-    except: pass
+    except Exception as e:
+        log_exception("Yahoo", f"get_fallback_info:page_parse:{stock_id}", e)
     return info
 
 @st.cache_data(ttl=30)
@@ -1536,7 +1485,8 @@ def get_realtime_data(stock_id):
                     rt_data['realtime_low'] = p_f(info.get('l')) or rt_price
                     rt_data['realtime_volume'] = p_f(info.get('v'))
                     return rt_data
-    except: pass
+    except Exception as e:
+        log_exception("TWSE", f"get_realtime_data:mis:{stock_id}", e)
 
     for ext in [".TW", ".TWO"]:
         try:
@@ -1550,7 +1500,9 @@ def get_realtime_data(stock_id):
                 rt_data['realtime_low'] = fi.get('day_low')
                 rt_data['realtime_volume'] = fi.get('last_volume')
                 return rt_data
-        except: continue
+        except Exception as e:
+            log_exception("Yahoo", f"get_realtime_data:yfinance:{stock_id}{ext}", e)
+            continue
         
     return rt_data
 
@@ -1627,10 +1579,12 @@ def _get_base_stock_data(stock_id, fugle_key="", fm_key=""):
                 info_data = ticker.info
                 if info_data:
                     info_source = "Yahoo Finance (yfinance)"
-            except:
-                pass
+            except Exception as e:
+                log_exception("Yahoo", f"_get_base_stock_data:ticker_info:{stock_id}{ext}", e)
             if info_data or (hist is not None and not hist.empty): break
-        except: continue
+        except Exception as e:
+            log_exception("Yahoo", f"_get_base_stock_data:yfinance:{stock_id}{ext}", e)
+            continue
             
     if hist is None or hist.empty:
         for ext in [".TW", ".TWO"]:
@@ -1647,7 +1601,8 @@ def _get_base_stock_data(stock_id, fugle_key="", fm_key=""):
                         price_source = "Yahoo Finance CSV fallback"
                         fallback_notes.append("主資料源失敗，已改用 Yahoo CSV 備援股價。")
                         break
-            except: pass
+            except Exception as e:
+                log_exception("Yahoo", f"_get_base_stock_data:csv_fallback:{stock_id}{ext}", e)
 
     if hist is None or hist.empty:
         try:
@@ -1666,7 +1621,9 @@ def _get_base_stock_data(stock_id, fugle_key="", fm_key=""):
                 if hist is not None and not hist.empty:
                     price_source = "FinMind fallback"
                     fallback_notes.append("Yahoo 來源失敗，已改用 FinMind 備援股價。")
-        except: pass
+        except Exception as e:
+            log_exception("FinMind", f"_get_base_stock_data:finmind_price:{stock_id}", e)
+            log_data_health("FinMind", False, f"ERR:{str(e)[:120]}")
 
     if hist is not None and not hist.empty:
         hist.index.name = 'Date'
@@ -1716,7 +1673,9 @@ def _get_base_chart_data(stock_id, timeframe, fugle_key=""):
                 if df.index.tz is not None: df.index = df.index.tz_localize(None)
                 df.index.name = 'Date'
                 return df
-        except: continue
+        except Exception as e:
+            log_exception("Yahoo", f"get_price_history:yfinance:{stock_id}{ext}:{timeframe}", e)
+            continue
         
     if timeframe == "日線":
         hist, _ = _get_base_stock_data(stock_id, fugle_key, "")
@@ -1766,7 +1725,9 @@ def get_inst_data(stock_id, fm_key=""):
                 res_df['Trust'] = pivot_df[t_cols].sum(axis=1) if t_cols else 0
                 res_df['Dealer'] = pivot_df[d_cols].sum(axis=1) if d_cols else 0
                 return res_df / 1000 
-    except: pass
+    except Exception as e:
+        log_exception("FinMind", f"get_chip_data:{stock_id}", e)
+        log_data_health("FinMind", False, f"ERR:{str(e)[:120]}")
     return pd.DataFrame()
 
 @st.cache_data(ttl=60)
@@ -1777,13 +1738,17 @@ def validate_api_keys(f_key, m_key):
         try:
             r1 = requests.get("https://api.fugle.tw/marketdata/v1.0/stock/historical/candles/2330?timeframe=D", headers={"X-API-KEY": clean_f}, timeout=15)
             f_res = (r1.status_code == 200)
-        except: f_res = False
+        except Exception as e:
+            log_exception("Fugle", "validate_api_keys:fugle", e)
+            f_res = False
     if m_key:
         clean_m = re.sub(r'\s+', '', m_key)
         try:
             r2 = requests.get(f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=2330&start_date=2024-01-01&end_date=2024-01-02&token={clean_m}", timeout=15)
             m_res = (r2.status_code == 200 and r2.json().get('status') == 200)
-        except: m_res = False
+        except Exception as e:
+            log_exception("FinMind", "validate_api_keys:finmind", e)
+            m_res = False
     return f_res, m_res
 
 @st.cache_data(ttl=86400) 
@@ -1793,7 +1758,8 @@ def get_chinese_name(stock_id):
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
         match = re.search(r'<title>(.*?)(?:\(| \()', res.text)
         if match: return match.group(1).strip()
-    except: pass
+    except Exception as e:
+        log_exception("Yahoo", f"get_chinese_name:{stock_id}", e)
     return None
 
 @st.cache_data(ttl=86400)
@@ -1804,7 +1770,9 @@ def translate_to_zh(text):
         params = {"client": "gtx", "sl": "en", "tl": "zh-TW", "dt": "t", "q": text}
         res = requests.get(url, params=params, timeout=5)
         return "".join([item[0] for item in res.json()[0]])
-    except: return text + "\n\n(⚠️ 翻譯服務暫時忙碌中)"
+    except Exception as e:
+        log_exception("GoogleTranslate", "translate_to_zh", e)
+        return text + "\n\n(⚠️ 翻譯服務暫時忙碌中)"
 
 # ==========================================
 # 3.3 ETF 持股快取 v9 覆寫：避免外部站連線失敗時慢掃；新增 Yahoo ETF 持股頁反查
@@ -2082,92 +2050,6 @@ def _scan_priority_etfs_for_stock(stock_id, stock_name=""):
     return _normalize_etf_holders(out, default_source="ETF持股頁快速反查")
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_stock_etf_holders(stock_id, stock_name=None, force_refresh=False):
-    """
-    v9：優先從 ETF 成分股快取反查；快取 0 筆時改用重點 ETF 持股頁快速反查；最後才退回 Yahoo 個股頁補漏。
-    """
-    stock_id = str(stock_id).strip()
-    if not stock_id:
-        return []
-
-    cache = update_etf_holdings_cache(force=True) if force_refresh else load_etf_holdings_cache(auto_update=True)
-    holdings = cache.get("holdings", []) if isinstance(cache, dict) else []
-    results = []
-    target_name_key = _normalize_tw_name(stock_name or "")
-    if not target_name_key:
-        try:
-            target_name_key = _normalize_tw_name(get_chinese_name(stock_id) or "")
-        except Exception:
-            target_name_key = ""
-
-    for r in holdings:
-        row_code = str(r.get("stock_code", "")).strip()
-        row_name_key = _normalize_tw_name(r.get("stock_name", ""))
-        if row_code == stock_id or (target_name_key and row_name_key and target_name_key == row_name_key):
-            results.append({
-                "etf_code": _normalize_etf_code(r.get("etf_code")),
-                "etf_name": r.get("etf_name", ""),
-                "weight": r.get("weight"),
-                "shares": r.get("shares"),
-                "data_date": r.get("data_date") or "來源未揭露",
-                "source": r.get("source") or "ETF成分股快取",
-                "source_url": r.get("source_url", ""),
-                "data_type": "ETF成分股快取反查",
-                "note": "由 ETF 持股明細反查，不是 Yahoo 個股頁結果",
-            })
-
-    if not results:
-        results = _scan_priority_etfs_for_stock(stock_id, stock_name)
-
-    # 去重排序
-    pref = {"MoneyDJ": 0, "Yahoo ETF持股頁": 1, "Pocket": 2, "CMoney": 3, "TWSE": 4, "Yahoo股市": 8, "FindBillion": 9}
-    dedup = {}
-    for r in results:
-        code = r.get("etf_code")
-        if not code:
-            continue
-        old = dedup.get(code)
-        if old is None:
-            dedup[code] = r
-        else:
-            old_rank = pref.get(str(old.get("source")), 99)
-            new_rank = pref.get(str(r.get("source")), 99)
-            if (old.get("weight") is None and r.get("weight") is not None) or new_rank < old_rank:
-                dedup[code] = r
-    results = list(dedup.values())
-    results.sort(key=lambda x: (x.get("weight") is None, -(x.get("weight") or 0)))
-    if results:
-        return results[:80]
-
-    # 最後補漏：舊 Yahoo 個股頁。這會漏 00981A，所以只當最後備援。
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-            "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8",
-        }
-        sources = [
-            ("Yahoo股市", f"https://tw.stock.yahoo.com/quote/{stock_id}.TW/etf"),
-            ("FindBillion", f"https://www.findbillion.com/twstock/{stock_id}/etf"),
-        ]
-        best_rows = []
-        for source_name, url in sources:
-            try:
-                res = requests.get(url, headers=headers, timeout=(1.2, 3.0))
-                if res.status_code != 200:
-                    continue
-                rows = _extract_etf_holders_from_text(res.text, source_name)
-                for rr in rows:
-                    rr["data_date"] = rr.get("data_date") or "來源未揭露"
-                    rr["data_type"] = "個股頁補漏"
-                    rr["note"] = "ETF 快取與重點 ETF 持股頁未命中，改用個股頁補漏；此來源可能漏主動式 ETF"
-                if rows and (not best_rows or len(rows) > len(best_rows)):
-                    best_rows = rows
-            except Exception:
-                continue
-        return best_rows[:20]
-    except Exception:
-        return []
 
 
 # ==========================================

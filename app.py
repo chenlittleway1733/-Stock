@@ -12,7 +12,7 @@ from utils import init_session_state
 # ==========================================
 # 0. 網頁基本設定
 # ==========================================
-st.set_page_config(page_title="way投資戰情室1.25", layout="wide")
+st.set_page_config(page_title="WAY AI 投資戰情室 2.1", layout="wide")
 st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True)
 
 # ==========================================
@@ -31,10 +31,19 @@ def check_password():
     col1, col2, col3 = st.columns([1, 1.5, 1])
     with col2:
         def password_entered():
-            # 檢查密碼是否為 win8888
-            if st.session_state["password_input"] == "win8888":
+            # 從 Streamlit Secrets 讀取密碼，避免將密碼寫死在程式碼中
+            app_password = st.secrets.get("APP_PASSWORD", "")
+
+            # 若尚未設定 APP_PASSWORD，直接拒絕登入並提示到部署後台設定
+            if not app_password:
+                st.session_state["password_correct"] = False
+                st.session_state["password_config_missing"] = True
+                return
+
+            st.session_state["password_config_missing"] = False
+            if st.session_state["password_input"] == app_password:
                 st.session_state["password_correct"] = True
-                del st.session_state["password_input"]  # 驗證成功後清除密碼暫存策安全
+                del st.session_state["password_input"]  # 驗證成功後清除密碼暫存，提升安全性
             else:
                 st.session_state["password_correct"] = False
 
@@ -48,7 +57,9 @@ def check_password():
         )
         
         # 如果有輸入過密碼且錯誤，顯示提示
-        if "password_correct" in st.session_state and not st.session_state["password_correct"]:
+        if st.session_state.get("password_config_missing", False):
+            st.error("❌ 尚未設定 APP_PASSWORD，請到 Streamlit Secrets 新增 APP_PASSWORD。")
+        elif "password_correct" in st.session_state and not st.session_state["password_correct"]:
             st.error("❌ 密碼錯誤！請重新輸入。")
             
     return False
