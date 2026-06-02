@@ -1366,3 +1366,145 @@ def get_taxonomy(taxon_key: str):
     if not taxon_key:
         return INDUSTRY_TAXONOMY["GENERAL"]
     return INDUSTRY_TAXONOMY.get(str(taxon_key).strip().upper(), INDUSTRY_TAXONOMY["GENERAL"])
+
+# ===== 第 17-C-4：產業基準倍率重構覆寫 =====
+# 目的：將高階 AI 供應鏈、成熟/一般型、轉機事件型分層，避免同產業不同階段共用同一套 Dynamic Cap。
+INDUSTRY_TAXONOMY.update({
+    "FOUNDRY_ADVANCED": {
+        "display_name": "先進晶圓代工 / HPC / AI", "parent": "半導體核心", "primary_valuation": "forward_pe",
+        "secondary_valuation": ["pb", "roe", "gross_margin", "geopolitical_risk"],
+        "valuation_focus": ["Forward P/E", "毛利率", "ROE", "先進製程", "地緣政治折價"],
+        "base_pe": 24, "pe_range": (18, 35), "floor_pe": 18, "soft_ceiling_pe": 30, "hard_ceiling_pe": 35,
+        "cyclical": True, "pe_applicable": True, "theme_premium_allowed": True,
+        "max_growth_factor": 1.14, "max_quality_factor": 1.10, "max_theme_factor": 1.05, "max_scale_factor": 1.00,
+        "gross_margin_baseline": 0.54, "gross_margin_good": 0.58, "gross_margin_excellent": 0.62,
+        "baked_in_themes": ["AI", "HPC", "CoWoS", "先進製程"], "geopolitical_factor": 0.92,
+        "risk_flags": ["地緣政治", "大市值折價", "資本支出", "毛利率下滑"],
+        "note": "台積電類先進晶圓代工專用；AI 題材已內含，不宜再用超高 P/E 追價。",
+        "calibration_source": "17-C-4 產業基準倍率重構"
+    },
+    "FOUNDRY_MATURE": {
+        "display_name": "成熟晶圓代工", "parent": "半導體核心", "primary_valuation": "forward_pe_pb_cycle",
+        "secondary_valuation": ["pb", "utilization", "capex_cycle"],
+        "valuation_focus": ["Forward P/E", "P/B", "稼動率", "成熟製程供需"],
+        "base_pe": 12, "pe_range": (8, 22), "floor_pe": 8, "soft_ceiling_pe": 18, "hard_ceiling_pe": 22,
+        "cyclical": True, "pe_applicable": True, "pe_trap_warning": "secondary_only", "theme_premium_allowed": False,
+        "max_growth_factor": 1.10, "max_quality_factor": 1.08, "max_theme_factor": 1.00, "max_scale_factor": 1.00,
+        "gross_margin_baseline": 0.24, "gross_margin_good": 0.32, "gross_margin_excellent": 0.40,
+        "risk_flags": ["成熟製程競爭", "產能利用率", "報價循環"],
+        "note": "成熟製程需看稼動率與 P/B，不能誤套先進製程高估值。",
+        "calibration_source": "17-C-4 產業基準倍率重構"
+    },
+    "IC_DESIGN_ASIC_IP": {
+        "display_name": "矽智財 / AI ASIC / 高毛利設計服務", "parent": "半導體核心", "primary_valuation": "forward_pe",
+        "secondary_valuation": ["eps_cagr", "gross_margin", "nre", "royalty"],
+        "valuation_focus": ["Forward P/E", "EPS CAGR", "毛利率", "NRE/授權", "AI ASIC 訂單"],
+        "base_pe": 35, "pe_range": (25, 70), "floor_pe": 22, "soft_ceiling_pe": 55, "hard_ceiling_pe": 70,
+        "cyclical": False, "pe_applicable": True, "theme_premium_allowed": True,
+        "max_growth_factor": 1.25, "max_quality_factor": 1.22, "max_theme_factor": 1.18, "max_scale_factor": 1.08,
+        "gross_margin_baseline": 0.45, "gross_margin_good": 0.55, "gross_margin_excellent": 0.65,
+        "baked_in_themes": ["AI ASIC", "ASIC", "IP", "矽智財"], "geopolitical_factor": 0.97,
+        "risk_flags": ["客戶集中", "NRE 認列波動", "高估值修正", "先進製程成本"],
+        "note": "高毛利且 EPS 已落地者可給較高估值；不可套用到一般消費 IC。",
+        "calibration_source": "17-C-4 產業基準倍率重構"
+    },
+    "IC_DESIGN_CONSUMER": {
+        "display_name": "一般消費性 IC 設計 / MCU / 驅動 IC", "parent": "半導體核心", "primary_valuation": "forward_pe_pb_cycle",
+        "secondary_valuation": ["inventory", "gross_margin", "pb"],
+        "valuation_focus": ["Forward P/E", "庫存週期", "毛利率", "終端需求"],
+        "base_pe": 18, "pe_range": (12, 32), "floor_pe": 10, "soft_ceiling_pe": 26, "hard_ceiling_pe": 32,
+        "cyclical": True, "pe_applicable": True, "pe_trap_warning": "secondary_only", "theme_premium_allowed": False,
+        "max_growth_factor": 1.12, "max_quality_factor": 1.10, "max_theme_factor": 1.02, "max_scale_factor": 1.03,
+        "gross_margin_baseline": 0.32, "gross_margin_good": 0.40, "gross_margin_excellent": 0.48,
+        "risk_flags": ["庫存修正", "消費需求循環", "價格競爭"],
+        "note": "一般 IC 設計不得吃 AI ASIC/IP 高倍率。",
+        "calibration_source": "17-C-4 產業基準倍率重構"
+    },
+    "PROBE_AI_ASIC": {
+        "display_name": "高階 AI ASIC / CPO 探針卡與測試介面", "parent": "半導體設備與耗材", "primary_valuation": "forward_pe",
+        "secondary_valuation": ["gross_margin", "orders", "customer_certification", "revenue_growth"],
+        "valuation_focus": ["Forward P/E", "AI ASIC 訂單", "高毛利率", "CPO/MEMS", "法人 EPS 上修"],
+        "base_pe": 45, "pe_range": (30, 75), "floor_pe": 24, "soft_ceiling_pe": 65, "hard_ceiling_pe": 75,
+        "cyclical": False, "pe_applicable": True, "theme_premium_allowed": True,
+        "max_growth_factor": 1.25, "max_quality_factor": 1.20, "max_theme_factor": 1.10, "max_scale_factor": 1.08,
+        "gross_margin_baseline": 0.45, "gross_margin_good": 0.52, "gross_margin_excellent": 0.58,
+        "baked_in_themes": ["AI ASIC", "CPO", "MEMS", "探針卡", "測試介面"], "geopolitical_factor": 0.97,
+        "risk_flags": ["高估值修正", "客戶驗證", "AI ASIC 導入時程", "CPO 題材未落地"],
+        "note": "旺矽/精測/穎崴等高階 AI 測試供應鏈可用；超過 hard ceiling 後改判市場重估/動能區。",
+        "calibration_source": "17-C-4 產業基準倍率重構"
+    },
+    "PROBE_STANDARD": {
+        "display_name": "一般探針卡 / 傳統測試介面", "parent": "半導體設備與耗材", "primary_valuation": "forward_pe",
+        "secondary_valuation": ["gross_margin", "orders", "pb"],
+        "valuation_focus": ["Forward P/E", "毛利率", "訂單", "客戶導入"],
+        "base_pe": 18, "pe_range": (12, 35), "floor_pe": 10, "soft_ceiling_pe": 28, "hard_ceiling_pe": 35,
+        "cyclical": True, "pe_applicable": True, "theme_premium_allowed": True,
+        "max_growth_factor": 1.12, "max_quality_factor": 1.10, "max_theme_factor": 1.05, "max_scale_factor": 1.03,
+        "gross_margin_baseline": 0.25, "gross_margin_good": 0.35, "gross_margin_excellent": 0.45,
+        "baked_in_themes": ["探針", "測試"],
+        "risk_flags": ["訂單遞延", "循環需求", "EPS 預估不穩"],
+        "note": "一般探針卡不得與高階 AI ASIC 探針卡共用高倍率。",
+        "calibration_source": "17-C-4 產業基準倍率重構"
+    },
+    "TURNAROUND_PROBE_TEST_THEME": {
+        "display_name": "轉機 / 虧損探針與測試題材", "parent": "半導體設備與耗材", "primary_valuation": "theme_event",
+        "secondary_valuation": ["pb", "monthly_revenue", "quarter_eps_turnaround", "orders"],
+        "valuation_focus": ["單季 EPS 是否連續轉正", "P/B", "月營收", "訂單落地", "法人是否開始給 EPS"],
+        "base_pe": None, "pe_range": None, "floor_pe": None, "soft_ceiling_pe": None, "hard_ceiling_pe": None,
+        "cyclical": True, "pe_applicable": False, "event_model_if_eps_unstable": True, "theme_premium_allowed": False,
+        "pb_range": (0.8, 2.5),
+        "risk_flags": ["EPS 未穩定轉正", "題材波動", "P/B 口徑需確認", "無法人共識"],
+        "note": "中探針類：EPS 未穩定轉正時禁用 P/E，避免負估值。",
+        "calibration_source": "17-C-4 產業基準倍率重構"
+    },
+    "THERMAL_LIQUID": {
+        "display_name": "液冷 / 水冷散熱核心供應鏈", "parent": "AI 伺服器", "primary_valuation": "forward_pe",
+        "secondary_valuation": ["orders", "gross_margin", "revenue_growth"],
+        "valuation_focus": ["Forward P/E", "水冷訂單", "毛利率", "客戶導入"],
+        "base_pe": 34, "pe_range": (20, 60), "floor_pe": 20, "soft_ceiling_pe": 48, "hard_ceiling_pe": 60,
+        "cyclical": False, "pe_applicable": True, "theme_premium_allowed": True,
+        "max_growth_factor": 1.20, "max_quality_factor": 1.18, "max_theme_factor": 1.12, "max_scale_factor": 1.08,
+        "gross_margin_baseline": 0.26, "gross_margin_good": 0.32, "gross_margin_excellent": 0.40,
+        "baked_in_themes": ["水冷", "液冷", "AI伺服器"],
+        "risk_flags": ["水冷訂單未落地", "毛利率下滑", "競爭加劇"],
+        "note": "具備 CDU/Cold Plate 量產與 EPS 落地者適用。",
+        "calibration_source": "17-C-4 產業基準倍率重構"
+    },
+    "THERMAL_AIR": {
+        "display_name": "傳統氣冷 / 風扇 / 常態散熱", "parent": "AI 伺服器", "primary_valuation": "forward_pe",
+        "secondary_valuation": ["gross_margin", "orders", "inventory"],
+        "valuation_focus": ["Forward P/E", "毛利率", "氣冷需求", "庫存"],
+        "base_pe": 18, "pe_range": (10, 35), "floor_pe": 10, "soft_ceiling_pe": 28, "hard_ceiling_pe": 35,
+        "cyclical": True, "pe_applicable": True, "theme_premium_allowed": False,
+        "max_growth_factor": 1.12, "max_quality_factor": 1.10, "max_theme_factor": 1.03, "max_scale_factor": 1.03,
+        "gross_margin_baseline": 0.20, "gross_margin_good": 0.26, "gross_margin_excellent": 0.32,
+        "risk_flags": ["傳統氣冷競爭", "庫存循環", "水冷轉型未落地"],
+        "note": "二線散熱或氣冷零組件不應吃液冷高倍率。",
+        "calibration_source": "17-C-4 產業基準倍率重構"
+    },
+    "ROBOTICS_THEME_EVENT": {
+        "display_name": "機器人純題材 / EPS 未落地", "parent": "機器人 / 自動化", "primary_valuation": "theme_event",
+        "secondary_valuation": ["orders", "revenue_contribution", "eps_landing", "chips"],
+        "valuation_focus": ["題材營收占比", "訂單落地", "EPS 連續轉正", "籌碼"],
+        "pe_applicable": False, "theme_premium_allowed": False, "event_model_if_eps_unstable": True,
+        "risk_flags": ["題材營收未落地", "EPS 不穩", "籌碼波動"],
+        "note": "純機器人題材禁用 P/E 買進價；穩定 EPS 自動化另用 P/E 模型。",
+        "calibration_source": "17-C-4 產業基準倍率重構"
+    }
+})
+
+# 覆寫既有分類中明顯需要校準的 base/soft/hard。
+INDUSTRY_TAXONOMY["GENERAL"].update({"base_pe": 15, "floor_pe": 8, "soft_ceiling_pe": 24, "hard_ceiling_pe": 30, "operable_discount_factor": 0.85, "note": "未知/尚未分類只作防禦型兜底；需套分類可信度折扣。", "calibration_source": "17-C-4 產業基準倍率重構"})
+INDUSTRY_TAXONOMY["SEMICAP_COWOS_EQUIPMENT"].update({"base_pe": 32, "floor_pe": 20, "soft_ceiling_pe": 50, "hard_ceiling_pe": 65, "calibration_source": "17-C-4 產業基準倍率重構"})
+INDUSTRY_TAXONOMY["GRID_POWER_STORAGE"].update({"base_pe": 18, "floor_pe": 12, "soft_ceiling_pe": 30, "hard_ceiling_pe": 38, "calibration_source": "17-C-4 產業基準倍率重構"})
+INDUSTRY_TAXONOMY["OPTICAL_COMM_SILICON_PHOTONICS"].update({"base_pe": 36, "floor_pe": 22, "soft_ceiling_pe": 54, "hard_ceiling_pe": 68, "event_model_if_eps_unstable": True, "event_switch_note": "CPO/矽光子若 EPS 或題材營收未落地，切換事件模型。", "calibration_source": "17-C-4 產業基準倍率重構"})
+INDUSTRY_TAXONOMY["ROBOTICS_AUTOMATION"].update({"event_model_if_eps_unstable": True, "event_switch_note": "機器人題材若 EPS/訂單未落地，切換事件模型；穩定 EPS 自動化才使用 P/E。", "calibration_source": "17-C-4 產業基準倍率重構"})
+INDUSTRY_TAXONOMY["SPACE_LEO_SATELLITE"].update({"event_model_if_eps_unstable": True, "event_switch_note": "低軌衛星/太空題材若營收與 EPS 未落地，切換事件模型。", "calibration_source": "17-C-4 產業基準倍率重構"})
+INDUSTRY_TAXONOMY["BIOTECH_MEDICAL"].update({"base_pe": 22, "floor_pe": 12, "soft_ceiling_pe": 35, "hard_ceiling_pe": 45, "event_model_if_eps_unstable": True, "event_switch_note": "新藥/虧損生技禁用 P/E，改用里程碑事件模型；成熟醫材/藥廠才用 P/E。", "calibration_source": "17-C-4 產業基準倍率重構"})
+
+
+def get_taxonomy(taxon_key: str):
+    """安全取得產業分類設定。"""
+    if not taxon_key:
+        return INDUSTRY_TAXONOMY["GENERAL"]
+    return INDUSTRY_TAXONOMY.get(str(taxon_key).strip().upper(), INDUSTRY_TAXONOMY["GENERAL"])

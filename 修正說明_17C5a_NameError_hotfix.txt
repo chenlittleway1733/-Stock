@@ -1,0 +1,13 @@
+第 17-C-5a：打包提示詞 NameError 熱修正
+
+修正內容：
+1. 修正 ui_main.py 買進決策版提示詞中的 NameError。
+   - 原錯誤變數：sys_forward_eps
+   - 正確變數：sys_forward_eps_system
+2. 將部分 UI 文字中殘留的 17-B-4 字樣更新為 17-C-5。
+3. 語法檢查通過。
+
+補充說明：
+旺矽估值仍與現價差距大，主要不是這個 NameError 造成，而是：
+- 現價隱含 Forward P/E 約 90x，已高於 PROBE_AI_ASIC hard ceiling。
+- 系統以可操作估值與風控為主，不會直接用市場動能估值合理化追價。

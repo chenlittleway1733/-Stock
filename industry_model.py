@@ -72,6 +72,8 @@ def _infer_taxon_from_text(stock_id, stock_name="", category="", sector="", indu
         ("IC_DESIGN_ASIC", ["ic設計", "ic 設計", "asic", "晶片", "semiconductor"]),
         ("IP_EDA_DESIGN_SERVICE", ["矽智財", "ip", "eda"]),
         ("OSAT_TESTING", ["封測", "測試", "osat"]),
+        ("PROBE_AI_ASIC", ["ai asic探針", "高階探針", "cpo探針", "mems探針"]),
+        ("PROBE_STANDARD", ["傳統探針", "一般探針", "測試針"]),
         ("PROBE_TEST_INTERFACE", ["探針", "測試介面", "檢測"]),
         ("SEMICAP_COWOS_EQUIPMENT", ["cowos", "先進封裝", "半導體設備", "設備"]),
         ("FAB_FACILITY_MATERIALS", ["廠務", "無塵室", "耗材", "材料"]),
@@ -163,10 +165,10 @@ def _classification_factor(confidence, source):
     if source == "stock_mapping.py":
         return 1.0
     if source == "stocklist_or_keyword":
-        return 0.95
+        return 0.90
     if source == "ai_suggested_pending_review":
         return {"high": 0.95, "medium": 0.90, "low": 0.82}.get(str(confidence).lower(), 0.82)
-    return 0.90
+    return 0.85
 
 def get_industry_valuation_profile(stock_id, stock_name="", sector="", industry="", ai_financials=None):
     """回傳產業估值模型 profile。"""

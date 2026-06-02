@@ -1,5 +1,5 @@
 """
-Dynamic Cap 2.0 係數校準模型（第 17-B-4 階段）。
+Dynamic Cap 2.0 係數校準模型（第 17-C-4 階段）。
 
 設計原則：
 - 不再採用「產業基準 + 各項絕對倍數」加總，避免倍率連續堆高。
@@ -526,6 +526,116 @@ def growth_factor_hierarchical(
     return {"factor": round(clipped, 4), "reason": reason, "source": src, "growth": growth}
 
 
+def _linear_score(value: float, left: float, right: float, out_left: float, out_right: float) -> float:
+    """線性插值工具：value 在 left~right 間，輸出 out_left~out_right。"""
+    if right == left:
+        return out_right
+    ratio = (value - left) / (right - left)
+    ratio = max(0.0, min(1.0, ratio))
+    return out_left + (out_right - out_left) * ratio
+
+
+def _absolute_margin_adjustment(gm: Optional[float]) -> tuple[float, str]:
+    """第 17-C-5：絕對毛利率水準調整，不同毛利率區間給漸進式加減分。"""
+    if gm is None:
+        return 0.0, "絕對毛利率缺值"
+    if gm < 0.10:
+        return -0.06, f"絕對毛利率 {_fmt_pct(gm)} 低於 10%，品質扣分 -0.06"
+    if gm < 0.20:
+        return _linear_score(gm, 0.10, 0.20, -0.02, 0.00), f"絕對毛利率 {_fmt_pct(gm)} 位於 10%～20%，偏低至中性"
+    if gm < 0.30:
+        return _linear_score(gm, 0.20, 0.30, 0.00, 0.02), f"絕對毛利率 {_fmt_pct(gm)} 位於 20%～30%，中性略佳"
+    if gm < 0.40:
+        return _linear_score(gm, 0.30, 0.40, 0.02, 0.04), f"絕對毛利率 {_fmt_pct(gm)} 位於 30%～40%，品質加分"
+    if gm < 0.50:
+        return _linear_score(gm, 0.40, 0.50, 0.04, 0.06), f"絕對毛利率 {_fmt_pct(gm)} 位於 40%～50%，高毛利加分"
+    if gm < 0.60:
+        return _linear_score(gm, 0.50, 0.60, 0.06, 0.08), f"絕對毛利率 {_fmt_pct(gm)} 位於 50%～60%，高毛利加分"
+    return 0.10, f"絕對毛利率 {_fmt_pct(gm)} 高於 60%，絕對毛利加分上限 +0.10"
+
+
+def _relative_margin_adjustment(
+    gm: Optional[float],
+    gm_base: Optional[float],
+    gm_good: Optional[float],
+    gm_excellent: Optional[float],
+) -> tuple[float, str]:
+    """第 17-C-5：相對產業毛利門檻調整，包含低於同業的扣分。"""
+    if gm is None:
+        return 0.0, "相對產業毛利無法判斷"
+    if gm_base is None:
+        if gm < 0.10:
+            return -0.04, f"缺少產業毛利基準；毛利率 {_fmt_pct(gm)} 偏低，保守扣分"
+        if gm >= 0.45:
+            return 0.02, f"缺少產業毛利基準；毛利率 {_fmt_pct(gm)} 偏高，但僅小幅加分"
+        return 0.0, f"缺少產業毛利基準；毛利率 {_fmt_pct(gm)} 不做相對加分"
+
+    # 低於同業：分層扣分，不再只粗略扣 0.96/0.90。
+    if gm < gm_base:
+        gap = gm_base - gm
+        if gap >= 0.10:
+            return -0.10, f"毛利率 {_fmt_pct(gm)} 較產業基準 {_fmt_pct(gm_base)} 低超過 10 個百分點，明顯低於同業"
+        if gap >= 0.05:
+            return -0.07, f"毛利率 {_fmt_pct(gm)} 較產業基準 {_fmt_pct(gm_base)} 低 5～10 個百分點，低於同業"
+        return -0.03, f"毛利率 {_fmt_pct(gm)} 略低於產業基準 {_fmt_pct(gm_base)}"
+
+    # 高於同業：採漸進式，不再只要高於 good 就碰上限。
+    if gm_good is None or gm_excellent is None or gm_excellent <= gm_good:
+        if gm >= gm_base + 0.10:
+            return 0.05, f"毛利率 {_fmt_pct(gm)} 明顯高於產業基準 {_fmt_pct(gm_base)}"
+        if gm >= gm_base + 0.05:
+            return 0.03, f"毛利率 {_fmt_pct(gm)} 高於產業基準 {_fmt_pct(gm_base)}"
+        return 0.01, f"毛利率 {_fmt_pct(gm)} 略高於產業基準 {_fmt_pct(gm_base)}"
+
+    if gm < gm_good:
+        adj = _linear_score(gm, gm_base, gm_good, 0.01, 0.03)
+        return adj, f"毛利率 {_fmt_pct(gm)} 位於產業基準～good 區間，僅小幅加分"
+    if gm < gm_excellent:
+        adj = _linear_score(gm, gm_good, gm_excellent, 0.04, 0.08)
+        return adj, f"毛利率 {_fmt_pct(gm)} 位於 good～excellent 區間，漸進式加分"
+    # 超過 excellent 才給較高相對加分，但仍交由產業 max_quality_factor 截斷。
+    extra = min(0.04, max(0.0, gm - gm_excellent) * 0.5)
+    return 0.09 + extra, f"毛利率 {_fmt_pct(gm)} 高於產業 excellent 門檻 {_fmt_pct(gm_excellent)}，相對同業優勢明確"
+
+
+def _roe_adjustment(roev: Optional[float]) -> tuple[float, str]:
+    """第 17-C-5：ROE 漸進式調整，不直接把品質推到上限。"""
+    if roev is None:
+        return 0.0, "ROE 缺值"
+    if roev < 0:
+        return -0.08, f"ROE {_fmt_pct(roev)} 為負"
+    if roev < 0.08:
+        return -0.04, f"ROE {_fmt_pct(roev)} 偏低"
+    if roev < 0.15:
+        return 0.0, f"ROE {_fmt_pct(roev)} 中性"
+    if roev < 0.25:
+        return _linear_score(roev, 0.15, 0.25, 0.02, 0.04), f"ROE {_fmt_pct(roev)} 正常偏佳，小幅加分"
+    if roev < 0.35:
+        return _linear_score(roev, 0.25, 0.35, 0.05, 0.07), f"ROE {_fmt_pct(roev)} 優良"
+    return 0.09, f"ROE {_fmt_pct(roev)} 極佳"
+
+
+def _operating_margin_guard(
+    opm: Optional[float],
+    gm: Optional[float],
+    factor: float,
+    notes: List[str],
+) -> float:
+    """第 17-C-5：營益率輔助判斷，避免高毛利但費用率吃掉獲利仍拿高品質分。"""
+    if opm is None:
+        return factor
+    if opm < 0:
+        notes.append(f"營益率 {_fmt_pct(opm)} 為負，品質折價")
+        return min(factor, 0.94)
+    if gm is not None and gm >= 0.30 and opm < 0.05 and factor > 1.0:
+        notes.append(f"毛利率 {_fmt_pct(gm)} 不低，但營益率僅 {_fmt_pct(opm)}，費用率/營運槓桿壓力，品質溢價減半")
+        return 1.0 + (factor - 1.0) * 0.5
+    if opm < 0.03 and factor > 1.0:
+        notes.append(f"營益率 {_fmt_pct(opm)} 偏低，品質溢價折半")
+        return 1.0 + (factor - 1.0) * 0.5
+    return factor
+
+
 def quality_factor_relative(
     gross_margin: Any,
     roe: Any = None,
@@ -534,12 +644,27 @@ def quality_factor_relative(
     debt_to_equity: Any = None,
     warning_count: int = 0,
     calibration: Dict[str, Any] = None,
+    operating_margin: Any = None,
+    free_cash_flow: Any = None,
 ) -> Dict[str, Any]:
+    """第 17-C-5：品質係數細緻化。
+
+    不再採用「高於 good 門檻就直接套 max_quality_factor」。
+    改為：
+    1) 絕對毛利率水準
+    2) 相對產業毛利位置，含低於同業分層扣分
+    3) ROE 漸進式加減分
+    4) 營益率、D/E、FCF 與資料分歧防呆
+    5) 最後才套產業 max_quality_factor
+    """
     calibration = calibration or {}
     gm = _pct01(gross_margin)
     roev = _pct01(roe)
+    opm = _pct01(operating_margin)
     de = _sf(debt_to_equity)
+    fcf = _sf(free_cash_flow)
     max_q = _sf(calibration.get("max_quality_factor"), 1.12) or 1.12
+    min_q = _sf(calibration.get("min_quality_factor"), 0.86) or 0.86
     gm_base = _sf(calibration.get("gross_margin_baseline"))
     gm_good = _sf(calibration.get("gross_margin_good"))
     gm_excellent = _sf(calibration.get("gross_margin_excellent"))
@@ -547,70 +672,51 @@ def quality_factor_relative(
     if not eps_positive:
         return {"factor": 1.00, "reason": "EPS 不穩或為負，不給品質係數溢價"}
 
-    factor = 1.00
-    notes = []
+    notes: List[str] = []
+    adjustment = 0.0
 
-    if gm is None:
-        notes.append("毛利率缺值")
-    elif gm_base is None:
-        # 缺產業基準時，只給非常保守的絕對毛利加分。
-        if gm >= 0.45:
-            factor *= 1.05
-            notes.append(f"缺少產業毛利基準；毛利率 {_fmt_pct(gm)} 僅保守給 ×1.05")
-        elif gm < 0.10:
-            factor *= 0.90
-            notes.append(f"缺少產業毛利基準；毛利率 {_fmt_pct(gm)} 偏低，品質折價")
-        else:
-            notes.append(f"缺少產業毛利基準；毛利率 {_fmt_pct(gm)} 不加分")
-    else:
-        if gm < gm_base - 0.08:
-            factor *= 0.90
-            notes.append(f"毛利率 {_fmt_pct(gm)} 明顯低於產業基準 {_fmt_pct(gm_base)}")
-        elif gm < gm_base:
-            factor *= 0.96
-            notes.append(f"毛利率 {_fmt_pct(gm)} 略低於產業基準 {_fmt_pct(gm_base)}")
-        elif gm_excellent is not None and gm >= gm_excellent:
-            factor *= 1.16
-            notes.append(f"毛利率 {_fmt_pct(gm)} 高於產業 excellent 門檻 {_fmt_pct(gm_excellent)}")
-        elif gm_good is not None and gm >= gm_good:
-            factor *= 1.10
-            notes.append(f"毛利率 {_fmt_pct(gm)} 高於產業 good 門檻 {_fmt_pct(gm_good)}")
-        elif gm >= gm_base:
-            factor *= 1.04
-            notes.append(f"毛利率 {_fmt_pct(gm)} 略高於產業基準 {_fmt_pct(gm_base)}")
+    abs_adj, abs_note = _absolute_margin_adjustment(gm)
+    rel_adj, rel_note = _relative_margin_adjustment(gm, gm_base, gm_good, gm_excellent)
+    roe_adj, roe_note = _roe_adjustment(roev)
 
-    if roev is None:
-        notes.append("ROE 缺值")
-    elif roev < 0:
-        factor *= 0.85
-        notes.append(f"ROE {_fmt_pct(roev)} 為負")
-    elif roev < 0.08:
-        factor *= 0.94
-        notes.append(f"ROE {_fmt_pct(roev)} 偏低")
-    elif roev >= 0.35:
-        factor *= 1.10
-        notes.append(f"ROE {_fmt_pct(roev)} 極佳")
-    elif roev >= 0.25:
-        factor *= 1.07
-        notes.append(f"ROE {_fmt_pct(roev)} 優良")
-    elif roev >= 0.15:
-        factor *= 1.04
-        notes.append(f"ROE {_fmt_pct(roev)} 正常偏佳")
+    adjustment += abs_adj + rel_adj + roe_adj
+    notes.extend([abs_note, rel_note, roe_note])
 
+    factor = 1.0 + adjustment
+
+    # 營益率輔助判斷。
+    before_op = factor
+    factor = _operating_margin_guard(opm, gm, factor, notes)
+    if opm is not None and before_op == factor:
+        notes.append(f"營益率 {_fmt_pct(opm)} 未觸發品質折扣")
+
+    # 營收、負債、FCF、防呆。
     rev = _pct01(revenue_yoy)
     if rev is not None and rev < 0 and factor > 1.0:
         factor = 1 + (factor - 1) * 0.5
         notes.append("營收 YoY 為負，品質溢價減半")
-    if de is not None and de > 2 and factor > 1.0:
-        factor = 1 + (factor - 1) * 0.5
-        notes.append(f"D/E {de:.2f} 偏高，品質溢價減半")
+    if de is not None:
+        if de > 4 and factor > 1.0:
+            factor = 1.0
+            notes.append(f"D/E {de:.2f} 過高，品質溢價歸零")
+        elif de > 2 and factor > 1.0:
+            factor = 1 + (factor - 1) * 0.5
+            notes.append(f"D/E {de:.2f} 偏高，品質溢價減半")
+    if fcf is not None and fcf < 0 and factor > 1.08:
+        factor = min(factor, 1.08)
+        notes.append("FCF 為負，品質係數上限 ×1.08")
     if warning_count > 0 and factor > 1.10:
         factor = min(factor, 1.10)
         notes.append("資料分歧存在，品質係數上限 ×1.10")
 
+    # 套上下限；max_quality_factor 只是硬上限，不是一般加分。
     if factor > max_q:
         factor = max_q
         notes.append(f"套用產業品質係數硬上限 ×{max_q:.2f}")
+    if factor < min_q:
+        factor = min_q
+        notes.append(f"套用產業品質係數下限 ×{min_q:.2f}")
+
     return {"factor": round(factor, 4), "reason": "；".join(notes) or "品質資料中性，係數 ×1.00"}
 
 
@@ -873,6 +979,33 @@ def build_event_theme_pack(industry_profile: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+
+def build_turnaround_event_pack(industry_profile: Dict[str, Any], reason: str = "") -> Dict[str, Any]:
+    """17-C-4：EPS 尚未穩定轉正時停用 P/E 估值，改用轉機 / 事件模型。"""
+    rows = [
+        {"類型": "轉機 / 事件模型", "項目": "P/E 公式估值", "倍率/係數": "停用", "說明": "Forward EPS、TTM EPS 或年度 EPS 尚未穩定轉正，不適合使用 P/E 公式合理價。"},
+        {"類型": "轉機 / 事件模型", "項目": "主要觀察", "倍率/係數": "—", "說明": "連續單季 EPS 轉正、營益率改善、月營收連續成長、訂單落地、法人開始提供明確 Forward EPS。"},
+        {"類型": "轉機 / 事件模型", "項目": "替代估值", "倍率/係數": "P/B / 事件", "說明": "可輔助觀察 P/B、淨值、現金流與籌碼；不可輸出負的公式合理價或負的極限價。"},
+    ]
+    warnings = ["Forward EPS / TTM EPS 未穩定轉正，已停用 P/E Dynamic Cap 買進估值", "此類標的應改用轉機事件模型，不輸出公式合理價 / 公式極限價"]
+    if reason:
+        warnings.append(reason)
+    return {
+        "available": False,
+        "valuation_mode": "turnaround_event",
+        "final_cap": None,
+        "raw_cap": None,
+        "formula_cap": None,
+        "optimistic_cap": None,
+        "hard_cap": None,
+        "operable_cap_low": None,
+        "operable_cap_high": None,
+        "warnings": warnings,
+        "industry_profile": industry_profile,
+        "report": pd.DataFrame(rows),
+        "explanation": "17-C-4：負 EPS / 轉機股防呆；停用 P/E 估值，避免出現負目標價。",
+    }
+
 def calculate_dynamic_cap_v2(
     *,
     stock_id: str = "",
@@ -882,9 +1015,11 @@ def calculate_dynamic_cap_v2(
     hist_data: Any = None,
     industry_profile: Dict[str, Any] = None,
     gross_margin: Any = None,
+    operating_margin: Any = None,
     roe: Any = None,
     debt_to_equity: Any = None,
     revenue_yoy: Any = None,
+    free_cash_flow: Any = None,
     ttm_eps: Any = None,
     system_forward_eps: Any = None,
     ai_forward_eps: Any = None,
@@ -903,29 +1038,42 @@ def calculate_dynamic_cap_v2(
     themes = list(p.get("themes") or [])
     primary_valuation = str(p.get("primary_valuation") or "forward_pe")
     pe_app = p.get("pe_applicable", True)
-    eps_positive = any((_sf(x) or 0) > 0 for x in [consensus_forward_eps, system_forward_eps, ai_forward_eps, ttm_eps, ai_ttm_eps])
+    positive_forward_eps = any((_sf(x) or 0) > 0 for x in [consensus_forward_eps, system_forward_eps, ai_forward_eps])
+    positive_profit_eps = any((_sf(x) or 0) > 0 for x in [consensus_forward_eps, system_forward_eps, ai_forward_eps, ttm_eps, ai_ttm_eps])
+    eps_positive = positive_profit_eps
     warn_count = len(divergence_warnings or []) + len(dq_warnings or [])
 
+    # 17-C-4：只要主要模型是 P/E / Forward P/E，但 Forward EPS 與 TTM EPS 尚未穩定轉正，
+    # 不應再輸出 P/E 公式估值，避免出現負合理價、負極限價。
+    adopted_forward_eps = _sf(consensus_forward_eps) or _sf(system_forward_eps) or _sf(ai_forward_eps)
+    adopted_ttm_eps = _sf(ttm_eps) if _sf(ttm_eps) is not None else _sf(ai_ttm_eps)
+    # 17-C-4：負 EPS / 無 Forward EPS 防呆。
+    # 若 TTM 與 Forward 都尚未穩定轉正，全面停用 P/E 估值；若 TTM 為負但有明確正 Forward EPS，可保留 Forward P/E 但列高風險。
+    if primary_valuation in {"forward_pe", "pe_pb_crosscheck", "forward_pe_pb_cycle"} and ((adopted_forward_eps is None or adopted_forward_eps <= 0) and (adopted_ttm_eps is None or adopted_ttm_eps <= 0)):
+        pack = build_turnaround_event_pack(p, "EPS 尚未穩定轉正，Dynamic Cap 停用 P/E 估值，改用轉機 / 事件模型。")
+        pack.update({"stock_id": stock_id, "stock_name": stock_name, "model_version": "Dynamic Cap 2.0 calibration 17-C-5"})
+        return pack
+
     # 17-B-4：低軌衛星、機器人、生技等條件式 P/E 模型，若 EPS / 訂單未落地，直接切換事件模型。
-    if p.get("event_model_if_eps_unstable") and not eps_positive:
+    if p.get("event_model_if_eps_unstable") and not positive_forward_eps:
         pack = build_event_theme_pack(p)
         note = p.get("event_switch_note") or "EPS / 訂單未落地，依 17-B-4 校準規則改用事件模型。"
         pack["warnings"] = list(pack.get("warnings") or []) + [note]
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-1"})
+        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-5"})
         return pack
 
     if pe_app is False or primary_valuation in {"event_chip", "theme_event"}:
         pack = build_event_theme_pack(p)
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-1"})
+        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-5"})
         return pack
     if primary_valuation.startswith("pb") or primary_valuation in {"pb", "pb_roe"}:
         pack = build_pb_cycle_pack(current_price, pb_ratio, p)
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-1"})
+        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-5"})
         return pack
 
     base = _sf(c.get("base_pe"), 20.0) or 20.0
     rows: List[Dict[str, Any]] = []
-    _add_row(rows, "基準", "產業基準倍率", f"{base:.1f}x", f"{p.get('model_label', p.get('display_name', '一般產業'))} 17-B-4 校準後 base_pe；非買進追價倍率")
+    _add_row(rows, "基準", "產業基準倍率", f"{base:.1f}x", f"{p.get('model_label', p.get('display_name', '一般產業'))} 17-C-5 校準後 base_pe；非買進追價倍率")
 
     liq = liquidity_factor(hist_data, info)
     g = growth_factor_hierarchical(
@@ -948,6 +1096,8 @@ def calculate_dynamic_cap_v2(
         debt_to_equity=debt_to_equity,
         warning_count=warn_count,
         calibration=c,
+        operating_margin=operating_margin,
+        free_cash_flow=free_cash_flow,
     )
     # 17-B-4：循環復甦股通用判斷，避免「未來 EPS 加分」與「當期低 ROE/毛利重扣」雙殺。
     recovery = detect_cycle_recovery_state(p, c, g, gross_margin=gross_margin, roe=roe, revenue_yoy=revenue_yoy)
@@ -1033,10 +1183,26 @@ def calculate_dynamic_cap_v2(
     if liq.get("factor", 1) < 0.9:
         warnings.append("流動性偏低，已套用流動性折扣")
 
+    # 17-C-4：市場隱含倍率。這不是買進倍率，而是用來解釋「現價為何高於系統估值」。
+    adopted_forward_eps_for_implied = _sf(consensus_forward_eps) or _sf(system_forward_eps) or _sf(ai_forward_eps)
+    market_implied_forward_pe = None
+    market_implied_status = "Forward EPS 缺值或 <= 0，無法反推現價隱含 Forward P/E。"
+    cp_for_implied = _sf(current_price)
+    if adopted_forward_eps_for_implied is not None and adopted_forward_eps_for_implied > 0 and cp_for_implied is not None and cp_for_implied > 0:
+        market_implied_forward_pe = cp_for_implied / adopted_forward_eps_for_implied
+        if market_implied_forward_pe > fc["hard_ceiling"]:
+            market_implied_status = "現價隱含 Forward P/E 已高於系統 hard ceiling，屬市場重估 / 題材動能區，不可直接當可操作買點。"
+        elif market_implied_forward_pe > fc["soft_ceiling"]:
+            market_implied_status = "現價隱含 Forward P/E 高於 soft ceiling，屬偏樂觀估值區。"
+        elif market_implied_forward_pe > final_cap:
+            market_implied_status = "現價隱含 Forward P/E 高於可操作倍率，但仍低於產業硬上限。"
+        else:
+            market_implied_status = "現價隱含 Forward P/E 未高於可操作倍率。"
+
     return {
         "available": True,
         "valuation_mode": primary_valuation,
-        "model_version": "Dynamic Cap 2.0 calibration 17-C-1",
+        "model_version": "Dynamic Cap 2.0 calibration 17-C-5",
         "base_multiple": base,
         "growth_premium": g,  # 保留舊 key，實際為 growth factor pack
         "gross_margin_premium": q,  # 保留舊 key，實際為 quality factor pack
@@ -1061,9 +1227,29 @@ def calculate_dynamic_cap_v2(
         "soft_ceiling_cap": fc["soft_ceiling"],
         "ceiling_cap": fc["hard_ceiling"],
         "hard_ceiling_cap": fc["hard_ceiling"],
+        "adopted_forward_eps_for_implied": adopted_forward_eps_for_implied,
+        "market_implied_forward_pe": market_implied_forward_pe,
+        "market_implied_status": market_implied_status,
         "hit_hard_ceiling": hit_hard_ceiling,
         "warnings": warnings,
         "industry_profile": p,
         "report": pd.DataFrame(rows),
         "explanation": "Dynamic Cap 2.0 17-B-4：已加入循環復甦判斷、分歧折扣校準、公式/可操作/極限倍率分離與 hard ceiling 顯示修正。",
     }
+
+# ===== 第 17-C-4：Dynamic Cap 校準覆寫 =====
+CALIBRATION_DEFAULTS.update({
+    "FOUNDRY_ADVANCED": {"base_pe": 24.0, "floor_pe": 18.0, "soft_ceiling_pe": 30.0, "hard_ceiling_pe": 35.0, "max_growth_factor": 1.14, "max_quality_factor": 1.10, "max_theme_factor": 1.05, "max_scale_factor": 1.00, "gross_margin_baseline": 0.54, "gross_margin_good": 0.58, "gross_margin_excellent": 0.62, "baked_in_themes": ["ai", "hpc", "cowos", "先進製程"], "geopolitical_factor": 0.92},
+    "FOUNDRY_MATURE": {"base_pe": 12.0, "floor_pe": 8.0, "soft_ceiling_pe": 18.0, "hard_ceiling_pe": 22.0, "max_growth_factor": 1.10, "max_quality_factor": 1.08, "max_theme_factor": 1.00, "max_scale_factor": 1.00, "gross_margin_baseline": 0.24, "gross_margin_good": 0.32, "gross_margin_excellent": 0.40, "recovery_sensitive": True},
+    "IC_DESIGN_ASIC_IP": {"base_pe": 35.0, "floor_pe": 22.0, "soft_ceiling_pe": 55.0, "hard_ceiling_pe": 70.0, "max_growth_factor": 1.25, "max_quality_factor": 1.22, "max_theme_factor": 1.18, "max_scale_factor": 1.08, "gross_margin_baseline": 0.45, "gross_margin_good": 0.55, "gross_margin_excellent": 0.65, "baked_in_themes": ["ai asic", "asic", "ip", "矽智財"], "geopolitical_factor": 0.97},
+    "IC_DESIGN_CONSUMER": {"base_pe": 18.0, "floor_pe": 10.0, "soft_ceiling_pe": 26.0, "hard_ceiling_pe": 32.0, "max_growth_factor": 1.12, "max_quality_factor": 1.10, "max_theme_factor": 1.02, "max_scale_factor": 1.03, "gross_margin_baseline": 0.32, "gross_margin_good": 0.40, "gross_margin_excellent": 0.48, "recovery_sensitive": True},
+    "PROBE_AI_ASIC": {"base_pe": 45.0, "floor_pe": 24.0, "soft_ceiling_pe": 65.0, "hard_ceiling_pe": 75.0, "max_growth_factor": 1.25, "max_quality_factor": 1.20, "max_theme_factor": 1.10, "max_scale_factor": 1.08, "gross_margin_baseline": 0.45, "gross_margin_good": 0.52, "gross_margin_excellent": 0.58, "baked_in_themes": ["ai asic", "cpo", "mems", "探針卡", "測試介面"], "geopolitical_factor": 0.97},
+    "PROBE_STANDARD": {"base_pe": 18.0, "floor_pe": 10.0, "soft_ceiling_pe": 28.0, "hard_ceiling_pe": 35.0, "max_growth_factor": 1.12, "max_quality_factor": 1.10, "max_theme_factor": 1.05, "max_scale_factor": 1.03, "gross_margin_baseline": 0.25, "gross_margin_good": 0.35, "gross_margin_excellent": 0.45, "baked_in_themes": ["探針", "測試"], "recovery_sensitive": True},
+    "TURNAROUND_PROBE_TEST_THEME": {"base_pe": None, "floor_pe": None, "soft_ceiling_pe": None, "hard_ceiling_pe": None, "pb_range": (0.8, 2.5)},
+    "THERMAL_LIQUID": {"base_pe": 34.0, "floor_pe": 20.0, "soft_ceiling_pe": 48.0, "hard_ceiling_pe": 60.0, "max_growth_factor": 1.20, "max_quality_factor": 1.18, "max_theme_factor": 1.12, "max_scale_factor": 1.08, "gross_margin_baseline": 0.26, "gross_margin_good": 0.32, "gross_margin_excellent": 0.40, "baked_in_themes": ["水冷", "液冷", "ai伺服器"]},
+    "THERMAL_AIR": {"base_pe": 18.0, "floor_pe": 10.0, "soft_ceiling_pe": 28.0, "hard_ceiling_pe": 35.0, "max_growth_factor": 1.12, "max_quality_factor": 1.10, "max_theme_factor": 1.03, "max_scale_factor": 1.03, "gross_margin_baseline": 0.20, "gross_margin_good": 0.26, "gross_margin_excellent": 0.32, "recovery_sensitive": True},
+    "SEMICAP_COWOS_EQUIPMENT": {"base_pe": 32.0, "floor_pe": 20.0, "soft_ceiling_pe": 50.0, "hard_ceiling_pe": 65.0, "max_growth_factor": 1.22, "max_quality_factor": 1.18, "max_theme_factor": 1.12, "max_scale_factor": 1.08, "gross_margin_baseline": 0.30, "gross_margin_good": 0.38, "gross_margin_excellent": 0.45, "baked_in_themes": ["cowos", "先進封裝", "設備"], "geopolitical_factor": 0.96, "recovery_sensitive": True},
+    "GRID_POWER_STORAGE": {"base_pe": 18.0, "floor_pe": 12.0, "soft_ceiling_pe": 30.0, "hard_ceiling_pe": 38.0, "max_growth_factor": 1.14, "max_quality_factor": 1.12, "max_theme_factor": 1.06, "max_scale_factor": 1.04, "gross_margin_baseline": 0.18, "gross_margin_good": 0.24, "gross_margin_excellent": 0.30},
+    "OPTICAL_COMM_SILICON_PHOTONICS": {"base_pe": 36.0, "floor_pe": 22.0, "soft_ceiling_pe": 54.0, "hard_ceiling_pe": 68.0, "max_growth_factor": 1.22, "max_quality_factor": 1.18, "max_theme_factor": 1.12, "max_scale_factor": 1.08, "gross_margin_baseline": 0.32, "gross_margin_good": 0.40, "gross_margin_excellent": 0.48, "baked_in_themes": ["矽光子", "cpo", "800g", "1.6t"]},
+    "GENERAL": {"base_pe": 15.0, "floor_pe": 8.0, "soft_ceiling_pe": 24.0, "hard_ceiling_pe": 30.0, "max_growth_factor": 1.10, "max_quality_factor": 1.08, "max_theme_factor": 1.02, "max_scale_factor": 1.00, "gross_margin_baseline": None}
+})

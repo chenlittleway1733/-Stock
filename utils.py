@@ -240,6 +240,8 @@ def build_divergence_warnings(
     ai_fair_value=None,
     system_de=None,
     ai_de=None,
+    system_pb=None,
+    ai_pb=None,
     stock_id="",
     stock_name="",
 ):
@@ -332,6 +334,20 @@ def build_divergence_warnings(
             format_quality_value(ai_de, "x"),
             _fmt_gap_pct(de_gap),
             "請確認 D/E 是倍數、百分比、還是總負債/股東權益欄位來源不同。",
+        )
+
+
+    # 6) P/B 分歧：EPS 為負或 P/E 不可用時，P/B 是重要替代估值，需特別警告。
+    pb_gap = _relative_gap(system_pb, ai_pb, "min")
+    if pb_gap is not None and pb_gap > 0.50:
+        add(
+            "P/B 分歧",
+            f"{label} 的股價淨值比 P/B 系統值與 AI 值差距過大，請先確認 BVPS / 股價 / 口徑。",
+            "danger" if pb_gap > 1.00 else "warning",
+            format_quality_value(system_pb, "x"),
+            format_quality_value(ai_pb, "x"),
+            _fmt_gap_pct(pb_gap),
+            "EPS 為負或 P/E 不可用時，P/B 是重要替代估值；P/B 分歧未釐清前不宜做買賣判斷。",
         )
 
     return warnings

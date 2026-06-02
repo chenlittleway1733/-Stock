@@ -1,0 +1,137 @@
+第 17-C：全股票分類稽核與 stock_mapping 修正版
+
+一、本次修正目標
+- 修正「題材」被誤當成「主產業模型」的問題。
+- 新增材料、CCL、半導體耗材、CIS、測試自動化、車用零件、AI PC、綠能基建、工具機循環等細分類。
+- 讓 Dynamic Cap 2.0 依公司本業套用估值模型，themes 只作題材標籤。
+
+二、新增產業分類
+1. SPECIALTY_CHEM_ELECTRONIC_MATERIALS：特用化學 / 電子材料 / PCB 材料
+2. CCL_HIGH_SPEED_MATERIALS：CCL / 高速材料 / 高階 PCB 材料
+3. SEMICONDUCTOR_MATERIALS_CONSUMABLES：半導體材料 / 耗材 / 載具
+4. CIS_SEMICONDUCTOR_OPTICS：CIS / 半導體光學 / 影像感測
+5. TEST_AUTOMATION_EQUIPMENT：測試 / AOI / 自動化檢測設備
+6. GREEN_ENERGY_INFRA：綠能 / 風電 / 儲能工程基建
+7. AUTO_PARTS_AM：汽車零件 / AM 售後市場
+8. AUTO_PARTS_EV：電動車 / 傳動 / 車用零組件
+9. AUTO_OEM_CYCLE：整車 / 汽車集團循環
+10. AI_SERVER_BOARD_SYSTEM：AI 伺服器主板 / 板卡 / 系統品牌
+11. PC_BRAND_AI_PC：PC 品牌 / AI PC
+12. PC_NB_ODM：PC / NB ODM / EMS 代工
+13. MACHINE_TOOL_CYCLE：工具機 / 工業機械循環
+14. MEMORY_CONTROLLER_CYCLE：NAND 控制 IC / 記憶體控制
+15. RF_MODULE_PACKAGING：RF / 高頻模組 / 特殊封裝
+
+三、重點股票修正
+- 東捷 8064：新增至 SEMICAP_COWOS_EQUIPMENT，themes 含 FOPLP、玻璃基板、先進封裝設備、Micro LED。
+- 長興 1717：由傳產循環改為 SPECIALTY_CHEM_ELECTRONIC_MATERIALS。
+- 台光電 2383、台燿 6274、聯茂 6213：由 SERVER_PCB_BOARD 改為 CCL_HIGH_SPEED_MATERIALS。
+- 台虹 8039：由 SERVER_PCB_BOARD 改為 SPECIALTY_CHEM_ELECTRONIC_MATERIALS。
+- 中砂 1560、家登 3680、順德 2351：改為 SEMICONDUCTOR_MATERIALS_CONSUMABLES。
+- 采鈺 6789：由一般光學鏡頭改為 CIS_SEMICONDUCTOR_OPTICS。
+- 由田 3455、倍利科 7822、鴻勁 7769、均豪 5443、致茂 2360：改為 TEST_AUTOMATION_EQUIPMENT。
+- 華通 2313：低軌衛星改為 theme，主分類改回 SERVER_PCB_BOARD。
+- 啟碁 6285、明泰 3380：低軌衛星改為 theme，主分類改為 NETWORK_SWITCH。
+- 瀚荃 8103：低軌衛星改為 theme，主分類改為 CONNECTOR_CABLE。
+- 同欣電 6271：由低軌衛星改為 RF_MODULE_PACKAGING。
+- 裕隆 2201、東陽 1319、堤維西 1522、和大 1536：從車用電子拆出整車 / AM / EV 零組件模型。
+- 東台 4526、高鋒 4510：由機器人題材改為 MACHINE_TOOL_CYCLE。
+- 技嘉 2376、微星 2377：由 AI server ODM 改為 AI_SERVER_BOARD_SYSTEM。
+- 宏碁 2353、華碩 2357：改為 PC_BRAND_AI_PC。
+- 仁寶 2324、和碩 4938：改為 PC_NB_ODM。
+- 森崴能源 6806、上緯投控 3708、世紀鋼 9958：由重電改為 GREEN_ENERGY_INFRA。
+- 群聯 8299：由 MEMORY_CYCLE 改為 MEMORY_CONTROLLER_CYCLE。
+- 振發代碼由 878 修正為 5426。
+
+四、同步修改檔案
+- industry_taxonomy.py：新增分類與 Dynamic Cap 校準欄位。
+- stock_mapping.py：修正股票主分類與 themes。
+- stocklist.txt：依新版分類重建側邊欄清單。
+- industry_model.py：關鍵字備援新增新分類。
+- dynamic_cap_model.py：新增新分類的 Dynamic Cap 校準預設值。
+
+五、驗證
+- 已檢查 Python 語法通過。
+- 已抽測東捷、長興、台光電、台燿、聯茂、台虹、中砂、家登、采鈺、由田、華通、啟碁、裕隆、宏碁、群聯、振發等分類結果。
+
+========================================
+第 17-C-1：AI 產業分類補齊與待確認機制
+========================================
+1. AI 全方位校對與補齊財報 prompt 新增 industry_classification 欄位，要求 AI 回傳 suggested_primary_taxon、suggested_themes、confidence、reason、evidence、needs_manual_review。
+2. validate_ai_financial_json() 新增 AI 產業分類驗證，只允許使用 industry_taxonomy.py 內的既有 taxon；不合法分類會改為 GENERAL 並標示警告。
+3. industry_model.py 新增 AI 建議分類讀取機制：若股票不在 stock_mapping.py 且 AI 回傳有效分類，系統可暫用 AI 建議分類，但 mapping_source 會標示為 ai_suggested_pending_review。
+4. AI 建議分類不會覆蓋正式 stock_mapping.py；正式 mapping 仍有最高優先權。
+5. Dynamic Cap 2.0 新增分類可信度係數：正式 mapping 不折扣；AI 建議分類依 high/medium/low 分別套用較保守係數。
+6. UI 產業分類區新增「分類來源、可信度、折扣、是否待人工確認」提示。
+7. 打包提示詞新增產業分類來源、AI 建議分類、分類依據與待確認提醒，避免外部 AI 誤把 AI 建議分類視為正式分類。
+
+==============================
+第 17-C-2：打包提示詞分成「買進決策版 / 研究完整版」
+==============================
+1. 新增「買進決策版（精簡，建議平常使用）」：
+   - 只保留影響是否買進的核心資料：最終燈號、月營收公告月份、EPS 口徑、核心財務、系統/AI 分歧、資料品質摘要、估值分層、產業模型、Dynamic Cap 2.0、AI 來源摘要。
+   - 若同一欄位同時有系統值與 AI 值，會同時列出並標明採用值或採用來源。
+2. 保留「研究完整版（完整，適合深度分析）」：
+   - 沿用原本 17-B-6 的精簡完整資料包，適合做長篇研究、產業比較與完整風險盤點。
+3. UI 新增提示詞版本切換：
+   - 使用者可在打包提示詞區塊選擇「買進決策版」或「研究完整版」。
+4. 一鍵複製會依目前選取版本複製對應提示詞。
+5. 已檢查 Python 語法通過。
+
+===== 第 17-C-3：中探針 / 負 EPS 轉機股估值防呆修正 =====
+1. 新增負 EPS / 轉機股防呆：若主要估值模型為 P/E / Forward P/E，但 Forward EPS、TTM EPS 尚未穩定轉正，Dynamic Cap 會停用 P/E 買進估值，改為 turnaround_event 轉機事件模型。
+2. 停止輸出負的公式合理價、負的公式極限價、負的手動情境價；EPS <= 0 時相關估值顯示為 N/A / 資料異常。
+3. P/B 分歧納入系統 / AI 分歧警告；尤其 EPS 為負或 P/E 不可用時，P/B 分歧會提示需確認 BVPS / 股價 / 口徑。
+4. 將中探針 6217 正式加入 stock_mapping.py 與 stocklist.txt，避免僅靠 keyword_fallback 分類。
+5. 中探針類標的會被定位為「探針卡 / 測試介面」下的轉機狀態；可觀察產業題材，但不輸出 P/E 公式買進價，需先看單季 EPS 是否連續轉正、營益率改善、月營收連續成長、法人是否開始給明確 Forward EPS。
+第 17-C-4：產業基準倍率重構 + 市場 / 法人隱含倍率對照 + 負 EPS 防呆完成版
+
+本次核心修正：
+1. 新增 / 拆分產業模型：
+   - FOUNDRY_ADVANCED：先進晶圓代工 / HPC / AI
+   - FOUNDRY_MATURE：成熟晶圓代工
+   - IC_DESIGN_ASIC_IP：矽智財 / AI ASIC / 高毛利設計服務
+   - IC_DESIGN_CONSUMER：一般消費性 IC 設計
+   - PROBE_AI_ASIC：高階 AI ASIC / CPO 探針卡與測試介面
+   - PROBE_STANDARD：一般探針卡 / 傳統測試介面
+   - TURNAROUND_PROBE_TEST_THEME：轉機 / 虧損探針與測試題材
+   - THERMAL_LIQUID：液冷 / 水冷散熱核心供應鏈
+   - THERMAL_AIR：傳統氣冷 / 風扇 / 常態散熱
+   - ROBOTICS_THEME_EVENT：機器人純題材 / EPS 未落地
+
+2. 調整產業基準倍率：
+   - 台積電類先進晶圓代工維持 24 / 30 / 35。
+   - 成熟晶圓代工改為 12 / 18 / 22。
+   - 高階 AI ASIC 探針卡改為 45 / 65 / 75。
+   - 一般探針卡改為 18 / 28 / 35。
+   - CoWoS 設備上修至 32 / 50 / 65。
+   - 重電 / 電網由原高估值降為 18 / 30 / 38。
+   - GENERAL 未分類降為 15 / 24 / 30，並套分類可信度折扣。
+
+3. 修正代表股票分類：
+   - 台積電 2330 → FOUNDRY_ADVANCED。
+   - 聯電 2303 → FOUNDRY_MATURE。
+   - 世芯-KY 3661、創意 3443、智原 3035 → IC_DESIGN_ASIC_IP。
+   - 旺矽 6223、精測 6510、穎崴 6515 → PROBE_AI_ASIC。
+   - 中探針 6217 → TURNAROUND_PROBE_TEST_THEME。
+
+4. 負 EPS / 轉機股防呆：
+   - 若 Forward EPS 與 TTM EPS 尚未穩定轉正，停止 P/E 公式估值。
+   - 不再輸出負的公式合理價、公式極限價、手動情境價。
+   - 改用轉機 / 事件模型，看單季 EPS 連續轉正、營收成長、訂單落地、P/B 與法人是否開始給 EPS。
+
+5. 市場 / 法人隱含倍率對照：
+   - 新增現價隱含 Forward P/E。
+   - 新增法人平均 / 高標 / 低標目標價隱含 Forward P/E。
+   - 若現價或法人隱含倍率超過 hard ceiling，顯示「市場重估 / 題材動能區」，不自動提高可操作買進價。
+
+6. 題材 EPS 落地檢查：
+   - CPO / 矽光子、低軌衛星、機器人、生技等題材若 EPS / 訂單未落地，切換事件模型。
+
+建議覆蓋檔案：
+- industry_taxonomy.py
+- stock_mapping.py
+- industry_model.py
+- dynamic_cap_model.py
+- ui_main.py
+- stocklist.txt（若要同步顯示分類，可整包覆蓋）

@@ -672,6 +672,8 @@ def render_main_page(sidebar_state=None):
                 ai_fair_value=None,
                 system_de=sys_de,
                 ai_de=ai_de,
+                system_pb=pb_ratio,
+                ai_pb=ai_pb,
                 stock_id=curr_id,
                 stock_name=c_name,
             )
@@ -714,9 +716,11 @@ def render_main_page(sidebar_state=None):
                         hist_data=hist,
                         industry_profile=industry_profile,
                         gross_margin=cap_gross_margin,
+                        operating_margin=eff_om,
                         roe=cap_roe,
                         debt_to_equity=cap_debt_to_equity,
                         revenue_yoy=cap_revenue_yoy,
+                        free_cash_flow=ai_fcf,
                         ttm_eps=cap_ttm_eps,
                         system_forward_eps=cap_system_forward_eps,
                         ai_forward_eps=cap_ai_forward_eps,
@@ -736,9 +740,11 @@ def render_main_page(sidebar_state=None):
                     dynamic_cap_pack["cap_adoption_notes"] = cap_adoption_notes
                     dynamic_cap_pack["cap_inputs"] = {
                         "gross_margin": cap_gross_margin,
+                        "operating_margin": eff_om,
                         "roe": cap_roe,
                         "debt_to_equity": cap_debt_to_equity,
                         "revenue_yoy": cap_revenue_yoy,
+                        "free_cash_flow": ai_fcf,
                         "ttm_eps": cap_ttm_eps,
                         "system_forward_eps": cap_system_forward_eps,
                         "ai_forward_eps": cap_ai_forward_eps,
@@ -746,9 +752,9 @@ def render_main_page(sidebar_state=None):
                     _cap_low = dynamic_cap_pack.get("operable_cap_low")
                     _cap_high = dynamic_cap_pack.get("operable_cap_high")
                     if _cap_low is not None and _cap_high is not None:
-                        cap_reason = f"Dynamic Cap 2.0 可操作倍率：{float(_cap_low):.1f}～{float(_cap_high):.1f}x；中性建議 {suggested_cap:.1f}x。已採 17-B-4：AI 校對後採用值 + 分歧折扣校準 + 循環復甦區間 + 產業 hard ceiling。"
+                        cap_reason = f"Dynamic Cap 2.0 可操作倍率：{float(_cap_low):.1f}～{float(_cap_high):.1f}x；中性建議 {suggested_cap:.1f}x。已採 17-C-5：AI 校對後採用值 + 分歧折扣校準 + 循環復甦區間 + 產業 hard ceiling。"
                     else:
-                        cap_reason = f"Dynamic Cap 2.0 最終建議倍率：{suggested_cap:.1f}x。已採 17-B-4：AI 校對後採用值 + 分歧折扣校準 + 循環復甦區間 + 產業 hard ceiling。"
+                        cap_reason = f"Dynamic Cap 2.0 最終建議倍率：{suggested_cap:.1f}x。已採 17-C-5：AI 校對後採用值 + 分歧折扣校準 + 循環復甦區間 + 產業 hard ceiling。"
                 else:
                     suggested_cap = float(industry_profile.get('cap_hint') or 30.0)
                     cap_reason = f"此產業主要估值模式為 {dynamic_cap_pack.get('valuation_mode', industry_profile.get('primary_valuation', 'N/A'))}，P/E Cap 僅作輔助；後續請優先看 P/B / 週期 / 題材落地。"
@@ -759,7 +765,7 @@ def render_main_page(sidebar_state=None):
                     value=float(suggested_cap),
                     step=5.0,
                     key=f"dynamic_cap_input_{curr_id}_{cap_refresh_token}",
-                    help="第 17-B-4：AI 校對後重新採用關鍵欄位，分歧折扣已校準，並針對循環復甦股顯示可操作倍率區間。"
+                    help="第 17-C-5：重構產業基準倍率，加入市場/法人隱含倍率、負 EPS 防呆與題材落地檢查。"
                 )
                 if dynamic_cap_pack.get("available"):
                     # 使用者仍可手動覆寫 Cap；若覆寫，估值公式採手動值，拆解表仍保留系統建議值。
@@ -854,7 +860,7 @@ def render_main_page(sidebar_state=None):
                 except Exception:
                     return default
 
-            # 17-B-4：倍率分層。可操作倍率 ≠ 公式合理倍率 ≠ 樂觀/極限倍率。
+            # 17-C-5：倍率分層。可操作倍率 ≠ 公式合理倍率 ≠ 樂觀/極限倍率。
             operable_pe_cap = _cap_float(target_pe_cap, suggested_cap)
             formula_pe_cap = _cap_float(dynamic_cap_pack.get("formula_cap"), None)
             if formula_pe_cap is None:
@@ -875,7 +881,7 @@ def render_main_page(sidebar_state=None):
             else:
                 sys_target_price_est = None; is_capped = False
             
-            extreme_target_price = eff_f_eps * extreme_pe_cap_for_calc if eff_f_eps is not None and extreme_pe_cap_for_calc is not None else None
+            extreme_target_price = eff_f_eps * extreme_pe_cap_for_calc if eff_f_eps is not None and eff_f_eps > 0 and extreme_pe_cap_for_calc is not None else None
             # 17-B-5：使用者手動調整 Cap 時，公式合理估值仍受公式倍率/soft ceiling 控制；
             # 但額外顯示「手動情境推估價」，讓使用者可以看見自行提高可操作 Cap 後的情境價。
             # 若手動倍率超過 hard ceiling，情境價仍以 hard ceiling 截斷並顯示警示。
@@ -885,9 +891,9 @@ def render_main_page(sidebar_state=None):
             if manual_cap_input is not None and hard_pe_cap is not None and manual_cap_input > hard_pe_cap:
                 manual_cap_for_calc = hard_pe_cap
                 manual_cap_hit_hard = True
-            manual_target_price = eff_f_eps * manual_cap_for_calc if eff_f_eps is not None and manual_cap_for_calc is not None else None
+            manual_target_price = eff_f_eps * manual_cap_for_calc if eff_f_eps is not None and eff_f_eps > 0 and manual_cap_for_calc is not None else None
 
-            if has_ai_fin_fetch and ai_f_eps_calc is not None and ai_cg is not None and ai_cg > 0:
+            if has_ai_fin_fetch and ai_f_eps_calc is not None and ai_f_eps_calc > 0 and ai_cg is not None and ai_cg > 0:
                 ai_raw_mult = (ai_cg * 100) * target_peg_adj
                 ai_capped_mult = min(ai_raw_mult, formula_pe_cap if formula_pe_cap is not None else operable_pe_cap)
                 ai_target_price_est = ai_f_eps_calc * ai_capped_mult
@@ -895,8 +901,40 @@ def render_main_page(sidebar_state=None):
             else:
                 ai_target_price_est = None; ai_is_capped = False
 
-            ai_extreme_target_price = ai_f_eps_calc * extreme_pe_cap_for_calc if has_ai_fin_fetch and ai_f_eps_calc is not None and extreme_pe_cap_for_calc is not None else None
-            ai_manual_target_price = ai_f_eps_calc * manual_cap_for_calc if has_ai_fin_fetch and ai_f_eps_calc is not None and manual_cap_for_calc is not None else None
+            ai_extreme_target_price = ai_f_eps_calc * extreme_pe_cap_for_calc if has_ai_fin_fetch and ai_f_eps_calc is not None and ai_f_eps_calc > 0 and extreme_pe_cap_for_calc is not None else None
+            ai_manual_target_price = ai_f_eps_calc * manual_cap_for_calc if has_ai_fin_fetch and ai_f_eps_calc is not None and ai_f_eps_calc > 0 and manual_cap_for_calc is not None else None
+
+            # 17-C-5：市場 / 法人隱含 Forward P/E 對照。用來解釋現價、法人價與系統估值差距。
+            implied_eps = ai_forward_eps_consensus if ai_forward_eps_consensus is not None else (cap_system_forward_eps if cap_system_forward_eps is not None else cap_ai_forward_eps)
+            market_implied_pe = curr_p / implied_eps if implied_eps is not None and implied_eps > 0 and curr_p is not None else None
+            target_avg_implied_pe = ai_me_val / implied_eps if implied_eps is not None and implied_eps > 0 and ai_me_val is not None else None
+            target_high_implied_pe = ai_hi_val / implied_eps if implied_eps is not None and implied_eps > 0 and ai_hi_val is not None else None
+            target_low_implied_pe = ai_lo_val / implied_eps if implied_eps is not None and implied_eps > 0 and ai_lo_val is not None else None
+            implied_status = "Forward EPS 缺值或 <= 0，無法反推市場 / 法人隱含 Forward P/E。"
+            if market_implied_pe is not None:
+                if hard_pe_cap is not None and market_implied_pe > hard_pe_cap:
+                    implied_status = "現價隱含倍率已高於系統 hard ceiling，屬市場重估 / 題材動能區，不代表可操作買點。"
+                elif soft_pe_cap is not None and market_implied_pe > soft_pe_cap:
+                    implied_status = "現價隱含倍率高於 soft ceiling，屬偏樂觀估值區。"
+                elif operable_pe_cap is not None and market_implied_pe > operable_pe_cap:
+                    implied_status = "現價隱含倍率高於可操作倍率，但仍未突破系統 hard ceiling。"
+                else:
+                    implied_status = "現價隱含倍率未高於可操作倍率。"
+            implied_html = ""
+            if market_implied_pe is not None or target_avg_implied_pe is not None:
+                _mkt = f"{market_implied_pe:.1f}x" if market_implied_pe is not None else "N/A"
+                _avg = f"{target_avg_implied_pe:.1f}x" if target_avg_implied_pe is not None else "N/A"
+                _hi = f"{target_high_implied_pe:.1f}x" if target_high_implied_pe is not None else "N/A"
+                _lo = f"{target_low_implied_pe:.1f}x" if target_low_implied_pe is not None else "N/A"
+                _eps = f"{implied_eps:.2f}" if implied_eps is not None else "N/A"
+                implied_html = f"<div style='background:#1f2937;color:#E5E7EB;padding:7px 9px;border-radius:6px;margin-top:7px;line-height:1.55;'><b>🧭 市場 / 法人隱含倍率對照</b><br>採用 Forward EPS：{_eps}｜現價隱含：{_mkt}｜法人均價隱含：{_avg}｜法人高標隱含：{_hi}｜法人低標隱含：{_lo}<br><span style='color:#FBBF24;'>{implied_status}</span></div>"
+            if isinstance(dynamic_cap_pack, dict):
+                dynamic_cap_pack["market_implied_forward_pe"] = market_implied_pe
+                dynamic_cap_pack["target_avg_implied_forward_pe"] = target_avg_implied_pe
+                dynamic_cap_pack["target_high_implied_forward_pe"] = target_high_implied_pe
+                dynamic_cap_pack["target_low_implied_forward_pe"] = target_low_implied_pe
+                dynamic_cap_pack["implied_forward_eps"] = implied_eps
+                dynamic_cap_pack["implied_status"] = implied_status
 
             # ==========================================
             # ⚠️ 系統 / AI 分歧警告：EPS / YoY / PEG / 合理價 / D/E
@@ -912,6 +950,8 @@ def render_main_page(sidebar_state=None):
                 ai_fair_value=ai_target_price_est,
                 system_de=sys_de,
                 ai_de=ai_de,
+                system_pb=pb_ratio,
+                ai_pb=ai_pb,
                 stock_id=curr_id,
                 stock_name=c_name,
             )
@@ -992,6 +1032,8 @@ def render_main_page(sidebar_state=None):
                 else: peg_color, peg_text = "#FFD700", "合理區間"
             if sys_target_price_est or ai_target_price_est:
                 cap_warning_html = ""
+                if dynamic_cap_pack.get("valuation_mode") == "turnaround_event" or dynamic_cap_pack.get("available") is False and dynamic_cap_pack.get("valuation_mode") in {"turnaround_event", "event_chip"}:
+                    cap_warning_html += "<br><span style='color:#FFD700; font-weight:bold;'>⚠️ EPS 尚未穩定轉正或產業/題材尚待確認，系統已停用 P/E 公式估值；請改看轉機事件、P/B、營收與單季 EPS 是否連續改善。</span>"
                 if dynamic_cap_pack.get("hit_hard_ceiling"):
                     cap_msg = f"🚨 觸發產業 hard ceiling 封頂防護 ({hard_pe_cap:.0f}x)"
                     cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>{cap_msg}，模型輸入偏樂觀，不可直接作為買進乘數！</span>"
@@ -1018,7 +1060,7 @@ def render_main_page(sidebar_state=None):
                 else:
                     tp_est_str = f"公式合理估值: {sys_tp_str} | 手動情境推估價: {manual_tp_str} | 樂觀情境價: {sys_ext_str} | 公式倍率: {formula_pe_cap:.1f}x | 手動/可操作倍率: {operable_pe_cap:.1f}x"
                 eps_period_note = raw_ai_period or "系統/推估，請確認 EPS 年期"
-                target_price_html = f"<div style='color:#aaa; font-size:0.85rem; border-top:1px solid #444; padding-top:8px; margin-top:8px;'>🎯 公式合理估值 (PEG 推算，非買賣目標): <b style='color:#fff; font-size:1.1rem;'>{sys_tp_str}</b> <br>{ai_tp_est_html}<br>🛠️ <span style='color:#00bfff; font-weight:bold;'>手動情境推估價 (EPS × 使用者可操作 Cap): <span style='font-size:1.15rem;'>{manual_tp_str}</span> <br>{ai_manual_str}</span><br>🚀 <span style='color:#ff4d4d; font-weight:bold;'>樂觀情境價 (Forward EPS × soft ceiling，高風險情境): <span style='font-size:1.2rem;'>{sys_ext_str}</span> <br>{ai_ext_str}</span><br><div style='background:#2c2c2c; padding:4px 8px; border-radius:4px; margin-top:4px;'><small style='color:#00bfff;'>🐛 [底層運算除錯] EPS: {debug_eps:.2f}｜EPS 年期/來源: {eps_period_note}｜公式倍率: {formula_pe_cap:.1f}x｜手動/可操作倍率: {operable_pe_cap:.1f}x｜樂觀倍率: {extreme_pe_cap_for_calc:.1f}x</small></div>{cap_warning_html}</div>"
+                target_price_html = f"<div style='color:#aaa; font-size:0.85rem; border-top:1px solid #444; padding-top:8px; margin-top:8px;'>🎯 公式合理估值 (PEG 推算，非買賣目標): <b style='color:#fff; font-size:1.1rem;'>{sys_tp_str}</b> <br>{ai_tp_est_html}<br>🛠️ <span style='color:#00bfff; font-weight:bold;'>手動情境推估價 (EPS × 使用者可操作 Cap): <span style='font-size:1.15rem;'>{manual_tp_str}</span> <br>{ai_manual_str}</span><br>🚀 <span style='color:#ff4d4d; font-weight:bold;'>樂觀情境價 (Forward EPS × soft ceiling，高風險情境): <span style='font-size:1.2rem;'>{sys_ext_str}</span> <br>{ai_ext_str}</span><br><div style='background:#2c2c2c; padding:4px 8px; border-radius:4px; margin-top:4px;'><small style='color:#00bfff;'>🐛 [底層運算除錯] EPS: {debug_eps:.2f}｜EPS 年期/來源: {eps_period_note}｜公式倍率: {formula_pe_cap:.1f}x｜手動/可操作倍率: {operable_pe_cap:.1f}x｜樂觀倍率: {extreme_pe_cap_for_calc:.1f}x</small></div>{implied_html}{cap_warning_html}</div>"
 
             # ==========================================
             # 🧭 法人目標價可信度 + 公式估值 / 可操作估值分離
@@ -1096,7 +1138,7 @@ def render_main_page(sidebar_state=None):
                         if dynamic_cap_pack.get("valuation_mode") == "pb_cycle":
                             st.warning("本分類採 P/B 週期模型：P/E Cap 僅作輔助，不直接作買進倍率。")
                         else:
-                            st.caption("17-B-4：已加入循環復甦判斷、分歧折扣校準、公式/可操作/樂觀倍率分離，最後才套用產業 hard ceiling。")
+                            st.caption("17-C-5：已加入循環復甦判斷、分歧折扣校準、公式/可操作/樂觀倍率分離，最後才套用產業 hard ceiling。")
                         st.dataframe(dynamic_cap_pack.get("report"), use_container_width=True, hide_index=True)
                         dc_warnings = dynamic_cap_pack.get("warnings") or []
                         if dc_warnings:
@@ -1679,10 +1721,11 @@ def render_main_page(sidebar_state=None):
 - 最新單季 EPS: 系統={_nullize_text(sys_latest_quarter_eps)} / AI={_nullize_text(ai_latest_quarter_eps)} / 採用={_nullize_text(ai_latest_quarter_eps)} / 期間={_nullize_text(raw_ai_period)}
 - TTM EPS: 系統={_nullize_text(sys_ttm_eps)} / AI={_nullize_text(ai_ttm_eps)} / 採用={_nullize_text(eff_t_eps)}
 - 完整年度 EPS: 系統={_nullize_text(sys_fiscal_year_eps)} / AI={_nullize_text(ai_fiscal_year_eps)} / 採用={_nullize_text(ai_fiscal_year_eps)}
-- Forward EPS－系統: {_nullize_text(sys_forward_eps)}
+- Forward EPS－系統: {_nullize_text(sys_forward_eps_system)}
 - Forward EPS－AI: {_nullize_text(ai_forward_eps_ai)}
 - Forward EPS－法人共識: {_nullize_text(ai_forward_eps_consensus)}
 - Dynamic Cap 採用 EPS/輸入: {eps_adopted_for_prompt}
+- 市場 / 法人隱含倍率：現價隱含 {_nullize_text(market_implied_pe if 'market_implied_pe' in locals() else None)}x；法人均價隱含 {_nullize_text(target_avg_implied_pe if 'target_avg_implied_pe' in locals() else None)}x；法人高標隱含 {_nullize_text(target_high_implied_pe if 'target_high_implied_pe' in locals() else None)}x；判讀：{_nullize_text(implied_status if 'implied_status' in locals() else None)}
 
 【3. 核心財務與估值】
 - 現價: {_nullize_text(curr_p)}
