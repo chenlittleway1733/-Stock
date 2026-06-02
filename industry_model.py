@@ -1,5 +1,5 @@
 """
-產業估值模型模組（第 17-C-7C-1 階段）。
+產業估值模型模組（第 17-C-8A-1 階段）。
 
 資料流：
 1. stock_mapping.py 明確指定：股票 → primary_taxon + themes
@@ -12,6 +12,14 @@ import pandas as pd
 
 from industry_taxonomy import INDUSTRY_TAXONOMY, get_taxonomy
 from stock_mapping import STOCK_MAPPING
+
+
+# ===== 第 17-C-8A-1：產業估值模型維護資訊 =====
+INDUSTRY_MODEL_BUILD_VERSION = "17-C-8A-1"
+INDUSTRY_MODEL_BUILT_AT = "2026-06-02"
+INDUSTRY_MODEL_BUILD_NOTE = "17-C-8A-1 單次快照稽核表；17-C-7C-1 已完成 hybrid 權重顯示同步。"
+INDUSTRY_MODEL_REVIEW_SUGGESTION = "建議每月做 mapping/hybrid 小檢查，每季檢查產業 base/soft/hard；本系統目前未啟用歷史紀錄。"
+
 
 
 def _safe_str(x):
@@ -324,6 +332,10 @@ def get_industry_valuation_profile(stock_id, stock_name="", sector="", industry=
         "soft_ceiling_pe": tax.get("soft_ceiling_pe"),
         "hard_ceiling_pe": tax.get("hard_ceiling_pe"),
         "calibration_source": tax.get("calibration_source", "taxonomy"),
+        "model_build_version": INDUSTRY_MODEL_BUILD_VERSION,
+        "model_built_at": INDUSTRY_MODEL_BUILT_AT,
+        "model_build_note": INDUSTRY_MODEL_BUILD_NOTE,
+        "model_maintenance_note": INDUSTRY_MODEL_REVIEW_SUGGESTION,
         "event_model_if_eps_unstable": tax.get("event_model_if_eps_unstable", False),
         "event_switch_note": tax.get("event_switch_note", ""),
         "cap_adjust": 0.0,
@@ -370,6 +382,9 @@ def build_industry_valuation_model_report(profile):
         {"項目": "混合後 base / floor / soft / hard", "內容": p.get("hybrid_mixed_caps_text", "—")},
         {"項目": "混合權重說明", "內容": p.get("hybrid_note", "—") or "—"},
         {"項目": "校準來源", "內容": p.get("calibration_source", "taxonomy")},
+        {"項目": "產業模型建置版本", "內容": p.get("model_build_version", "—")},
+        {"項目": "產業模型建置時間", "內容": p.get("model_built_at", "—")},
+        {"項目": "模型維護提醒", "內容": p.get("model_maintenance_note", "—")},
         {"項目": "P/B 參考區間", "內容": pb_range_text},
         {"項目": "P/E 模型適用性", "內容": p.get("pe_applicability_text", "—")},
         {"項目": "事件模型切換", "內容": p.get("event_switch_note", "無") if p.get("event_model_if_eps_unstable") else "無"},

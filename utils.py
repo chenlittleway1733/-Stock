@@ -1619,3 +1619,237 @@ def build_valuation_separation_report(
         "pb_operable_high": pb_operable_high,
         "report": pd.DataFrame(rows),
     }
+
+
+
+# =========================================================
+# 第 17-C-8A：產業模型單次快照稽核表
+# =========================================================
+def build_industry_model_snapshot_audit(
+    *,
+    stock_id=None,
+    stock_name=None,
+    current_price=None,
+    adopted_forward_eps=None,
+    market_implied_pe=None,
+    broker_avg_implied_pe=None,
+    broker_high_implied_pe=None,
+    formula_cap=None,
+    operable_cap_mid=None,
+    soft_ceiling=None,
+    hard_ceiling=None,
+    industry_profile=None,
+    dynamic_cap_pack=None,
+    revenue_yoy=None,
+    revenue_mom=None,
+    gross_margin=None,
+    operating_margin=None,
+    roe=None,
+    analyst_count=None,
+    target_confidence=None,
+    divergence_warnings=None,
+    dq_warnings=None,
+):
+    """單次快照稽核：只判斷本次模型是否需要人工檢查，不判斷連續幾次。
+
+    輸出：
+    - audit_label：正常 / 觀察 / 建議人工檢查 hybrid 權重 / 建議人工檢查 primary_taxon / 可能市場過熱 / 資料不足
+    - audit_score：稽核分數
+    - report：DataFrame
+    """
+    def sf(v, default=None):
+        try:
+            return float(v) if v is not None else default
+        except Exception:
+            return default
+
+    p = industry_profile or {}
+    dcp = dynamic_cap_pack or {}
+    warnings = divergence_warnings or []
+    dq = dq_warnings or []
+    tc = target_confidence or {}
+
+    eps = sf(adopted_forward_eps)
+    cp = sf(current_price)
+    hard = sf(hard_ceiling if hard_ceiling is not None else dcp.get("hard_ceiling_cap"))
+    soft = sf(soft_ceiling if soft_ceiling is not None else dcp.get("optimistic_cap"))
+    formula = sf(formula_cap if formula_cap is not None else dcp.get("formula_cap"))
+    operable = sf(operable_cap_mid if operable_cap_mid is not None else dcp.get("final_cap"))
+
+    m_pe = sf(market_implied_pe)
+    if m_pe is None and cp is not None and eps is not None and eps > 0:
+        m_pe = cp / eps
+
+    b_avg_pe = sf(broker_avg_implied_pe)
+    b_high_pe = sf(broker_high_implied_pe)
+
+    rev_yoy = sf(revenue_yoy)
+    rev_mom = sf(revenue_mom)
+    gm = sf(gross_margin)
+    om = sf(operating_margin)
+    roev = sf(roe)
+    analysts = sf(analyst_count, 0) or 0
+
+    score = 0
+    positives = []
+    negatives = []
+    checks = []
+
+    def add_check(item, value, result, note):
+        checks.append({"稽核項目": item, "數值": value, "判斷": result, "說明": note})
+
+    if eps is None or eps <= 0:
+        add_check("Forward EPS 採用值", "NULL", "資料不足", "缺少正數 Forward EPS，無法判斷隱含本益比是否合理。")
+        negatives.append("Forward EPS 缺值或非正數")
+        score -= 3
+    else:
+        add_check("Forward EPS 採用值", f"{eps:.2f}", "可用", "本次快照可計算市場 / 法人隱含 Forward P/E。")
+
+    if hard is None or hard <= 0:
+        add_check("系統 hard ceiling", "NULL", "資料不足", "缺少產業 hard ceiling，無法做模型偏離判斷。")
+        negatives.append("hard ceiling 缺值")
+        score -= 2
+    else:
+        add_check("系統 hard ceiling", f"{hard:.2f}x", "可用", "作為本次快照稽核的估值上限參考。")
+
+    if m_pe is not None and hard is not None:
+        if m_pe > hard:
+            score += 2
+            add_check("現價隱含 Forward P/E vs hard", f"{m_pe:.2f}x / {hard:.2f}x", "超過 hard", "本次快照顯示現價已進入市場重估 / 題材動能區。")
+        elif soft is not None and m_pe > soft:
+            score += 1
+            add_check("現價隱含 Forward P/E vs soft", f"{m_pe:.2f}x / {soft:.2f}x", "偏樂觀", "現價高於 soft 但未超過 hard，暫列觀察。")
+        else:
+            add_check("現價隱含 Forward P/E", f"{m_pe:.2f}x", "正常", "現價未明顯突破系統模型上緣。")
+
+    if b_avg_pe is not None and hard is not None:
+        if b_avg_pe > hard:
+            score += 2
+            add_check("法人均價隱含 P/E vs hard", f"{b_avg_pe:.2f}x / {hard:.2f}x", "超過 hard", "法人均價也高於系統 hard，建議檢查是否為模型偏保守或法人過度樂觀。")
+        else:
+            add_check("法人均價隱含 P/E", f"{b_avg_pe:.2f}x", "未超過 hard", "法人均價未明顯挑戰系統 hard。")
+
+    if b_high_pe is not None and hard is not None:
+        if b_high_pe > hard * 1.30:
+            score += 1
+            add_check("法人高標隱含 P/E", f"{b_high_pe:.2f}x", "高標大幅超過", "法人高標超過 hard 30% 以上，僅供樂觀情境觀察，不可直接調模型。")
+        elif b_high_pe > hard:
+            add_check("法人高標隱含 P/E", f"{b_high_pe:.2f}x", "超過 hard", "法人高標高於系統 hard，需確認 EPS 假設。")
+
+    if analysts >= 5:
+        score += 1
+        positives.append("法人樣本數較足")
+        add_check("分析師人數", f"{analysts:.0f}", "支持度較高", "法人目標價樣本數較足，可提高估值中樞參考價值。")
+    elif analysts >= 3:
+        add_check("分析師人數", f"{analysts:.0f}", "中可信", "可作區間參考，但不足以單次快照直接調高模型。")
+    else:
+        score -= 1
+        negatives.append("法人樣本數不足")
+        add_check("分析師人數", f"{analysts:.0f}", "偏低", "法人目標價可信度不足，不宜據此更新模型。")
+
+    if rev_yoy is not None:
+        if rev_yoy > 0.20:
+            score += 1
+            positives.append("月營收 YoY 強")
+            add_check("月營收 YoY", f"{rev_yoy*100:.2f}%", "基本面支持", "營收成長有助支撐較高估值。")
+        elif rev_yoy < 0:
+            score -= 1
+            negatives.append("月營收 YoY 為負")
+            add_check("月營收 YoY", f"{rev_yoy*100:.2f}%", "基本面不支持", "營收年減時不宜只因高估值而調高模型。")
+        else:
+            add_check("月營收 YoY", f"{rev_yoy*100:.2f}%", "中性", "營收成長尚未明顯支持模型升級。")
+
+    if rev_mom is not None and rev_mom < -0.20:
+        negatives.append("月營收 MoM 明顯轉弱")
+        add_check("月營收 MoM", f"{rev_mom*100:.2f}%", "短期轉弱", "MoM 明顯下滑，需避免把短線高估值誤判為模型升級。")
+
+    if gm is not None:
+        if gm >= 0.45:
+            score += 1
+            positives.append("毛利率高")
+            add_check("毛利率", f"{gm*100:.2f}%", "品質支持", "毛利率具高品質特徵，但仍需搭配營益率與 EPS。")
+        elif gm < 0.20:
+            score -= 1
+            negatives.append("毛利率偏低")
+            add_check("毛利率", f"{gm*100:.2f}%", "品質偏弱", "毛利率偏低不支持提高估值模型。")
+
+    if om is not None:
+        if om >= 0.18:
+            score += 1
+            positives.append("營益率佳")
+            add_check("營益率", f"{om*100:.2f}%", "獲利品質支持", "營益率足以支持較高品質係數。")
+        elif om < 0.08:
+            score -= 1
+            negatives.append("營益率偏低")
+            add_check("營益率", f"{om*100:.2f}%", "費用/營運槓桿壓力", "高毛利若未轉化為營益率，不宜提高估值模型。")
+
+    if roev is not None:
+        if roev >= 0.20:
+            score += 1
+            positives.append("ROE 佳")
+            add_check("ROE", f"{roev*100:.2f}%", "品質支持", "ROE 支持較高估值，但不等於可直接調高 hard。")
+        elif roev < 0.08:
+            score -= 1
+            negatives.append("ROE 偏低")
+            add_check("ROE", f"{roev*100:.2f}%", "品質偏弱", "ROE 偏低不支持模型升級。")
+
+    if warnings:
+        score -= min(len(warnings), 3)
+        negatives.append(f"分歧警告 {len(warnings)} 項")
+        add_check("系統 / AI 分歧", f"{len(warnings)} 項", "資料風險", "資料分歧存在，模型稽核只能保守判斷。")
+    if dq:
+        score -= min(len(dq), 2)
+        add_check("資料品質提醒", f"{len(dq)} 項", "資料風險", "資料品質提醒存在，需先確認來源。")
+
+    has_over_hard = (m_pe is not None and hard is not None and m_pe > hard)
+    broker_over_hard = (b_avg_pe is not None and hard is not None and b_avg_pe > hard)
+    fundamental_support = sum(1 for x in positives if x in {"月營收 YoY 強", "毛利率高", "營益率佳", "ROE 佳"}) >= 2
+    weak_fundamental = any(x in negatives for x in ["月營收 YoY 為負", "月營收 MoM 明顯轉弱", "營益率偏低"])
+
+    if eps is None or hard is None:
+        label = "資料不足，先不判斷"
+        action = "先補 Forward EPS 與產業 hard ceiling，再做模型稽核。"
+        severity = "gray"
+    elif has_over_hard and broker_over_hard and fundamental_support and analysts >= 3:
+        label = "建議人工檢查 hybrid 權重"
+        action = "檢查新成長曲線是否已提高 EPS / 營收貢獻；若只是單次快照，不自動調高模型。"
+        severity = "orange"
+    elif has_over_hard and broker_over_hard and not fundamental_support:
+        label = "可能市場過熱，不調模型"
+        action = "市場與法人估值高於 hard，但基本面支持不足；先維持模型，追蹤 EPS / 營收是否落地。"
+        severity = "red"
+    elif has_over_hard:
+        label = "建議觀察 / 人工檢查"
+        action = "現價超過 hard；需人工確認是模型偏保守，還是短線題材過熱。"
+        severity = "orange"
+    elif m_pe is not None and soft is not None and m_pe > soft:
+        label = "偏樂觀觀察"
+        action = "現價高於 soft 但未突破 hard，暫不調整模型。"
+        severity = "yellow"
+    else:
+        label = "正常"
+        action = "本次快照未顯示模型明顯偏離。"
+        severity = "green"
+
+    if weak_fundamental and label.startswith("建議人工檢查"):
+        label = "建議人工檢查，但基本面短期轉弱"
+        action = "可檢查 hybrid 權重，但因營收或營益率轉弱，不宜直接調高模型。"
+        severity = "orange"
+
+    summary = {
+        "audit_label": label,
+        "audit_score": score,
+        "severity": severity,
+        "action": action,
+        "history_note": "目前未啟用歷史紀錄，本表僅為本次快照稽核，不能判斷連續幾次或長期重估。",
+        "positives": positives,
+        "negatives": negatives,
+        "model_built_at": p.get("model_built_at", "未標示"),
+        "model_maintenance_note": p.get("model_maintenance_note", "—"),
+        "primary_taxon": p.get("model_key") or p.get("taxon_key"),
+        "hybrid_taxons": p.get("hybrid_taxons_text", "—"),
+        "mixed_caps": p.get("hybrid_mixed_caps_text", "—"),
+    }
+    report = pd.DataFrame(checks or [{"稽核項目": "快照稽核", "數值": "—", "判斷": label, "說明": action}])
+    return {"summary": summary, "report": report}
+
