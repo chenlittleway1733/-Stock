@@ -332,6 +332,9 @@ def render_main_page(sidebar_state=None):
                             elif fallback_reason:
                                 st.warning(f"⚠️ {fallback_reason}")
                             st.session_state.ai_fetched_financials[curr_id] = fetched_data
+                            # 第 17-B-3：AI 財報校對完成後，強制刷新 Dynamic Cap 2.0 輸入框 key，
+                            # 避免 Streamlit number_input 保留 AI 校對前的舊倍率。
+                            st.session_state[f"dynamic_cap_refresh_token_{curr_id}"] = str(int(time.time()))
                             st.rerun()
                         elif isinstance(fetched_data, dict) and "error" in fetched_data:
                             st.error(f"🚨 AI 抓取失敗：{fetched_data['error']}")
@@ -582,6 +585,85 @@ def render_main_page(sidebar_state=None):
                 sys_f_eps_calc = t_eps * (1 + earn_growth)
             sys_forward_eps_system = sys_f_eps_calc
 
+            # ==========================================
+            # ⚙️ Dynamic Cap 2.0 專用採用值（第 17-B-3）
+            # ==========================================
+            # 原則：系統值仍是基礎，但 AI 全方位校對若有來源/期間且沒有重大分歧，
+            # 可進入 Dynamic Cap 計算；若分歧過大，採保守值並留下來源備註。
+            def _cap_rel_gap(a, b):
+                try:
+                    if a is None or b is None:
+                        return None
+                    aa, bb = float(a), float(b)
+                    denom = min(abs(aa), abs(bb))
+                    if denom <= 1e-9:
+                        return None
+                    return abs(aa - bb) / denom
+                except Exception:
+                    return None
+
+            def _ai_has_trace(*field_keys):
+                if not has_ai_fin_fetch or not isinstance(ai_fin, dict):
+                    return False
+                if raw_ai_period:
+                    return True
+                for fk in field_keys:
+                    try:
+                        meta = get_ai_field_source_meta(ai_fin, fk)
+                        if meta and (meta.get('source_url') or meta.get('published_date') or meta.get('source')):
+                            return True
+                    except Exception:
+                        pass
+                return False
+
+            cap_adoption_notes = []
+
+            def _adopt_for_cap(sys_val, ai_val, field_name, field_keys, mode='lower_better_when_diverged', gap_threshold=0.30):
+                ai_trace_ok = _ai_has_trace(*field_keys)
+                gap = _cap_rel_gap(sys_val, ai_val)
+                if sys_val is None and ai_val is not None:
+                    cap_adoption_notes.append(f"{field_name}：系統缺值，Dynamic Cap 採用 AI 補齊值。")
+                    return ai_val
+                if sys_val is not None and ai_val is None:
+                    return sys_val
+                if sys_val is None and ai_val is None:
+                    return None
+                if gap is not None and gap > gap_threshold:
+                    if mode == 'higher_risk_when_diverged':
+                        adopted = max(sys_val, ai_val)
+                    else:
+                        adopted = min(sys_val, ai_val)
+                    cap_adoption_notes.append(f"{field_name}：系統與 AI 差距 {gap*100:.1f}%，Dynamic Cap 採保守值 {adopted}。")
+                    return adopted
+                if ai_trace_ok and ai_val is not None:
+                    cap_adoption_notes.append(f"{field_name}：AI 有來源/期間，Dynamic Cap 採用 AI 校對值。")
+                    return ai_val
+                return sys_val
+
+            cap_gross_margin = _adopt_for_cap(gross_margin, ai_gm, '毛利率', ['gross_margin'], 'lower_better_when_diverged', 0.20)
+            cap_roe = _adopt_for_cap(eff_roe, ai_roe, 'ROE', ['roe'], 'lower_better_when_diverged', 0.30)
+            cap_debt_to_equity = _adopt_for_cap(sys_de, ai_de, 'D/E', ['debt_to_equity'], 'higher_risk_when_diverged', 0.50)
+            cap_revenue_yoy = _adopt_for_cap(rev_growth, ai_yoy, '營收 YoY', ['yoy', 'monthly_yoy'], 'lower_better_when_diverged', 0.20)
+            cap_ttm_eps = _adopt_for_cap(eff_t_eps, ai_t_eps, 'TTM EPS', ['ttm_eps', 'trailing_eps'], 'lower_better_when_diverged', 0.30)
+            cap_ai_forward_eps = ai_forward_eps_consensus if ai_forward_eps_consensus is not None else ai_forward_eps_ai
+            cap_system_forward_eps = sys_forward_eps_system
+
+            # 先建立不依賴「公式合理價」的核心分歧警告，讓 Dynamic Cap 2.0 可即時折扣。
+            cap_divergence_warnings = build_divergence_warnings(
+                system_forward_eps=sys_forward_eps_system,
+                ai_forward_eps=ai_f_eps_calc,
+                system_yoy=rev_growth,
+                ai_yoy=ai_yoy,
+                system_peg=None,
+                ai_peg=None,
+                system_fair_value=None,
+                ai_fair_value=None,
+                system_de=sys_de,
+                ai_de=ai_de,
+                stock_id=curr_id,
+                stock_name=c_name,
+            )
+
             # EPS 拆欄報告：顯示每一種 EPS 口徑，不再用「目前 EPS」混稱。
             eps_rows = [
                 {"field": "最新單季 EPS", "definition": "最新已公告季度 EPS；用來判斷短期獲利動能", "system_value": sys_latest_quarter_eps, "ai_value": ai_latest_quarter_eps, "adopted_value": ai_latest_quarter_eps, "source": "AI補齊" if ai_latest_quarter_eps is not None else "未取得", "period": ai_period_val or raw_ai_period or "需查最新財報", "notes": "系統資料源未穩定提供單季 EPS，避免用 TTM 代替。"},
@@ -619,17 +701,17 @@ def render_main_page(sidebar_state=None):
                         info=info,
                         hist_data=hist,
                         industry_profile=industry_profile,
-                        gross_margin=eff_gm,
-                        roe=eff_roe,
-                        debt_to_equity=eff_de,
-                        revenue_yoy=eff_rg,
-                        ttm_eps=eff_t_eps,
-                        system_forward_eps=sys_forward_eps_system,
-                        ai_forward_eps=ai_forward_eps_ai,
+                        gross_margin=cap_gross_margin,
+                        roe=cap_roe,
+                        debt_to_equity=cap_debt_to_equity,
+                        revenue_yoy=cap_revenue_yoy,
+                        ttm_eps=cap_ttm_eps,
+                        system_forward_eps=cap_system_forward_eps,
+                        ai_forward_eps=cap_ai_forward_eps,
                         consensus_forward_eps=ai_forward_eps_consensus,
                         ai_ttm_eps=ai_t_eps,
                         pb_ratio=eff_pb,
-                        divergence_warnings=[],
+                        divergence_warnings=cap_divergence_warnings,
                         dq_warnings=dq_warnings,
                     )
                 except Exception as e:
@@ -638,16 +720,38 @@ def render_main_page(sidebar_state=None):
 
                 if dynamic_cap_pack.get("available") and dynamic_cap_pack.get("final_cap") is not None:
                     suggested_cap = float(dynamic_cap_pack.get("final_cap"))
-                    cap_reason = f"Dynamic Cap 2.0 最終建議倍率：{suggested_cap:.1f}x。已採 17-B-2 全產業校準同步：產業基準 × 成長/品質/題材/規模/地緣係數，再乘資料、估值與流動性折扣，並套用產業 hard ceiling。"
+                    # 第 17-B-3：保存 Dynamic Cap 實際採用值與 AI 校對採用備註，供 UI 與打包提示詞使用。
+                    dynamic_cap_pack["cap_adoption_notes"] = cap_adoption_notes
+                    dynamic_cap_pack["cap_inputs"] = {
+                        "gross_margin": cap_gross_margin,
+                        "roe": cap_roe,
+                        "debt_to_equity": cap_debt_to_equity,
+                        "revenue_yoy": cap_revenue_yoy,
+                        "ttm_eps": cap_ttm_eps,
+                        "system_forward_eps": cap_system_forward_eps,
+                        "ai_forward_eps": cap_ai_forward_eps,
+                    }
+                    cap_reason = f"Dynamic Cap 2.0 最終建議倍率：{suggested_cap:.1f}x。已採 17-B-3：AI 校對後採用值 + 分歧警告折扣 + 產業 hard ceiling。"
                 else:
                     suggested_cap = float(industry_profile.get('cap_hint') or 30.0)
                     cap_reason = f"此產業主要估值模式為 {dynamic_cap_pack.get('valuation_mode', industry_profile.get('primary_valuation', 'N/A'))}，P/E Cap 僅作輔助；後續請優先看 P/B / 週期 / 題材落地。"
 
-                target_pe_cap = st.number_input("⚙️ 動態本益比天花板 (Dynamic Cap 2.0)", value=float(suggested_cap), step=5.0, help="第 17-B-2 階段：使用全產業校準表，產業基準 × 成長/品質/題材/規模/地緣係數，再乘資料可信度、估值風險與流動性折扣。")
+                cap_refresh_token = st.session_state.get(f"dynamic_cap_refresh_token_{curr_id}", "base")
+                target_pe_cap = st.number_input(
+                    "⚙️ 動態本益比天花板 (Dynamic Cap 2.0)",
+                    value=float(suggested_cap),
+                    step=5.0,
+                    key=f"dynamic_cap_input_{curr_id}_{cap_refresh_token}",
+                    help="第 17-B-3：AI 全方位校對後會重新採用毛利率、ROE、D/E、YoY、Forward EPS，並把 EPS/YoY/D/E 分歧警告納入 Dynamic Cap 折扣。"
+                )
                 if dynamic_cap_pack.get("available"):
                     # 使用者仍可手動覆寫 Cap；若覆寫，估值公式採手動值，拆解表仍保留系統建議值。
                     dynamic_cap_pack["user_selected_cap"] = target_pe_cap
                 st.markdown(f"<div style='color:#00bfff; font-size:0.75rem; margin-top:-10px; line-height:1.2;'>💡 {cap_reason}</div>", unsafe_allow_html=True)
+                if cap_adoption_notes:
+                    with st.expander("🔄 Dynamic Cap 2.0 採用 AI 校對值紀錄", expanded=False):
+                        for note in cap_adoption_notes[:20]:
+                            st.caption(f"- {note}")
 
             is_base_normalized = False 
 
@@ -1400,6 +1504,8 @@ def render_main_page(sidebar_state=None):
 - P/B 週期模型 BVPS: {_nullize_text(dynamic_cap_pack.get('bvps') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
 - P/B 週期估值區間: {_nullize_text(dynamic_cap_pack.get('pb_low_price') if isinstance(dynamic_cap_pack, dict) else 'NULL')} ～ {_nullize_text(dynamic_cap_pack.get('pb_high_price') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
 - 模型提醒: {_nullize_text(dynamic_cap_pack.get('warnings') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
+- Dynamic Cap 實際採用輸入值: {_nullize_text(dynamic_cap_pack.get('cap_inputs') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
+- AI 校對採用/保守值紀錄: {_nullize_text(dynamic_cap_pack.get('cap_adoption_notes') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
 - 倍率拆解表:
 {_prompt_df(dynamic_cap_report_for_prompt, max_rows=30)}
 
