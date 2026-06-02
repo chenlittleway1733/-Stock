@@ -864,6 +864,16 @@ def render_main_page(sidebar_state=None):
                 sys_target_price_est = None; is_capped = False
             
             extreme_target_price = eff_f_eps * extreme_pe_cap_for_calc if eff_f_eps is not None and extreme_pe_cap_for_calc is not None else None
+            # 17-B-5：使用者手動調整 Cap 時，公式合理估值仍受公式倍率/soft ceiling 控制；
+            # 但額外顯示「手動情境推估價」，讓使用者可以看見自行提高可操作 Cap 後的情境價。
+            # 若手動倍率超過 hard ceiling，情境價仍以 hard ceiling 截斷並顯示警示。
+            manual_cap_input = operable_pe_cap
+            manual_cap_for_calc = manual_cap_input
+            manual_cap_hit_hard = False
+            if manual_cap_input is not None and hard_pe_cap is not None and manual_cap_input > hard_pe_cap:
+                manual_cap_for_calc = hard_pe_cap
+                manual_cap_hit_hard = True
+            manual_target_price = eff_f_eps * manual_cap_for_calc if eff_f_eps is not None and manual_cap_for_calc is not None else None
 
             if has_ai_fin_fetch and ai_f_eps_calc is not None and ai_cg is not None and ai_cg > 0:
                 ai_raw_mult = (ai_cg * 100) * target_peg_adj
@@ -874,6 +884,7 @@ def render_main_page(sidebar_state=None):
                 ai_target_price_est = None; ai_is_capped = False
 
             ai_extreme_target_price = ai_f_eps_calc * extreme_pe_cap_for_calc if has_ai_fin_fetch and ai_f_eps_calc is not None and extreme_pe_cap_for_calc is not None else None
+            ai_manual_target_price = ai_f_eps_calc * manual_cap_for_calc if has_ai_fin_fetch and ai_f_eps_calc is not None and manual_cap_for_calc is not None else None
 
             # ==========================================
             # ⚠️ 系統 / AI 分歧警告：EPS / YoY / PEG / 合理價 / D/E
@@ -981,16 +992,21 @@ def render_main_page(sidebar_state=None):
                 ai_tp_est_html = f"<span style='color:#FFD700; font-size:0.95rem;'>(AI推估: {ai_target_price_est:.1f}元{time_str})</span>" if ai_target_price_est else ""            
                 sys_ext_str = f"{extreme_target_price:.1f}元" if extreme_target_price else "N/A"
                 ai_ext_str = f"<span style='color:#FFD700; font-size:0.95rem;'>(AI推估: {ai_extreme_target_price:.1f}元{time_str})</span>" if ai_extreme_target_price else ""   
+                manual_tp_str = f"{manual_target_price:.1f}元" if manual_target_price else "N/A"
+                ai_manual_str = f"<span style='color:#FFD700; font-size:0.95rem;'>(AI推估: {ai_manual_target_price:.1f}元{time_str})</span>" if ai_manual_target_price else ""
+                if manual_cap_hit_hard:
+                    cap_warning_html += f"<br><span style='color:#ff4d4d; font-weight:bold;'>手動情境倍率 {manual_cap_input:.1f}x 已超過產業 hard ceiling，情境價以 {hard_pe_cap:.1f}x 截斷。</span>"
                 debug_eps = eff_f_eps if eff_f_eps else 0
                 # 🚀 修正處：將計算出來的結果回填給純文字變數 tp_est_str，讓提示詞抓得到
                 ai_tp_txt = f"{ai_target_price_est:.1f}元" if ai_target_price_est else "N/A"
                 ai_ext_txt = f"{ai_extreme_target_price:.1f}元" if ai_extreme_target_price else "N/A"
+                ai_manual_txt = f"{ai_manual_target_price:.1f}元" if ai_manual_target_price else "N/A"
                 if has_ai_fin_fetch:
-                    tp_est_str = f"公式合理估值: {sys_tp_str} (AI公式合理估值: {ai_tp_txt}) | 樂觀情境價: {sys_ext_str} (AI樂觀情境價: {ai_ext_txt}) | 公式倍率: {formula_pe_cap:.1f}x | 可操作倍率: {operable_pe_cap:.1f}x"
+                    tp_est_str = f"公式合理估值: {sys_tp_str} (AI公式合理估值: {ai_tp_txt}) | 手動情境推估價: {manual_tp_str} (AI手動情境: {ai_manual_txt}) | 樂觀情境價: {sys_ext_str} (AI樂觀情境價: {ai_ext_txt}) | 公式倍率: {formula_pe_cap:.1f}x | 手動/可操作倍率: {operable_pe_cap:.1f}x"
                 else:
-                    tp_est_str = f"公式合理估值: {sys_tp_str} | 樂觀情境價: {sys_ext_str} | 公式倍率: {formula_pe_cap:.1f}x | 可操作倍率: {operable_pe_cap:.1f}x"
+                    tp_est_str = f"公式合理估值: {sys_tp_str} | 手動情境推估價: {manual_tp_str} | 樂觀情境價: {sys_ext_str} | 公式倍率: {formula_pe_cap:.1f}x | 手動/可操作倍率: {operable_pe_cap:.1f}x"
                 eps_period_note = raw_ai_period or "系統/推估，請確認 EPS 年期"
-                target_price_html = f"<div style='color:#aaa; font-size:0.85rem; border-top:1px solid #444; padding-top:8px; margin-top:8px;'>🎯 公式合理估值 (PEG 推算，非買賣目標): <b style='color:#fff; font-size:1.1rem;'>{sys_tp_str}</b> <br>{ai_tp_est_html}<br>🚀 <span style='color:#ff4d4d; font-weight:bold;'>樂觀情境價 (Forward EPS × soft ceiling，高風險情境): <span style='font-size:1.2rem;'>{sys_ext_str}</span> <br>{ai_ext_str}</span><br><div style='background:#2c2c2c; padding:4px 8px; border-radius:4px; margin-top:4px;'><small style='color:#00bfff;'>🐛 [底層運算除錯] EPS: {debug_eps:.2f}｜EPS 年期/來源: {eps_period_note}｜公式倍率: {formula_pe_cap:.1f}x｜可操作倍率: {operable_pe_cap:.1f}x｜樂觀倍率: {extreme_pe_cap_for_calc:.1f}x</small></div>{cap_warning_html}</div>"
+                target_price_html = f"<div style='color:#aaa; font-size:0.85rem; border-top:1px solid #444; padding-top:8px; margin-top:8px;'>🎯 公式合理估值 (PEG 推算，非買賣目標): <b style='color:#fff; font-size:1.1rem;'>{sys_tp_str}</b> <br>{ai_tp_est_html}<br>🛠️ <span style='color:#00bfff; font-weight:bold;'>手動情境推估價 (EPS × 使用者可操作 Cap): <span style='font-size:1.15rem;'>{manual_tp_str}</span> <br>{ai_manual_str}</span><br>🚀 <span style='color:#ff4d4d; font-weight:bold;'>樂觀情境價 (Forward EPS × soft ceiling，高風險情境): <span style='font-size:1.2rem;'>{sys_ext_str}</span> <br>{ai_ext_str}</span><br><div style='background:#2c2c2c; padding:4px 8px; border-radius:4px; margin-top:4px;'><small style='color:#00bfff;'>🐛 [底層運算除錯] EPS: {debug_eps:.2f}｜EPS 年期/來源: {eps_period_note}｜公式倍率: {formula_pe_cap:.1f}x｜手動/可操作倍率: {operable_pe_cap:.1f}x｜樂觀倍率: {extreme_pe_cap_for_calc:.1f}x</small></div>{cap_warning_html}</div>"
 
             # ==========================================
             # 🧭 法人目標價可信度 + 公式估值 / 可操作估值分離
@@ -1530,6 +1546,8 @@ def render_main_page(sidebar_state=None):
 - 公式合理倍率: {_nullize_text(dynamic_cap_pack.get('formula_cap') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
 - 樂觀情境倍率: {_nullize_text(dynamic_cap_pack.get('optimistic_cap') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
 - 使用者帶入可操作 Cap: {_nullize_text(target_pe_cap)}
+- 手動情境推估價: {_nullize_text(manual_target_price if 'manual_target_price' in locals() else None)}
+- AI手動情境推估價: {_nullize_text(ai_manual_target_price if 'ai_manual_target_price' in locals() else None)}
 - 樓地板 / soft ceiling / hard ceiling: {_nullize_text(dynamic_cap_pack.get('floor_cap') if isinstance(dynamic_cap_pack, dict) else 'NULL')} / {_nullize_text(dynamic_cap_pack.get('soft_ceiling_cap') if isinstance(dynamic_cap_pack, dict) else 'NULL')} / {_nullize_text(dynamic_cap_pack.get('hard_ceiling_cap') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
 - 模型版本: {_nullize_text(dynamic_cap_pack.get('model_version') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
 - P/B 週期模型 BVPS: {_nullize_text(dynamic_cap_pack.get('bvps') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
