@@ -1,10 +1,11 @@
 """
-台股股票 → 產業估值模型對應表（第 17-C 全股票分類稽核修正版）。
+台股股票 → 產業估值模型對應表（第 17-C-6 IC 設計 / ASIC / IP 估值分層校準）。
 
 原則：
 - primary_taxon 決定主要估值模型。
 - themes 只作題材標籤，不應取代主產業分類。
 - 低軌衛星、車用、機器人、AI PC 等多數情況先作 theme，除非公司本業即為該主產業。
+- 第 17-C-6：IC 設計拆為一般 IC、平台型 AI Edge、ASIC 設計服務、高能見度 AI ASIC、IP/Royalty。
 """
 
 STOCK_MAPPING = {'1319': {'name': '東陽', 'primary_taxon': 'AUTO_PARTS_AM', 'themes': ['AM汽車零件', '車用零件']},
@@ -44,6 +45,7 @@ STOCK_MAPPING = {'1319': {'name': '東陽', 'primary_taxon': 'AUTO_PARTS_AM', 't
  '2371': {'name': '大同', 'primary_taxon': 'GRID_POWER_STORAGE', 'themes': ['重電', '電網', '機器人題材']},
  '2376': {'name': '技嘉', 'primary_taxon': 'AI_SERVER_BOARD_SYSTEM', 'themes': ['主板', 'GPU', 'AI伺服器系統']},
  '2377': {'name': '微星', 'primary_taxon': 'AI_SERVER_BOARD_SYSTEM', 'themes': ['主板', 'GPU', 'AI伺服器系統']},
+ '2379': {'name': '瑞昱', 'primary_taxon': 'IC_DESIGN_PLATFORM_AI_EDGE', 'themes': ['網通晶片', '音訊晶片', 'AI Edge']},
  '2382': {'name': '廣達', 'primary_taxon': 'AI_SERVER_ODM', 'themes': ['AI伺服器', 'ODM']},
  '2383': {'name': '台光電', 'primary_taxon': 'CCL_HIGH_SPEED_MATERIALS', 'themes': ['CCL', '高速材料', 'AI伺服器', '高階PCB材料']},
  '2388': {'name': '威盛', 'primary_taxon': 'IC_DESIGN_ASIC', 'themes': ['AI邊緣運算', '車用']},
@@ -54,7 +56,8 @@ STOCK_MAPPING = {'1319': {'name': '東陽', 'primary_taxon': 'AUTO_PARTS_AM', 't
  '2449': {'name': '京元電子', 'primary_taxon': 'OSAT_TESTING', 'themes': ['測試', 'AI晶片測試']},
  '2451': {'name': '創見', 'primary_taxon': 'MEMORY_CYCLE', 'themes': ['記憶體模組']},
  '2453': {'name': '凌群', 'primary_taxon': 'SOFTWARE_SECURITY_CLOUD', 'themes': ['系統整合']},
- '2454': {'name': '聯發科', 'primary_taxon': 'IC_DESIGN_ASIC', 'themes': ['AI ASIC', '手機晶片', '車用電子']},
+ '2454': {'name': '聯發科', 'primary_taxon': 'IC_DESIGN_PLATFORM_AI_EDGE', 'themes': ['手機晶片', 'AI Edge', 'AI ASIC', '車用電子']},
+ '2458': {'name': '義隆', 'primary_taxon': 'IC_DESIGN_CONSUMER', 'themes': ['觸控IC', 'MCU', '消費性IC']},
  '2464': {'name': '盟立', 'primary_taxon': 'ROBOTICS_AUTOMATION', 'themes': ['自動化']},
  '2467': {'name': '志聖', 'primary_taxon': 'SEMICAP_COWOS_EQUIPMENT', 'themes': ['設備', 'PCB設備']},
  '2480': {'name': '敦陽科', 'primary_taxon': 'SOFTWARE_SECURITY_CLOUD', 'themes': ['系統整合']},
@@ -71,7 +74,8 @@ STOCK_MAPPING = {'1319': {'name': '東陽', 'primary_taxon': 'AUTO_PARTS_AM', 't
  '3019': {'name': '亞光', 'primary_taxon': 'OPTICS_LENS_MODULE', 'themes': ['光學模組', '車用光學']},
  '3025': {'name': '星通', 'primary_taxon': 'NETWORK_SWITCH', 'themes': ['網通']},
  '3029': {'name': '零壹', 'primary_taxon': 'SOFTWARE_SECURITY_CLOUD', 'themes': ['資安', '雲端']},
- '3035': {'name': '智原', 'primary_taxon': 'IC_DESIGN_ASIC_IP', 'themes': ['ASIC', '設計服務']},
+ '3034': {'name': '聯詠', 'primary_taxon': 'IC_DESIGN_CONSUMER', 'themes': ['驅動IC', 'TDDI', '消費性IC']},
+ '3035': {'name': '智原', 'primary_taxon': 'IC_DESIGN_ASIC_SERVICE', 'themes': ['ASIC', '設計服務', 'NRE']},
  '3037': {'name': '欣興', 'primary_taxon': 'ABF_SUBSTRATE', 'themes': ['AI載板', 'HPC', 'ABF']},
  '3044': {'name': '健鼎', 'primary_taxon': 'SERVER_PCB_BOARD', 'themes': ['PCB', '伺服器']},
  '3078': {'name': '僑威', 'primary_taxon': 'POWER_BBU', 'themes': ['電源']},
@@ -79,6 +83,7 @@ STOCK_MAPPING = {'1319': {'name': '東陽', 'primary_taxon': 'AUTO_PARTS_AM', 't
  '3131': {'name': '弘塑', 'primary_taxon': 'SEMICAP_COWOS_EQUIPMENT', 'themes': ['CoWoS', '濕製程']},
  '3163': {'name': '波若威', 'primary_taxon': 'OPTICAL_COMM_SILICON_PHOTONICS', 'themes': ['光通訊']},
  '3189': {'name': '景碩', 'primary_taxon': 'ABF_SUBSTRATE', 'themes': ['ABF', '載板']},
+ '3227': {'name': '原相', 'primary_taxon': 'IC_DESIGN_CONSUMER', 'themes': ['感測IC', '滑鼠晶片', '消費性IC']},
  '3231': {'name': '緯創', 'primary_taxon': 'AI_SERVER_ODM', 'themes': ['AI伺服器', 'ODM']},
  '3260': {'name': '威剛', 'primary_taxon': 'MEMORY_CYCLE', 'themes': ['記憶體模組']},
  '3264': {'name': '欣銓', 'primary_taxon': 'OSAT_TESTING', 'themes': ['測試', '車用']},
@@ -88,20 +93,21 @@ STOCK_MAPPING = {'1319': {'name': '東陽', 'primary_taxon': 'AUTO_PARTS_AM', 't
  '3363': {'name': '上詮', 'primary_taxon': 'OPTICAL_COMM_SILICON_PHOTONICS', 'themes': ['光通訊']},
  '3380': {'name': '明泰', 'primary_taxon': 'NETWORK_SWITCH', 'themes': ['網通', '低軌衛星']},
  '3406': {'name': '玉晶光', 'primary_taxon': 'OPTICS_LENS_MODULE', 'themes': ['手機鏡頭', '光學']},
- '3443': {'name': '創意', 'primary_taxon': 'IC_DESIGN_ASIC_IP', 'themes': ['ASIC', '設計服務', 'HPC']},
+ '3443': {'name': '創意', 'primary_taxon': 'IC_DESIGN_ASIC_SERVICE', 'themes': ['ASIC', '設計服務', 'NRE', 'HPC']},
  '3450': {'name': '聯鈞', 'primary_taxon': 'OPTICAL_COMM_SILICON_PHOTONICS', 'themes': ['光通訊']},
  '3455': {'name': '由田', 'primary_taxon': 'TEST_AUTOMATION_EQUIPMENT', 'themes': ['AOI', '檢測設備', 'PCB/半導體檢測']},
  '3483': {'name': '力致', 'primary_taxon': 'THERMAL_LIQUID_COOLING', 'themes': ['散熱']},
  '3491': {'name': '昇達科', 'primary_taxon': 'SPACE_LEO_SATELLITE', 'themes': ['毫米波', '低軌衛星']},
- '3529': {'name': '力旺', 'primary_taxon': 'IP_EDA_DESIGN_SERVICE', 'themes': ['矽智財', 'IP授權']},
+ '3529': {'name': '力旺', 'primary_taxon': 'IC_DESIGN_IP_ROYALTY', 'themes': ['矽智財', 'IP授權', 'Royalty']},
  '3533': {'name': '嘉澤', 'primary_taxon': 'CONNECTOR_CABLE', 'themes': ['高速連接器', 'AI伺服器']},
+ '3545': {'name': '敦泰', 'primary_taxon': 'IC_DESIGN_CONSUMER', 'themes': ['驅動IC', '觸控IC', '消費性IC']},
  '3552': {'name': '同致', 'primary_taxon': 'EV_AUTO_ELECTRONICS', 'themes': ['ADAS', '車用電子']},
  '3583': {'name': '辛耘', 'primary_taxon': 'SEMICAP_COWOS_EQUIPMENT', 'themes': ['CoWoS', '半導體設備']},
  '3596': {'name': '智易', 'primary_taxon': 'NETWORK_SWITCH', 'themes': ['網通']},
  '3605': {'name': '宏致', 'primary_taxon': 'CONNECTOR_CABLE', 'themes': ['連接器']},
  '3630': {'name': '新鉅科', 'primary_taxon': 'OPTICS_LENS_MODULE', 'themes': ['光學鏡頭']},
  '3653': {'name': '健策', 'primary_taxon': 'THERMAL_LIQUID_COOLING', 'themes': ['均熱片', '散熱']},
- '3661': {'name': '世芯-KY', 'primary_taxon': 'IC_DESIGN_ASIC_IP', 'themes': ['AI ASIC', 'HPC', '客製化晶片']},
+ '3661': {'name': '世芯-KY', 'primary_taxon': 'IC_DESIGN_ASIC_HIGH_VISIBILITY', 'themes': ['AI ASIC', 'HPC', '客製化晶片', '高能見度ASIC']},
  '3665': {'name': '貿聯-KY', 'primary_taxon': 'CONNECTOR_CABLE', 'themes': ['高速傳輸', '車用電子', 'AI伺服器']},
  '3680': {'name': '家登', 'primary_taxon': 'SEMICONDUCTOR_MATERIALS_CONSUMABLES', 'themes': ['EUV', '晶圓載具', '半導體耗材']},
  '3693': {'name': '營邦', 'primary_taxon': 'SERVER_CHASSIS_RAIL', 'themes': ['伺服器機殼']},
@@ -120,7 +126,7 @@ STOCK_MAPPING = {'1319': {'name': '東陽', 'primary_taxon': 'AUTO_PARTS_AM', 't
  '4908': {'name': '前鼎', 'primary_taxon': 'OPTICAL_COMM_SILICON_PHOTONICS', 'themes': ['光通訊']},
  '4938': {'name': '和碩', 'primary_taxon': 'PC_NB_ODM', 'themes': ['ODM', 'EMS', 'PC/NB代工']},
  '4953': {'name': '緯軟', 'primary_taxon': 'SOFTWARE_SECURITY_CLOUD', 'themes': ['軟體服務']},
- '4966': {'name': '譜瑞-KY', 'primary_taxon': 'IC_DESIGN_ASIC', 'themes': ['高速介面', 'ASIC']},
+ '4966': {'name': '譜瑞-KY', 'primary_taxon': 'IC_DESIGN_PLATFORM_AI_EDGE', 'themes': ['高速介面', 'USB', '車用', 'AI PC']},
  '4967': {'name': '十銓', 'primary_taxon': 'MEMORY_CYCLE', 'themes': ['記憶體模組']},
  '4976': {'name': '佳凌', 'primary_taxon': 'OPTICS_LENS_MODULE', 'themes': ['光學鏡頭']},
  '4977': {'name': '眾達-KY', 'primary_taxon': 'OPTICAL_COMM_SILICON_PHOTONICS', 'themes': ['光通訊']},
@@ -139,6 +145,7 @@ STOCK_MAPPING = {'1319': {'name': '東陽', 'primary_taxon': 'AUTO_PARTS_AM', 't
  '6188': {'name': '廣明', 'primary_taxon': 'ROBOTICS_AUTOMATION', 'themes': ['機器人題材', '自動化']},
  '6196': {'name': '帆宣', 'primary_taxon': 'FAB_FACILITY_MATERIALS', 'themes': ['廠務', '半導體工程']},
  '6197': {'name': '佳必琪', 'primary_taxon': 'CONNECTOR_CABLE', 'themes': ['高速連接', '線材']},
+ '6202': {'name': '盛群', 'primary_taxon': 'IC_DESIGN_CONSUMER', 'themes': ['MCU', '消費性IC']},
  '6209': {'name': '今國光', 'primary_taxon': 'OPTICS_LENS_MODULE', 'themes': ['光學鏡頭']},
  '6213': {'name': '聯茂', 'primary_taxon': 'CCL_HIGH_SPEED_MATERIALS', 'themes': ['CCL', '銅箔基板', 'PCB材料', '高階材料']},
  '6214': {'name': '精誠', 'primary_taxon': 'SOFTWARE_SECURITY_CLOUD', 'themes': ['系統整合', '資安']},
@@ -162,12 +169,12 @@ STOCK_MAPPING = {'1319': {'name': '東陽', 'primary_taxon': 'AUTO_PARTS_AM', 't
  '6515': {'name': '穎崴', 'primary_taxon': 'PROBE_AI_ASIC', 'themes': ['AI ASIC', '測試介面', '高階探針卡']},
  '6530': {'name': '創威', 'primary_taxon': 'OPTICAL_COMM_SILICON_PHOTONICS', 'themes': ['光通訊']},
  '6531': {'name': '愛普*', 'primary_taxon': 'IC_DESIGN_ASIC', 'themes': ['記憶體IP', 'AI記憶體']},
- '6533': {'name': '晶心科', 'primary_taxon': 'IP_EDA_DESIGN_SERVICE', 'themes': ['RISC-V', 'IP']},
+ '6533': {'name': '晶心科', 'primary_taxon': 'IC_DESIGN_IP_ROYALTY', 'themes': ['RISC-V', 'IP', 'Royalty']},
  '6584': {'name': '南俊國際', 'primary_taxon': 'SERVER_CHASSIS_RAIL', 'themes': ['滑軌']},
  '6589': {'name': '台康生技', 'primary_taxon': 'BIOTECH_MEDICAL', 'themes': ['生物相似藥']},
  '6591': {'name': '動力-KY', 'primary_taxon': 'THERMAL_LIQUID_COOLING', 'themes': ['風扇', '散熱']},
  '6640': {'name': '均華', 'primary_taxon': 'SEMICAP_COWOS_EQUIPMENT', 'themes': ['先進封裝設備']},
- '6643': {'name': 'M31', 'primary_taxon': 'IP_EDA_DESIGN_SERVICE', 'themes': ['矽智財', 'IP授權']},
+ '6643': {'name': 'M31', 'primary_taxon': 'IC_DESIGN_IP_ROYALTY', 'themes': ['矽智財', 'IP授權', 'Royalty']},
  '6664': {'name': '群翊', 'primary_taxon': 'SEMICAP_COWOS_EQUIPMENT', 'themes': ['設備', 'PCB設備']},
  '6669': {'name': '緯穎', 'primary_taxon': 'AI_SERVER_ODM', 'themes': ['AI伺服器', '資料中心']},
  '6683': {'name': '雍智科技', 'primary_taxon': 'PROBE_TEST_INTERFACE', 'themes': ['測試介面']},
@@ -181,6 +188,7 @@ STOCK_MAPPING = {'1319': {'name': '東陽', 'primary_taxon': 'AUTO_PARTS_AM', 't
  '6811': {'name': '宏碁資訊', 'primary_taxon': 'SOFTWARE_SECURITY_CLOUD', 'themes': ['雲端', '系統整合']},
  '7769': {'name': '鴻勁', 'primary_taxon': 'TEST_AUTOMATION_EQUIPMENT', 'themes': ['測試設備', 'AI晶片測試', '自動化測試']},
  '7822': {'name': '倍利科', 'primary_taxon': 'TEST_AUTOMATION_EQUIPMENT', 'themes': ['半導體檢測', '設備', 'AOI']},
+ '8016': {'name': '矽創', 'primary_taxon': 'IC_DESIGN_CONSUMER', 'themes': ['驅動IC', '消費性IC']},
  '8027': {'name': '鈦昇', 'primary_taxon': 'SEMICAP_COWOS_EQUIPMENT', 'themes': ['設備']},
  '8033': {'name': '雷虎', 'primary_taxon': 'THEME_EVENT', 'themes': ['軍工', '無人機', '題材']},
  '8039': {'name': '台虹', 'primary_taxon': 'SPECIALTY_CHEM_ELECTRONIC_MATERIALS', 'themes': ['軟板材料', 'FCCL', 'PCB材料', '電子材料']},
@@ -195,3 +203,4 @@ STOCK_MAPPING = {'1319': {'name': '東陽', 'primary_taxon': 'AUTO_PARTS_AM', 't
  '8374': {'name': '羅昇', 'primary_taxon': 'ROBOTICS_AUTOMATION', 'themes': ['自動化']},
  '8996': {'name': '高力', 'primary_taxon': 'THERMAL_LIQUID_COOLING', 'themes': ['散熱', '熱交換']},
  '9958': {'name': '世紀鋼', 'primary_taxon': 'GREEN_ENERGY_INFRA', 'themes': ['風電', '鋼構', '綠能基建']}}
+

@@ -1,5 +1,5 @@
 """
-Dynamic Cap 2.0 係數校準模型（第 17-C-4 階段）。
+Dynamic Cap 2.0 係數校準模型（第 17-C-6 階段）。
 
 設計原則：
 - 不再採用「產業基準 + 各項絕對倍數」加總，避免倍率連續堆高。
@@ -420,6 +420,39 @@ CALIBRATION_DEFAULTS: Dict[str, Dict[str, Any]] = {
     },
 }
 
+
+
+# ===== 第 17-C-6：IC 設計 / ASIC / IP 分層預設校準 =====
+CALIBRATION_DEFAULTS.update({
+    "IC_DESIGN_ASIC_SERVICE": {
+        "base_pe": 35.0, "floor_pe": 22.0, "soft_ceiling_pe": 55.0, "hard_ceiling_pe": 70.0,
+        "max_growth_factor": 1.25, "max_quality_factor": 1.20, "max_theme_factor": 1.12, "max_scale_factor": 1.08,
+        "gross_margin_baseline": 0.42, "gross_margin_good": 0.50, "gross_margin_excellent": 0.60,
+        "baked_in_themes": ["asic", "設計服務", "nre"],
+        "geopolitical_factor": 0.97,
+    },
+    "IC_DESIGN_ASIC_HIGH_VISIBILITY": {
+        "base_pe": 45.0, "floor_pe": 28.0, "soft_ceiling_pe": 70.0, "hard_ceiling_pe": 85.0,
+        "max_growth_factor": 1.30, "max_quality_factor": 1.22, "max_theme_factor": 1.12, "max_scale_factor": 1.08,
+        "gross_margin_baseline": 0.45, "gross_margin_good": 0.55, "gross_margin_excellent": 0.65,
+        "baked_in_themes": ["ai asic", "custom silicon", "hyperscaler", "hpc"],
+        "geopolitical_factor": 0.97,
+    },
+    "IC_DESIGN_IP_ROYALTY": {
+        "base_pe": 45.0, "floor_pe": 28.0, "soft_ceiling_pe": 75.0, "hard_ceiling_pe": 90.0,
+        "max_growth_factor": 1.28, "max_quality_factor": 1.25, "max_theme_factor": 1.10, "max_scale_factor": 1.08,
+        "gross_margin_baseline": 0.55, "gross_margin_good": 0.65, "gross_margin_excellent": 0.75,
+        "baked_in_themes": ["ip", "矽智財", "royalty", "eda"],
+        "geopolitical_factor": 0.98,
+    },
+    "IC_DESIGN_PLATFORM_AI_EDGE": {
+        "base_pe": 24.0, "floor_pe": 14.0, "soft_ceiling_pe": 38.0, "hard_ceiling_pe": 50.0,
+        "max_growth_factor": 1.18, "max_quality_factor": 1.14, "max_theme_factor": 1.08, "max_scale_factor": 1.03,
+        "gross_margin_baseline": 0.42, "gross_margin_good": 0.48, "gross_margin_excellent": 0.55,
+        "baked_in_themes": ["ai edge", "手機晶片", "平台型 ic"],
+        "geopolitical_factor": 0.97,
+    },
+})
 
 def _calibration(industry_profile: Dict[str, Any]) -> Dict[str, Any]:
     key = str(industry_profile.get("model_key") or industry_profile.get("taxon_key") or "GENERAL")
@@ -1051,7 +1084,7 @@ def calculate_dynamic_cap_v2(
     # 若 TTM 與 Forward 都尚未穩定轉正，全面停用 P/E 估值；若 TTM 為負但有明確正 Forward EPS，可保留 Forward P/E 但列高風險。
     if primary_valuation in {"forward_pe", "pe_pb_crosscheck", "forward_pe_pb_cycle"} and ((adopted_forward_eps is None or adopted_forward_eps <= 0) and (adopted_ttm_eps is None or adopted_ttm_eps <= 0)):
         pack = build_turnaround_event_pack(p, "EPS 尚未穩定轉正，Dynamic Cap 停用 P/E 估值，改用轉機 / 事件模型。")
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "model_version": "Dynamic Cap 2.0 calibration 17-C-5"})
+        pack.update({"stock_id": stock_id, "stock_name": stock_name, "model_version": "Dynamic Cap 2.0 calibration 17-C-6"})
         return pack
 
     # 17-B-4：低軌衛星、機器人、生技等條件式 P/E 模型，若 EPS / 訂單未落地，直接切換事件模型。
@@ -1059,21 +1092,21 @@ def calculate_dynamic_cap_v2(
         pack = build_event_theme_pack(p)
         note = p.get("event_switch_note") or "EPS / 訂單未落地，依 17-B-4 校準規則改用事件模型。"
         pack["warnings"] = list(pack.get("warnings") or []) + [note]
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-5"})
+        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-6"})
         return pack
 
     if pe_app is False or primary_valuation in {"event_chip", "theme_event"}:
         pack = build_event_theme_pack(p)
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-5"})
+        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-6"})
         return pack
     if primary_valuation.startswith("pb") or primary_valuation in {"pb", "pb_roe"}:
         pack = build_pb_cycle_pack(current_price, pb_ratio, p)
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-5"})
+        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-6"})
         return pack
 
     base = _sf(c.get("base_pe"), 20.0) or 20.0
     rows: List[Dict[str, Any]] = []
-    _add_row(rows, "基準", "產業基準倍率", f"{base:.1f}x", f"{p.get('model_label', p.get('display_name', '一般產業'))} 17-C-5 校準後 base_pe；非買進追價倍率")
+    _add_row(rows, "基準", "產業基準倍率", f"{base:.1f}x", f"{p.get('model_label', p.get('display_name', '一般產業'))} 17-C-6 校準後 base_pe；非買進追價倍率")
 
     liq = liquidity_factor(hist_data, info)
     g = growth_factor_hierarchical(
@@ -1202,7 +1235,7 @@ def calculate_dynamic_cap_v2(
     return {
         "available": True,
         "valuation_mode": primary_valuation,
-        "model_version": "Dynamic Cap 2.0 calibration 17-C-5",
+        "model_version": "Dynamic Cap 2.0 calibration 17-C-6",
         "base_multiple": base,
         "growth_premium": g,  # 保留舊 key，實際為 growth factor pack
         "gross_margin_premium": q,  # 保留舊 key，實際為 quality factor pack

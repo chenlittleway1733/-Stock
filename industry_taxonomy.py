@@ -1503,6 +1503,90 @@ INDUSTRY_TAXONOMY["SPACE_LEO_SATELLITE"].update({"event_model_if_eps_unstable": 
 INDUSTRY_TAXONOMY["BIOTECH_MEDICAL"].update({"base_pe": 22, "floor_pe": 12, "soft_ceiling_pe": 35, "hard_ceiling_pe": 45, "event_model_if_eps_unstable": True, "event_switch_note": "新藥/虧損生技禁用 P/E，改用里程碑事件模型；成熟醫材/藥廠才用 P/E。", "calibration_source": "17-C-4 產業基準倍率重構"})
 
 
+
+# ===== 第 17-C-6：IC 設計 / ASIC / IP 估值分層校準 =====
+# 目的：將「一般 IC 設計、平台型 AI Edge、ASIC 設計服務、高能見度 AI ASIC、IP/Royalty」拆分，避免 base 35x 同時低估高純度 AI ASIC/IP，又高估一般 IC 設計。
+
+INDUSTRY_TAXONOMY.update({
+    "IC_DESIGN_ASIC_SERVICE": {
+        "display_name": "ASIC 設計服務 / 客製化晶片設計",
+        "parent": "半導體核心",
+        "primary_valuation": "forward_pe",
+        "secondary_valuation": ["eps_cagr", "gross_margin", "nre", "orders", "customer_concentration"],
+        "valuation_focus": ["Forward P/E", "NRE", "設計案能見度", "毛利率", "客戶集中度"],
+        "base_pe": 35, "pe_range": (25, 70), "floor_pe": 22, "soft_ceiling_pe": 55, "hard_ceiling_pe": 70,
+        "cyclical": False, "pe_applicable": True, "theme_premium_allowed": True,
+        "max_growth_factor": 1.25, "max_quality_factor": 1.20, "max_theme_factor": 1.12, "max_scale_factor": 1.08,
+        "gross_margin_baseline": 0.42, "gross_margin_good": 0.50, "gross_margin_excellent": 0.60,
+        "baked_in_themes": ["ASIC", "設計服務", "NRE"],
+        "geopolitical_factor": 0.97,
+        "risk_flags": ["客戶集中", "NRE 認列波動", "量產時程", "先進製程成本"],
+        "note": "世芯/創意/智原等 ASIC 設計服務常態模型；若 AI ASIC 量產與 Forward EPS 高可信，可升級至 IC_DESIGN_ASIC_HIGH_VISIBILITY。",
+        "calibration_source": "17-C-6 IC 設計/ASIC/IP 分層校準"
+    },
+    "IC_DESIGN_ASIC_HIGH_VISIBILITY": {
+        "display_name": "高能見度 AI ASIC / Custom Silicon",
+        "parent": "半導體核心",
+        "primary_valuation": "forward_pe",
+        "secondary_valuation": ["eps_cagr", "gross_margin", "ai_asic_revenue", "customer_tapeout", "cowos_capacity"],
+        "valuation_focus": ["Forward P/E", "法人 Forward EPS", "AI ASIC 量產", "NRE/量產轉換", "CoWoS/先進封裝能見度"],
+        "base_pe": 45, "pe_range": (30, 85), "floor_pe": 28, "soft_ceiling_pe": 70, "hard_ceiling_pe": 85,
+        "cyclical": False, "pe_applicable": True, "theme_premium_allowed": True,
+        "max_growth_factor": 1.30, "max_quality_factor": 1.22, "max_theme_factor": 1.12, "max_scale_factor": 1.08,
+        "gross_margin_baseline": 0.45, "gross_margin_good": 0.55, "gross_margin_excellent": 0.65,
+        "baked_in_themes": ["AI ASIC", "custom silicon", "hyperscaler", "HPC"],
+        "geopolitical_factor": 0.97,
+        "risk_flags": ["超高估值修正", "單一大客戶", "專案遞延", "EPS 上修不如預期"],
+        "note": "僅適用 AI ASIC 專案已量產/高可信 Forward EPS/法人共識明確者；超過 hard ceiling 後應標示市場重估/動能區。",
+        "event_model_if_eps_unstable": True,
+        "event_switch_note": "若 AI ASIC EPS 或量產營收未落地，不得套高能見度模型，應降回 ASIC_SERVICE 或事件模型。",
+        "calibration_source": "17-C-6 IC 設計/ASIC/IP 分層校準"
+    },
+    "IC_DESIGN_IP_ROYALTY": {
+        "display_name": "IP / 矽智財 / Royalty 授權",
+        "parent": "半導體核心",
+        "primary_valuation": "forward_pe",
+        "secondary_valuation": ["royalty", "gross_margin", "operating_margin", "license_pipeline"],
+        "valuation_focus": ["Forward P/E", "Royalty 成長", "毛利率", "營益率", "授權案能見度"],
+        "base_pe": 45, "pe_range": (30, 90), "floor_pe": 28, "soft_ceiling_pe": 75, "hard_ceiling_pe": 90,
+        "cyclical": False, "pe_applicable": True, "theme_premium_allowed": True,
+        "max_growth_factor": 1.28, "max_quality_factor": 1.25, "max_theme_factor": 1.10, "max_scale_factor": 1.08,
+        "gross_margin_baseline": 0.55, "gross_margin_good": 0.65, "gross_margin_excellent": 0.75,
+        "baked_in_themes": ["IP", "矽智財", "Royalty", "EDA"],
+        "geopolitical_factor": 0.98,
+        "risk_flags": ["授權案遞延", "royalty 放大不如預期", "高估值修正", "客戶集中"],
+        "note": "M31/力旺/晶心科等 IP/Royalty 模型；若 EPS 未落地或授權案未放大，需降級使用。",
+        "event_model_if_eps_unstable": True,
+        "event_switch_note": "若 Royalty/EPS 未落地，不得直接套 IP 高倍率，改用事件模型或較保守倍率。",
+        "calibration_source": "17-C-6 IC 設計/ASIC/IP 分層校準"
+    },
+    "IC_DESIGN_PLATFORM_AI_EDGE": {
+        "display_name": "平台型 IC 設計 / AI Edge / 大型 SoC",
+        "parent": "半導體核心",
+        "primary_valuation": "forward_pe_pb_cycle",
+        "secondary_valuation": ["product_cycle", "gross_margin", "inventory", "ai_edge_revenue"],
+        "valuation_focus": ["Forward P/E", "手機/網通/車用/AI Edge 產品週期", "庫存循環", "毛利率"],
+        "base_pe": 24, "pe_range": (16, 50), "floor_pe": 14, "soft_ceiling_pe": 38, "hard_ceiling_pe": 50,
+        "cyclical": True, "pe_applicable": True, "theme_premium_allowed": True,
+        "max_growth_factor": 1.18, "max_quality_factor": 1.14, "max_theme_factor": 1.08, "max_scale_factor": 1.03,
+        "gross_margin_baseline": 0.42, "gross_margin_good": 0.48, "gross_margin_excellent": 0.55,
+        "baked_in_themes": ["AI Edge", "手機晶片", "平台型 IC"],
+        "geopolitical_factor": 0.97,
+        "risk_flags": ["消費性產品週期", "庫存修正", "競爭壓力", "AI ASIC 貢獻比重不足"],
+        "note": "聯發科/瑞昱類大型平台 IC 設計；AI 是成長曲線之一，但不等於純 AI ASIC 高倍率。",
+        "calibration_source": "17-C-6 IC 設計/ASIC/IP 分層校準"
+    },
+})
+
+# 舊分類保留為相容別名，但參數降為 ASIC_SERVICE 常態層，避免混用 IP/Royalty 或高能見度 AI ASIC。
+INDUSTRY_TAXONOMY["IC_DESIGN_ASIC_IP"].update({
+    "display_name": "IC 設計 / ASIC / AI 晶片（相容舊分類，建議改用細分類）",
+    "base_pe": 35, "floor_pe": 22, "soft_ceiling_pe": 55, "hard_ceiling_pe": 70,
+    "note": "17-C-6 後建議改用 IC_DESIGN_ASIC_SERVICE、IC_DESIGN_ASIC_HIGH_VISIBILITY、IC_DESIGN_IP_ROYALTY 或 IC_DESIGN_PLATFORM_AI_EDGE。",
+    "calibration_source": "17-C-6 相容舊分類"
+})
+
+
 def get_taxonomy(taxon_key: str):
     """安全取得產業分類設定。"""
     if not taxon_key:

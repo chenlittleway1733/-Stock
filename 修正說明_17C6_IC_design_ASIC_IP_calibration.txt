@@ -1,0 +1,25 @@
+第 17-C-6：IC 設計 / ASIC / IP 估值分層校準
+
+本次修正重點：
+1. 不再以單一 IC_DESIGN_ASIC_IP = base 35 / soft 55 / hard 70 概括所有 IC 設計、ASIC、AI 晶片與 IP/Royalty。
+2. 新增四個細分類：
+   - IC_DESIGN_ASIC_SERVICE：ASIC 設計服務 / NRE，base 35 / soft 55 / hard 70
+   - IC_DESIGN_ASIC_HIGH_VISIBILITY：高能見度 AI ASIC / Custom Silicon，base 45 / soft 70 / hard 85
+   - IC_DESIGN_IP_ROYALTY：IP / 矽智財 / Royalty 授權，base 45 / soft 75 / hard 90
+   - IC_DESIGN_PLATFORM_AI_EDGE：平台型 IC 設計 / AI Edge / 大型 SoC，base 24 / soft 38 / hard 50
+3. 舊 IC_DESIGN_ASIC_IP 保留作相容分類，但說明中建議改用細分類。
+4. stock_mapping.py 初步調整：
+   - 世芯-KY：IC_DESIGN_ASIC_HIGH_VISIBILITY
+   - 創意、智原：IC_DESIGN_ASIC_SERVICE
+   - M31、力旺、晶心科：IC_DESIGN_IP_ROYALTY
+   - 聯發科、瑞昱、譜瑞-KY：IC_DESIGN_PLATFORM_AI_EDGE
+   - 聯詠、義隆、盛群、矽創、敦泰、原相：IC_DESIGN_CONSUMER
+5. stocklist.txt 新增 17-C-6 IC 設計分層段落。
+6. dynamic_cap_model.py 新增 17-C-6 分層預設校準，避免 taxonomy 缺漏時回落到舊分類。
+7. UI 文字版本更新為 17-C-6。
+
+實務判斷：
+- base 35x 對一般 ASIC 設計服務可接受。
+- 對 AI ASIC 量產能見度高、Forward EPS 高可信的公司偏保守，應使用 IC_DESIGN_ASIC_HIGH_VISIBILITY。
+- 對 IP/Royalty 模型，因高毛利與授權/權利金結構，需獨立高倍率模型，但 EPS/royalty 未落地時仍須事件模型或降級。
+- 聯發科這類平台型大型 IC 設計不能直接吃純 AI ASIC 高倍率，應用平台型 AI Edge 模型。
