@@ -638,12 +638,12 @@ def render_main_page(sidebar_state=None):
 
                 if dynamic_cap_pack.get("available") and dynamic_cap_pack.get("final_cap") is not None:
                     suggested_cap = float(dynamic_cap_pack.get("final_cap"))
-                    cap_reason = f"Dynamic Cap 2.0 最終建議倍率：{suggested_cap:.1f}x。已整合產業基準、成長、毛利、ROE、題材、市值與流動性折扣。"
+                    cap_reason = f"Dynamic Cap 2.0 最終建議倍率：{suggested_cap:.1f}x。已採 17-B-2 全產業校準同步：產業基準 × 成長/品質/題材/規模/地緣係數，再乘資料、估值與流動性折扣，並套用產業 hard ceiling。"
                 else:
                     suggested_cap = float(industry_profile.get('cap_hint') or 30.0)
                     cap_reason = f"此產業主要估值模式為 {dynamic_cap_pack.get('valuation_mode', industry_profile.get('primary_valuation', 'N/A'))}，P/E Cap 僅作輔助；後續請優先看 P/B / 週期 / 題材落地。"
 
-                target_pe_cap = st.number_input("⚙️ 動態本益比天花板 (Dynamic Cap 2.0)", value=float(suggested_cap), step=5.0, help="第 17-B 階段：以產業基準倍率 + 成長/毛利/ROE/題材/市值修正，再乘資料可信度、估值風險與流動性折扣。")
+                target_pe_cap = st.number_input("⚙️ 動態本益比天花板 (Dynamic Cap 2.0)", value=float(suggested_cap), step=5.0, help="第 17-B-2 階段：使用全產業校準表，產業基準 × 成長/品質/題材/規模/地緣係數，再乘資料可信度、估值風險與流動性折扣。")
                 if dynamic_cap_pack.get("available"):
                     # 使用者仍可手動覆寫 Cap；若覆寫，估值公式採手動值，拆解表仍保留系統建議值。
                     dynamic_cap_pack["user_selected_cap"] = target_pe_cap
@@ -936,8 +936,11 @@ def render_main_page(sidebar_state=None):
                         if dynamic_cap_pack.get("valuation_mode") == "pb_cycle":
                             st.warning("本分類採 P/B 週期模型：P/E Cap 僅作輔助，不直接作買進倍率。")
                         else:
-                            st.caption("先加總產業基準、成長、毛利、ROE、題材與市值修正，再乘上資料可信度、估值風險與流動性折扣。")
+                            st.caption("17-B-2 已同步全產業校準表：產業基準 × 成長係數 × 品質係數 × 題材係數 × 規模係數 × 地緣政治係數，再乘資料、估值與流動性折扣，最後套用產業 hard ceiling。")
                         st.dataframe(dynamic_cap_pack.get("report"), use_container_width=True, hide_index=True)
+                        dc_warnings = dynamic_cap_pack.get("warnings") or []
+                        if dc_warnings:
+                            st.warning("Dynamic Cap 模型提醒：" + "；".join(str(x) for x in dc_warnings))
                 with st.expander("法人目標價可信度明細", expanded=False):
                     st.dataframe(build_target_price_confidence_report(ai_analyst_count, ai_hi_val, ai_me_val, ai_lo_val, ai_target_rationale), use_container_width=True, hide_index=True)
 
@@ -1376,6 +1379,9 @@ def render_main_page(sidebar_state=None):
 - 主要估值方式: {_nullize_text(industry_profile.get('primary_valuation') if isinstance(industry_profile, dict) else 'NULL')}
 - 次要估值方式: {_nullize_text(industry_profile.get('secondary_valuation') if isinstance(industry_profile, dict) else 'NULL')}
 - P/E 模型適用性: {_nullize_text(industry_profile.get('pe_applicability_text') if isinstance(industry_profile, dict) else 'NULL')}
+- 校準來源: {_nullize_text(industry_profile.get('calibration_source') if isinstance(industry_profile, dict) else 'NULL')}
+- Dynamic Cap floor / soft / hard: {_nullize_text(industry_profile.get('floor_pe') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('soft_ceiling_pe') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('hard_ceiling_pe') if isinstance(industry_profile, dict) else 'NULL')}
+- 事件模型切換: {_nullize_text(industry_profile.get('event_switch_note') if isinstance(industry_profile, dict) else 'NULL')}
 - 是否循環股: {_nullize_text(industry_profile.get('cyclical') if isinstance(industry_profile, dict) else 'NULL')}
 - 是否有 P/E 陷阱: {_nullize_text(industry_profile.get('pe_trap_warning') if isinstance(industry_profile, dict) else 'NULL')}
 - P/B 參考區間: {_nullize_text(industry_profile.get('pb_range') if isinstance(industry_profile, dict) else 'NULL')}
@@ -1389,7 +1395,8 @@ def render_main_page(sidebar_state=None):
 - 原始建議倍率: {_nullize_text(dynamic_cap_pack.get('raw_cap') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
 - 最終建議倍率: {_nullize_text(dynamic_cap_pack.get('final_cap') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
 - 使用者帶入 Cap: {_nullize_text(target_pe_cap)}
-- 樓地板 / 天花板: {_nullize_text(dynamic_cap_pack.get('floor_cap') if isinstance(dynamic_cap_pack, dict) else 'NULL')} / {_nullize_text(dynamic_cap_pack.get('ceiling_cap') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
+- 樓地板 / soft ceiling / hard ceiling: {_nullize_text(dynamic_cap_pack.get('floor_cap') if isinstance(dynamic_cap_pack, dict) else 'NULL')} / {_nullize_text(dynamic_cap_pack.get('soft_ceiling_cap') if isinstance(dynamic_cap_pack, dict) else 'NULL')} / {_nullize_text(dynamic_cap_pack.get('hard_ceiling_cap') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
+- 模型版本: {_nullize_text(dynamic_cap_pack.get('model_version') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
 - P/B 週期模型 BVPS: {_nullize_text(dynamic_cap_pack.get('bvps') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
 - P/B 週期估值區間: {_nullize_text(dynamic_cap_pack.get('pb_low_price') if isinstance(dynamic_cap_pack, dict) else 'NULL')} ～ {_nullize_text(dynamic_cap_pack.get('pb_high_price') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
 - 模型提醒: {_nullize_text(dynamic_cap_pack.get('warnings') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
