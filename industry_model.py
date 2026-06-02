@@ -52,6 +52,22 @@ def _infer_taxon_from_text(stock_id, stock_name="", category="", sector="", indu
     if sid in {"8033"} or any(k.lower() in text for k in ["題材", "軍工", "無人機", "drone"]):
         return "THEME_EVENT"
     keyword_map = [
+        # 17-C：先判斷較細的材料/設備/車用/PC/工具機分類，再落到舊的大分類。
+        ("CCL_HIGH_SPEED_MATERIALS", ["ccl", "銅箔基板", "高速材料", "高階材料"]),
+        ("SPECIALTY_CHEM_ELECTRONIC_MATERIALS", ["特用化學", "電子材料", "pcb材料", "軟板材料", "fccl", "樹脂", "光電材料"]),
+        ("SEMICONDUCTOR_MATERIALS_CONSUMABLES", ["半導體耗材", "晶圓載具", "再生晶圓", "euv pod", "半導體材料"]),
+        ("CIS_SEMICONDUCTOR_OPTICS", ["cis", "影像感測", "半導體光學", "cmos影像"]),
+        ("TEST_AUTOMATION_EQUIPMENT", ["aoi", "自動化檢測", "測試設備", "檢測設備"]),
+        ("GREEN_ENERGY_INFRA", ["風電", "綠能工程", "再生能源", "鋼構"]),
+        ("AUTO_PARTS_AM", ["am汽車", "售後市場", "車燈"]),
+        ("AUTO_PARTS_EV", ["傳動", "ev零組件", "電動車零組件"]),
+        ("AUTO_OEM_CYCLE", ["整車", "汽車集團"]),
+        ("AI_SERVER_BOARD_SYSTEM", ["板卡", "主板", "gpu", "伺服器系統"]),
+        ("PC_BRAND_AI_PC", ["pc品牌", "ai pc"]),
+        ("PC_NB_ODM", ["nb odm", "pc odm", "pc代工"]),
+        ("MACHINE_TOOL_CYCLE", ["工具機", "工業機械"]),
+        ("MEMORY_CONTROLLER_CYCLE", ["nand控制", "記憶體控制", "儲存控制"]),
+        ("RF_MODULE_PACKAGING", ["rf", "高頻模組", "特殊封裝"]),
         ("FOUNDRY", ["晶圓代工", "foundry"]),
         ("IC_DESIGN_ASIC", ["ic設計", "ic 設計", "asic", "晶片", "semiconductor"]),
         ("IP_EDA_DESIGN_SERVICE", ["矽智財", "ip", "eda"]),
@@ -111,21 +127,83 @@ def _pe_suitability_text(value):
     return str(value)
 
 
-def get_industry_valuation_profile(stock_id, stock_name="", sector="", industry=""):
+
+
+def _extract_ai_industry_classification(ai_financials):
+    """取出 AI 建議產業分類；此分類只作待確認，不直接覆蓋正式 mapping。"""
+    if not isinstance(ai_financials, dict):
+        return None
+    ic = ai_financials.get("industry_classification")
+    if not isinstance(ic, dict):
+        return None
+    taxon = _safe_str(ic.get("suggested_primary_taxon")).strip().upper()
+    if not taxon or taxon not in INDUSTRY_TAXONOMY:
+        return None
+    conf = _safe_str(ic.get("confidence") or "low").strip().lower()
+    if conf not in {"high", "medium", "low"}:
+        conf = "low"
+    themes = ic.get("suggested_themes") or []
+    if not isinstance(themes, list):
+        themes = [str(themes)] if str(themes).strip() else []
+    themes = [str(x).strip() for x in themes if str(x).strip()]
+    return {
+        "taxon": taxon,
+        "themes": themes,
+        "confidence": conf,
+        "display_name": _safe_str(ic.get("suggested_display_name")),
+        "reason": _safe_str(ic.get("reason")),
+        "evidence": _safe_str(ic.get("evidence")),
+        "needs_manual_review": True if ic.get("needs_manual_review") is None else bool(ic.get("needs_manual_review")),
+        "status": _safe_str(ic.get("status") or "AI 建議分類，待人工確認；不會自動覆蓋正式 stock_mapping.py。"),
+    }
+
+
+def _classification_factor(confidence, source):
+    """分類可信度折扣；正式 mapping 不折扣，AI 建議分類需折扣。"""
+    if source == "stock_mapping.py":
+        return 1.0
+    if source == "stocklist_or_keyword":
+        return 0.95
+    if source == "ai_suggested_pending_review":
+        return {"high": 0.95, "medium": 0.90, "low": 0.82}.get(str(confidence).lower(), 0.82)
+    return 0.90
+
+def get_industry_valuation_profile(stock_id, stock_name="", sector="", industry="", ai_financials=None):
     """回傳產業估值模型 profile。"""
     sid = _safe_str(stock_id).strip()
     category = _read_stocklist_category(sid)
     mapping = STOCK_MAPPING.get(sid)
+    ai_ic = _extract_ai_industry_classification(ai_financials)
+    ai_ic_applied = False
+
     if mapping:
         taxon_key = mapping.get("primary_taxon", "GENERAL")
         themes = list(mapping.get("themes", []))
         mapping_source = "stock_mapping.py"
         mapped_name = mapping.get("name", stock_name)
+        classification_source = "stock_mapping.py"
+        classification_confidence = "confirmed"
+        classification_warning = "正式 stock_mapping.py 分類。"
     else:
-        taxon_key = _infer_taxon_from_text(sid, stock_name, category, sector, industry)
-        themes = []
-        mapping_source = "keyword_fallback"
-        mapped_name = stock_name
+        fallback_taxon = _infer_taxon_from_text(sid, stock_name, category, sector, industry)
+        # 17-C-1：若沒有正式 mapping，且 AI 回傳有效產業分類，先暫用 AI 建議分類，但標示待確認並套折扣。
+        if ai_ic and (not category or fallback_taxon in {"GENERAL", "THEME_EVENT"} or ai_ic.get("confidence") in {"high", "medium"}):
+            taxon_key = ai_ic.get("taxon", "GENERAL")
+            themes = list(ai_ic.get("themes") or [])
+            mapping_source = "ai_suggested_pending_review"
+            classification_source = "AI 建議分類（待人工確認）"
+            classification_confidence = ai_ic.get("confidence", "low")
+            classification_warning = ai_ic.get("status") or "AI 建議分類，待人工確認；不會自動覆蓋正式 stock_mapping.py。"
+            mapped_name = stock_name
+            ai_ic_applied = True
+        else:
+            taxon_key = fallback_taxon
+            themes = []
+            mapping_source = "keyword_fallback"
+            classification_source = "stocklist/keyword fallback"
+            classification_confidence = "medium" if category else "low"
+            classification_warning = "未在 stock_mapping.py 找到；使用 stocklist/關鍵字保守推定。"
+            mapped_name = stock_name
 
     tax = dict(get_taxonomy(taxon_key))
     profile = dict(tax)
@@ -157,6 +235,16 @@ def get_industry_valuation_profile(stock_id, stock_name="", sector="", industry=
         "pe_applicability_text": _pe_suitability_text(tax.get("pe_applicable")),
         "warning_note": tax.get("note", "—"),
         "operable_discount_factor": tax.get("operable_discount_factor", 0.95),
+        "classification_source": classification_source,
+        "classification_confidence": classification_confidence,
+        "classification_confidence_factor": _classification_factor(classification_confidence, mapping_source),
+        "classification_needs_manual_review": bool(ai_ic_applied or (mapping_source != "stock_mapping.py")),
+        "classification_warning": classification_warning,
+        "ai_suggested_taxon": ai_ic.get("taxon") if ai_ic else None,
+        "ai_suggested_display_name": ai_ic.get("display_name") if ai_ic else None,
+        "ai_suggested_themes": ai_ic.get("themes") if ai_ic else [],
+        "ai_classification_reason": ai_ic.get("reason") if ai_ic else "",
+        "ai_classification_evidence": ai_ic.get("evidence") if ai_ic else "",
     })
     return profile
 
@@ -172,6 +260,9 @@ def build_industry_valuation_model_report(profile):
         {"項目": "匹配產業模型", "內容": p.get("model_label", "一般產業")},
         {"項目": "主分類", "內容": p.get("parent_category", "—")},
         {"項目": "股票對應來源", "內容": p.get("mapping_source", "—")},
+        {"項目": "產業分類可信度", "內容": f"{p.get('classification_confidence', '—')}｜折扣係數 {p.get('classification_confidence_factor', 1.0)}"},
+        {"項目": "AI 建議分類狀態", "內容": p.get("classification_warning", "—")},
+        {"項目": "AI 建議分類依據", "內容": p.get("ai_classification_reason", "—") or "—"},
         {"項目": "stocklist 分類", "內容": p.get("matched_category", "—")},
         {"項目": "題材標籤", "內容": p.get("themes_text", "—")},
         {"項目": "主要估值方式", "內容": p.get("primary_valuation", "—")},

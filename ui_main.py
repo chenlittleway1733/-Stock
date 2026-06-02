@@ -108,12 +108,24 @@ def render_main_page(sidebar_state=None):
                     st.rerun()
 
             sector_disp = SECTOR_MAP.get(info.get('sector', '未知'), info.get('sector', '未知'))
-            industry_profile = get_industry_valuation_profile(curr_id, c_name, sector_disp, info.get('industry', '未知'))
+            # 17-C-1：若 AI 全方位校對已補回產業分類，正式 mapping 找不到時可先採 AI 建議分類，但須標示待確認。
+            early_ai_fin = st.session_state.ai_fetched_financials.get(curr_id, {}) if hasattr(st.session_state, 'ai_fetched_financials') else {}
+            if isinstance(early_ai_fin, dict) and early_ai_fin:
+                if str(early_ai_fin.get('_stock_id') or curr_id) != str(curr_id):
+                    early_ai_fin = {}
+            industry_profile = get_industry_valuation_profile(curr_id, c_name, sector_disp, info.get('industry', '未知'), ai_financials=early_ai_fin)
             st.markdown(
                 f"**🏷️ 產業分類：** {sector_disp} / {info.get('industry', '未知')}｜"
                 f"估值模型：{industry_profile.get('model_label', '一般產業')}｜"
-                f"題材標籤：{industry_profile.get('themes_text', '—')}"
+                f"題材標籤：{industry_profile.get('themes_text', '—')}｜"
+                f"分類來源：{industry_profile.get('classification_source', industry_profile.get('mapping_source', '—'))}"
             )
+            if industry_profile.get('classification_needs_manual_review'):
+                st.warning(
+                    f"⚠️ 產業分類待確認：{industry_profile.get('classification_warning', '此分類不是正式 stock_mapping.py 指定。')}"
+                    f"｜可信度：{industry_profile.get('classification_confidence', 'low')}"
+                    f"｜Dynamic Cap 分類折扣：×{float(industry_profile.get('classification_confidence_factor', 1.0) or 1.0):.2f}"
+                )
             if industry_profile.get('pe_trap_warning'):
                 st.warning("⚠️ 本產業具有 P/E 陷阱風險：低 P/E 不一定代表低估，請優先檢查 P/B、週期位置、報價或訂單落地。")
             if industry_profile.get('pe_model_suitable') is False:
@@ -1618,6 +1630,10 @@ def render_main_page(sidebar_state=None):
 - 匹配模型: {_nullize_text(industry_profile.get('model_label') if isinstance(industry_profile, dict) else 'NULL')}
 - 主分類 / stocklist 分類: {_nullize_text(industry_profile.get('parent_category') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('stocklist_category') if isinstance(industry_profile, dict) else 'NULL')}
 - 題材標籤: {_nullize_text(industry_profile.get('themes_text') if isinstance(industry_profile, dict) else 'NULL')}
+- 產業分類來源 / 可信度 / 折扣: {_nullize_text(industry_profile.get('classification_source') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('classification_confidence') if isinstance(industry_profile, dict) else 'NULL')} / ×{_nullize_text(industry_profile.get('classification_confidence_factor') if isinstance(industry_profile, dict) else 'NULL')}
+- 是否待人工確認: {_nullize_text(industry_profile.get('classification_needs_manual_review') if isinstance(industry_profile, dict) else 'NULL')}｜{_nullize_text(industry_profile.get('classification_warning') if isinstance(industry_profile, dict) else 'NULL')}
+- AI 建議分類: {_nullize_text(industry_profile.get('ai_suggested_taxon') if isinstance(industry_profile, dict) else 'NULL')}｜{_nullize_text(industry_profile.get('ai_suggested_themes') if isinstance(industry_profile, dict) else 'NULL')}
+- AI 分類依據: {_nullize_text(industry_profile.get('ai_classification_reason') if isinstance(industry_profile, dict) else 'NULL')}
 - 主要 / 次要估值方式: {_nullize_text(industry_profile.get('primary_valuation') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('secondary_valuation') if isinstance(industry_profile, dict) else 'NULL')}
 - P/E 適用性: {_nullize_text(industry_profile.get('pe_applicability_text') if isinstance(industry_profile, dict) else 'NULL')}
 - 是否循環股 / P/E 陷阱: {_nullize_text(industry_profile.get('cyclical') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('pe_trap_warning') if isinstance(industry_profile, dict) else 'NULL')}
@@ -1637,6 +1653,7 @@ def render_main_page(sidebar_state=None):
 - AI 模型/資料期間: {_nullize_text(temp_ai_fin.get('model_used') if isinstance(temp_ai_fin, dict) else 'NULL')}｜{_nullize_text(raw_ai_period)}
 - AI JSON 驗證狀態: {_nullize_text(ai_validation_status_for_prompt)}
 - AI JSON 驗證警告: {_nullize_text('；'.join([str(x) for x in ai_validation_warnings_for_prompt[:8]]) if ai_validation_warnings_for_prompt else 'NULL')}
+- AI 產業分類建議: {_nullize_text(temp_ai_fin.get('industry_classification') if isinstance(temp_ai_fin, dict) else 'NULL')}
 - 重要 AI 來源追蹤（只列被採用、分歧、異常或估值關鍵欄位）:
 {_prompt_ai_source_summary(ai_source_trace_df_for_prompt)}
 """
@@ -1651,6 +1668,7 @@ def render_main_page(sidebar_state=None):
 4) EPS 必須分清楚最新單季 EPS、TTM EPS、完整年度 EPS、系統 Forward EPS、AI Forward EPS、法人共識 Forward EPS，不可混用。
 5) 月營收必須以公告月份為準，不可用查詢當月推定最新月營收。
 6) 若關鍵欄位為 NULL，需提出替代判斷法；若資料異常，請明確說「暫不適合做買賣判斷」。
+7) 若產業分類來源為 AI 建議或 keyword_fallback，請先檢查分類是否合理；AI 建議分類屬待確認，不可視為正式 stock_mapping.py 分類。
 
 任務要求：
 1) 先做「2.1 資料品質盤點」：逐項說明哪些欄位是系統/AI/推估/NULL，並指出最影響結論的 3 個資料風險。

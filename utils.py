@@ -832,6 +832,47 @@ def validate_ai_financial_json(ai_fin, stock_id="", stock_name=""):
         else:
             data["target_price_analyst_count"] = int(round(cnt))
 
+
+
+    # 17-C-1：AI 產業分類補齊欄位驗證。
+    # 原則：AI 建議分類只作「待確認分類」，不直接覆蓋 stock_mapping.py。
+    raw_ic = data.get("industry_classification")
+    if isinstance(raw_ic, dict):
+        try:
+            from industry_taxonomy import INDUSTRY_TAXONOMY
+            valid_taxons = set(INDUSTRY_TAXONOMY.keys())
+        except Exception:
+            valid_taxons = {"GENERAL", "THEME_EVENT"}
+
+        ic = dict(raw_ic)
+        suggested = str(ic.get("suggested_primary_taxon") or "GENERAL").strip().upper()
+        if suggested not in valid_taxons:
+            add_warning("industry_classification", f"{label} AI 建議產業分類 {suggested} 不在系統 taxonomy 內，已改為 GENERAL 並標示待確認。")
+            suggested = "GENERAL"
+
+        conf = str(ic.get("confidence") or "low").strip().lower()
+        if conf not in {"high", "medium", "low"}:
+            conf = "low"
+
+        themes = ic.get("suggested_themes") or []
+        if not isinstance(themes, list):
+            themes = [str(themes)] if str(themes).strip() else []
+        themes = [str(x).strip() for x in themes if str(x).strip()][:10]
+
+        data["industry_classification"] = {
+            "suggested_primary_taxon": suggested,
+            "suggested_display_name": str(ic.get("suggested_display_name") or "").strip(),
+            "suggested_themes": themes,
+            "confidence": conf,
+            "reason": str(ic.get("reason") or "").strip(),
+            "evidence": str(ic.get("evidence") or "").strip(),
+            "needs_manual_review": True if ic.get("needs_manual_review") is None else bool(ic.get("needs_manual_review")),
+            "status": "AI 建議分類，待人工確認；不會自動覆蓋正式 stock_mapping.py。",
+        }
+    elif raw_ic not in (None, "", "null"):
+        data["industry_classification"] = None
+        add_warning("industry_classification", f"{label} AI 產業分類格式不是 JSON 物件，已忽略。")
+
     # data_period 至少轉字串，避免後續 UI 出現 None。
     data["data_period"] = str(data.get("data_period") or "").strip()
 
