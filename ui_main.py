@@ -1659,6 +1659,77 @@ def render_main_page(sidebar_state=None):
 """
 
 
+            # 第 17-C-2：買進決策版資料包。只保留會影響「現在是否值得買進」的關鍵欄位。
+            # 原 context_str 保留為研究完整版資料包。
+            decision_context_str = f"""
+【0. 系統判讀總覽】
+- 股票: {c_name} ({curr_id})
+- 最新收盤價: {_nullize_text(curr_p)} 元
+- 系統版本: 2.1
+- 最終操作燈號: {_nullize_text(final_signal.get('signal') if isinstance(final_signal, dict) else 'NULL')}
+- 系統建議: {_nullize_text(final_signal.get('advice') if isinstance(final_signal, dict) else 'NULL')}
+- 資料 / 估值 / 操作可信度: {_nullize_text(final_signal.get('data_confidence') if isinstance(final_signal, dict) else 'NULL')} / {_nullize_text(final_signal.get('valuation_confidence') if isinstance(final_signal, dict) else 'NULL')} / {_nullize_text(final_signal.get('operation_confidence') if isinstance(final_signal, dict) else 'NULL')}
+
+【1. 月營收與動能】
+- 最新公告月份: {_nullize_text(latest_rev_display_label)}
+- 月營收 YoY / MoM: {panel_rg} / {_nullize_text(latest_mom_str)}
+- 資料源 / 提醒: {_nullize_text(latest_rev_source)} / {_nullize_text(latest_rev_notice)}
+
+【2. EPS 口徑與採用值】
+- 最新單季 EPS: 系統={_nullize_text(sys_latest_quarter_eps)} / AI={_nullize_text(ai_latest_quarter_eps)} / 採用={_nullize_text(ai_latest_quarter_eps)} / 期間={_nullize_text(raw_ai_period)}
+- TTM EPS: 系統={_nullize_text(sys_ttm_eps)} / AI={_nullize_text(ai_ttm_eps)} / 採用={_nullize_text(eff_t_eps)}
+- 完整年度 EPS: 系統={_nullize_text(sys_fiscal_year_eps)} / AI={_nullize_text(ai_fiscal_year_eps)} / 採用={_nullize_text(ai_fiscal_year_eps)}
+- Forward EPS－系統: {_nullize_text(sys_forward_eps)}
+- Forward EPS－AI: {_nullize_text(ai_forward_eps_ai)}
+- Forward EPS－法人共識: {_nullize_text(ai_forward_eps_consensus)}
+- Dynamic Cap 採用 EPS/輸入: {eps_adopted_for_prompt}
+
+【3. 核心財務與估值】
+- 現價: {_nullize_text(curr_p)}
+- Trailing P/E / Forward P/E / P/B / PEG: {panel_pe} / {panel_fpe} / {panel_pb} / {panel_peg}
+- 毛利率 / 營益率: {panel_gmom}
+- ROE / D/E: {panel_roe} / {panel_de}
+- 營收 YoY / 預估獲利成長 YoY: {panel_rg} / {panel_eg}
+- FCF / 流動比率 / 殖利率: {_nullize_text(fcf_str)} / {_nullize_text(cr_str)} / {_nullize_text(dy_str)}
+
+【4. 分歧與資料品質】
+- 系統 / AI 分歧警告:
+{_prompt_warnings(divergence_warnings)}
+- 資料品質摘要:
+{_prompt_quality_summary(dq_report_df)}
+
+【5. 法人目標價與可信度】
+- 最高 / 平均 / 最低目標價: {_nullize_text(prompt_hi_str)} / {_nullize_text(prompt_me_str)} / {_nullize_text(prompt_lo_str)}
+- AI 最新目標價: {_nullize_text(ai_tp_str)}
+- 分析師人數: {_nullize_text(ai_analyst_count)}
+- 目標價可信度: {_nullize_text(target_confidence.get('label') if isinstance(target_confidence, dict) else 'NULL')}｜{_nullize_text(target_confidence.get('message') if isinstance(target_confidence, dict) else 'NULL')}
+- 核心理由: {_nullize_text(ai_target_rationale)}
+
+【6. 估值分層】
+- 公式 / 手動 / 樂觀估值摘要: {ctx_tp_est}
+- 手動情境推估價: {_nullize_text(manual_target_price if 'manual_target_price' in locals() else None)}；AI手動情境: {_nullize_text(ai_manual_target_price if 'ai_manual_target_price' in locals() else None)}
+- 可操作估值區間低/中/高: {_nullize_text(valuation_separation.get('operable_low') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('operable_mid') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('operable_high') if isinstance(valuation_separation, dict) else 'NULL')}
+- 可操作估值提示: {_nullize_text(valuation_separation.get('action_hint') if isinstance(valuation_separation, dict) else 'NULL')}
+
+【7. 產業估值模型】
+- 正式/匹配分類: {_nullize_text(industry_profile.get('model_label') if isinstance(industry_profile, dict) else 'NULL')}
+- 分類來源 / 可信度 / 折扣: {_nullize_text(industry_profile.get('classification_source') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('classification_confidence') if isinstance(industry_profile, dict) else 'NULL')} / ×{_nullize_text(industry_profile.get('classification_confidence_factor') if isinstance(industry_profile, dict) else 'NULL')}
+- 是否待人工確認: {_nullize_text(industry_profile.get('classification_needs_manual_review') if isinstance(industry_profile, dict) else 'NULL')}｜{_nullize_text(industry_profile.get('classification_warning') if isinstance(industry_profile, dict) else 'NULL')}
+- AI 建議分類 / 題材: {_nullize_text(industry_profile.get('ai_suggested_taxon') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('ai_suggested_themes') if isinstance(industry_profile, dict) else 'NULL')}
+- 題材標籤: {_nullize_text(industry_profile.get('themes_text') if isinstance(industry_profile, dict) else 'NULL')}
+- 主要估值方式: {_nullize_text(industry_profile.get('primary_valuation') if isinstance(industry_profile, dict) else 'NULL')}；是否循環股/P-E陷阱: {_nullize_text(industry_profile.get('cyclical') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('pe_trap_warning') if isinstance(industry_profile, dict) else 'NULL')}
+- Dynamic Cap floor / soft / hard: {_nullize_text(industry_profile.get('floor_pe') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('soft_ceiling_pe') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('hard_ceiling_pe') if isinstance(industry_profile, dict) else 'NULL')}
+
+【8. Dynamic Cap 2.0 決策摘要】
+{_prompt_dynamic_cap_core(dynamic_cap_pack)}
+
+【9. AI 來源與驗證摘要】
+- AI JSON 驗證: {_nullize_text(ai_validation_status_for_prompt)}；警告: {_nullize_text('；'.join([str(x) for x in ai_validation_warnings_for_prompt[:5]]) if ai_validation_warnings_for_prompt else 'NULL')}
+- 估值採用 AI 欄位來源摘要:
+{_prompt_ai_source_summary(ai_source_trace_df_for_prompt)}
+"""
+
+
             full_prompt_for_copy = f"""你是台股研究總監 + 交易策略專家。請用繁體中文、條列、可執行結論，並嚴格使用下方 WAY AI 投資戰情室 2.1 數據。
 
 重要原則：
@@ -1698,16 +1769,49 @@ def render_main_page(sidebar_state=None):
 以下是系統面板 2.1 精簡打包數據（只保留會影響外部 AI 判斷的採用值、分歧、估值層級、產業模型、Dynamic Cap 與燈號；無資料為 NULL）。若出現數據不合理，可上網查詢並說明不合理原因，但不可忽略系統已標示的分歧與資料品質警告：
 {context_str}
 """
+
+            research_prompt_for_copy = full_prompt_for_copy
+            buy_decision_prompt_for_copy = f"""你是台股研究總監 + 交易策略專家。請用繁體中文、條列、可執行結論，協助我判斷這檔股票「現在是否值得買進」。
+
+請優先尊重 WAY AI 投資戰情室 2.1 的判讀，尤其是：月營收公告月份、EPS 拆欄、分歧警告、資料品質、法人目標價可信度、公式估值/可操作估值分離、產業估值模型、Dynamic Cap 2.0、最終操作燈號。
+
+重要規則：
+- 不可把公式合理估值或公式極限價直接當買進目標。
+- 買進判斷以可操作估值區間、資料可信度、估值可信度、操作可信度、最終燈號為主。
+- EPS 必須分清楚最新單季 EPS、TTM EPS、完整年度 EPS、系統 Forward EPS、AI Forward EPS、法人共識 Forward EPS。
+- 月營收必須以公告月份為準。
+- 若法人目標價分析師人數為 NULL 或少於 3 人，請降低目標價可信度。
+- 若資料品質不足或關鍵欄位異常，請明確說「暫不適合做買進判斷」。
+- 若同一欄位同時列出系統值與 AI 值，請說明採用哪一個，以及是否影響估值可信度。
+
+請依序回答：
+1. [投資結論一句話]：可買 / 觀望 / 不建議 / 資料異常，並說明是否同意系統最終燈號。
+2. [買進前資料檢查]：檢查月營收公告月份、EPS 口徑、Forward EPS、法人目標價可信度、公式估值是否被樂觀 EPS 放大，並列出最影響買進判斷的 3 個資料風險。
+3. [產業與成長邏輯]：說明產業主線、未來 1～2 年成長動能，以及成長失速條件。
+4. [估值判斷]：分開說明公式合理價、公式極限價、可操作估值區間、法人目標價，並判斷現價低估 / 合理 / 偏高 / 高估。不可只用 PEG 判斷便宜。
+5. [買進策略]：現價可不可以買？給 2～3 個分批買點與理由；若不建議買，說明跌到哪裡或出現什麼條件才可重新評估。
+6. [賣出與風控]：給 2～3 個停利區與 2～3 個停損 / 減碼條件；高題材股需說明拉高是否先收一部分。
+7. [倉位建議]：保守 / 中性 / 積極三種配置比例；資料可信度不足時限制最高倉位。
+8. [三情境目標價]：牛市 / 基準 / 熊市，各列目標價區間、假設前提、觸發條件。
+9. [下月追蹤清單]：列 8 個指標與警戒值，必須包含月營收 YoY、MoM、毛利率、EPS、Forward EPS 或法人 EPS 預估、法人目標價可信度、營益率或 ROE、重要訂單 / 產業事件。
+
+以下是 WAY AI 投資戰情室 2.1「買進決策版」系統資料。這不是完整研究資料包，只保留會直接影響買進判斷的採用值、系統值/AI值、分歧、估值層級、產業模型、Dynamic Cap 與燈號。若資料不合理，可上網查證，但不可忽略系統標示的資料品質與分歧警告：
+{decision_context_str}
+"""
             
-            # 將原本的 AI 按鈕移除，並將提示詞區塊設為展開且全寬度顯示
+            # 第 17-C-2：打包提示詞分成「買進決策版 / 研究完整版」
             with st.expander("📋 點此複製【打包提示詞】至 Gemini Advanced 或 ChatGPT 發問", expanded=True):
-                st.markdown(
-                    "<small style='color:gray;'>*手機版可直接按下方按鈕複製；電腦版也可在文字框內全選 (Ctrl+A / ⌘+A) 並複製。*</small>",
-                    unsafe_allow_html=True
+                prompt_mode = st.radio(
+                    "提示詞版本",
+                    ["買進決策版（精簡，建議平常使用）", "研究完整版（完整，適合深度分析）"],
+                    horizontal=True,
+                    key=f"prompt_pack_mode_{curr_id}",
                 )
+                selected_prompt_for_copy = buy_decision_prompt_for_copy if prompt_mode.startswith("買進決策版") else research_prompt_for_copy
+                st.caption("買進決策版只保留會影響是否買進的採用值、系統/AI差異、估值層級、產業模型、Dynamic Cap 與燈號；研究完整版保留較完整資料品質與來源摘要。")
 
                 # 用 json.dumps 包裝提示詞，避免換行、引號或特殊符號造成 JavaScript 失效。
-                safe_prompt_js = json.dumps(full_prompt_for_copy, ensure_ascii=False)
+                safe_prompt_js = json.dumps(selected_prompt_for_copy, ensure_ascii=False)
                 components.html(
                     f"""
                     <div style="margin: 10px 0 12px 0; font-family: sans-serif;">
@@ -1725,7 +1829,7 @@ def render_main_page(sidebar_state=None):
                                 cursor: pointer;
                             "
                         >
-                            📋 一鍵複製完整提示詞
+                            📋 一鍵複製目前版本提示詞
                         </button>
                         <div id="copyStatus" style="margin-top: 8px; color: #16a34a; font-size: 14px;"></div>
                     </div>
@@ -1737,7 +1841,7 @@ def render_main_page(sidebar_state=None):
 
                         try {{
                             await navigator.clipboard.writeText(text);
-                            status.innerText = "✅ 已複製完整提示詞，可直接貼到 Gemini Advanced 或 ChatGPT。";
+                            status.innerText = "✅ 已複製目前版本提示詞，可直接貼到 Gemini Advanced 或 ChatGPT。";
                         }} catch (err) {{
                             const textarea = document.createElement("textarea");
                             textarea.value = text;
@@ -1750,7 +1854,7 @@ def render_main_page(sidebar_state=None):
 
                             try {{
                                 document.execCommand("copy");
-                                status.innerText = "✅ 已複製完整提示詞，可直接貼上使用。";
+                                status.innerText = "✅ 已複製目前版本提示詞，可直接貼上使用。";
                             }} catch (fallbackErr) {{
                                 status.style.color = "#dc2626";
                                 status.innerText = "⚠️ 手機瀏覽器限制自動複製，請改用下方文字框長按複製。";
@@ -1766,10 +1870,10 @@ def render_main_page(sidebar_state=None):
 
                 st.text_area(
                     "提示詞內容",
-                    value=full_prompt_for_copy,
-                    height=300,
+                    value=selected_prompt_for_copy,
+                    height=330,
                     label_visibility="collapsed",
-                    key=f"copy_prompt_textarea_{curr_id}"
+                    key=f"copy_prompt_textarea_{curr_id}_{'buy' if prompt_mode.startswith('買進決策版') else 'research'}"
                 )
             
             st.markdown("---")
