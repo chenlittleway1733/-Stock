@@ -659,7 +659,7 @@ def render_main_page(sidebar_state=None):
             cap_ttm_eps = _adopt_for_cap(eff_t_eps, ai_t_eps, 'TTM EPS', ['ttm_eps', 'trailing_eps'], 'lower_better_when_diverged', 0.30)
             cap_ai_forward_eps = ai_forward_eps_consensus if ai_forward_eps_consensus is not None else ai_forward_eps_ai
             cap_system_forward_eps = sys_forward_eps_system
-            # 17-C-7C：估值用 Forward EPS 口徑統一。
+            # 17-C-7C-1：估值用 Forward EPS 口徑統一。
             # 優先順序：法人共識 Forward EPS > 系統 Forward EPS > AI Forward EPS。
             # 最新單季 EPS 只用於短期獲利動能，不得直接帶入年度估值。
             cap_adopted_forward_eps = ai_forward_eps_consensus if ai_forward_eps_consensus is not None else (cap_system_forward_eps if cap_system_forward_eps is not None else cap_ai_forward_eps)
@@ -758,9 +758,9 @@ def render_main_page(sidebar_state=None):
                     _cap_low = dynamic_cap_pack.get("operable_cap_low")
                     _cap_high = dynamic_cap_pack.get("operable_cap_high")
                     if _cap_low is not None and _cap_high is not None:
-                        cap_reason = f"Dynamic Cap 2.0 可操作倍率：{float(_cap_low):.1f}～{float(_cap_high):.1f}x；中性建議 {suggested_cap:.1f}x。已採 17-C-7C：AI 校對後採用值 + 分歧折扣校準 + 循環復甦區間 + 產業 hard ceiling。"
+                        cap_reason = f"Dynamic Cap 2.0 可操作倍率：{float(_cap_low):.1f}～{float(_cap_high):.1f}x；中性建議 {suggested_cap:.1f}x。已採 17-C-7C-1：AI 校對後採用值 + 分歧折扣校準 + 循環復甦區間 + 產業 hard ceiling。"
                     else:
-                        cap_reason = f"Dynamic Cap 2.0 最終建議倍率：{suggested_cap:.1f}x。已採 17-C-7C：AI 校對後採用值 + 分歧折扣校準 + 循環復甦區間 + 產業 hard ceiling。"
+                        cap_reason = f"Dynamic Cap 2.0 最終建議倍率：{suggested_cap:.1f}x。已採 17-C-7C-1：AI 校對後採用值 + 分歧折扣校準 + 循環復甦區間 + 產業 hard ceiling。"
                 else:
                     suggested_cap = float(industry_profile.get('cap_hint') or 30.0)
                     cap_reason = f"此產業主要估值模式為 {dynamic_cap_pack.get('valuation_mode', industry_profile.get('primary_valuation', 'N/A'))}，P/E Cap 僅作輔助；後續請優先看 P/B / 週期 / 題材落地。"
@@ -771,7 +771,7 @@ def render_main_page(sidebar_state=None):
                     value=float(suggested_cap),
                     step=5.0,
                     key=f"dynamic_cap_input_{curr_id}_{cap_refresh_token}",
-                    help="第 17-C-7C：重構產業基準倍率，加入市場/法人隱含倍率、負 EPS 防呆與題材落地檢查。"
+                    help="第 17-C-7C-1：重構產業基準倍率，加入市場/法人隱含倍率、負 EPS 防呆與題材落地檢查。"
                 )
                 if dynamic_cap_pack.get("available"):
                     # 使用者仍可手動覆寫 Cap；若覆寫，估值公式採手動值，拆解表仍保留系統建議值。
@@ -866,7 +866,7 @@ def render_main_page(sidebar_state=None):
                 except Exception:
                     return default
 
-            # 17-C-7C：倍率分層。可操作倍率 ≠ 公式合理倍率 ≠ 樂觀/極限倍率。
+            # 17-C-7C-1：倍率分層。可操作倍率 ≠ 公式合理倍率 ≠ 樂觀/極限倍率。
             operable_pe_cap = _cap_float(target_pe_cap, suggested_cap)
             formula_pe_cap = _cap_float(dynamic_cap_pack.get("formula_cap"), None)
             if formula_pe_cap is None:
@@ -879,7 +879,7 @@ def render_main_page(sidebar_state=None):
                 formula_pe_cap = min(formula_pe_cap, soft_pe_cap)
             extreme_pe_cap_for_calc = soft_pe_cap if soft_pe_cap is not None else operable_pe_cap
 
-            # 17-C-7C：公式合理估值口徑修正。
+            # 17-C-7C-1：公式合理估值口徑修正。
             # 舊邏輯曾使用 PEG/成長率推導倍率，容易把 5.11% 成長率誤當 5.11x 倍率。
             # 新邏輯一律使用：Forward EPS × formula_cap；若系統 Forward EPS 缺值，系統公式價維持 N/A。
             if eff_f_eps is not None and eff_f_eps > 0 and formula_pe_cap is not None:
@@ -900,7 +900,7 @@ def render_main_page(sidebar_state=None):
                 manual_cap_hit_hard = True
             manual_target_price = eff_f_eps * manual_cap_for_calc if eff_f_eps is not None and eff_f_eps > 0 and manual_cap_for_calc is not None else None
 
-            # 17-C-7C：AI/法人共識公式合理估值同樣使用 Forward EPS × formula_cap。
+            # 17-C-7C-1：AI/法人共識公式合理估值同樣使用 Forward EPS × formula_cap。
             # 不再把 AI 成長率直接當成 PE 倍數。
             if has_ai_fin_fetch and ai_f_eps_calc is not None and ai_f_eps_calc > 0 and formula_pe_cap is not None:
                 ai_target_price_est = ai_f_eps_calc * formula_pe_cap
@@ -911,7 +911,7 @@ def render_main_page(sidebar_state=None):
             ai_extreme_target_price = ai_f_eps_calc * extreme_pe_cap_for_calc if has_ai_fin_fetch and ai_f_eps_calc is not None and ai_f_eps_calc > 0 and extreme_pe_cap_for_calc is not None else None
             ai_manual_target_price = ai_f_eps_calc * manual_cap_for_calc if has_ai_fin_fetch and ai_f_eps_calc is not None and ai_f_eps_calc > 0 and manual_cap_for_calc is not None else None
 
-            # 17-C-7C：市場 / 法人隱含 Forward P/E 對照。用來解釋現價、法人價與系統估值差距。
+            # 17-C-7C-1：市場 / 法人隱含 Forward P/E 對照。用來解釋現價、法人價與系統估值差距。
             implied_eps = cap_adopted_forward_eps
             market_implied_pe = curr_p / implied_eps if implied_eps is not None and implied_eps > 0 and curr_p is not None else None
             target_avg_implied_pe = ai_me_val / implied_eps if implied_eps is not None and implied_eps > 0 and ai_me_val is not None else None
@@ -1145,7 +1145,7 @@ def render_main_page(sidebar_state=None):
                         if dynamic_cap_pack.get("valuation_mode") == "pb_cycle":
                             st.warning("本分類採 P/B 週期模型：P/E Cap 僅作輔助，不直接作買進倍率。")
                         else:
-                            st.caption("17-C-7C：已修正估值 EPS 口徑，並保留循環復甦判斷、分歧折扣校準、公式/可操作/樂觀倍率分離，最後才套用產業 hard ceiling。")
+                            st.caption("17-C-7C-1：已修正估值 EPS 口徑，並保留循環復甦判斷、分歧折扣校準、公式/可操作/樂觀倍率分離，最後才套用產業 hard ceiling。")
                         st.dataframe(dynamic_cap_pack.get("report"), use_container_width=True, hide_index=True)
                         dc_warnings = dynamic_cap_pack.get("warnings") or []
                         if dc_warnings:

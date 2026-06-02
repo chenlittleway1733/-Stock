@@ -1,5 +1,5 @@
 """
-產業估值模型模組（第 17-C-7C 階段）。
+產業估值模型模組（第 17-C-7C-1 階段）。
 
 資料流：
 1. stock_mapping.py 明確指定：股票 → primary_taxon + themes
@@ -160,6 +160,88 @@ def _extract_ai_industry_classification(ai_financials):
     }
 
 
+
+
+def _safe_float_for_profile(v, default=None):
+    try:
+        return float(v) if v is not None else default
+    except Exception:
+        return default
+
+
+def _compute_hybrid_cap_display(profile):
+    """第 17-C-7C-1：供 UI/提示詞顯示混合後 base / floor / soft / hard。
+
+    注意：實際 Dynamic Cap 仍以 dynamic_cap_model.py 為準；此處只做產業模型區塊的同步顯示。
+    """
+    p = profile or {}
+    hybrids = p.get("hybrid_taxons") or []
+    if not isinstance(hybrids, list) or not hybrids:
+        return {
+            "enabled": False,
+            "original_text": f"{p.get('floor_pe', '—')}x / {p.get('soft_ceiling_pe', '—')}x / {p.get('hard_ceiling_pe', '—')}x",
+            "mixed_text": "—",
+            "reason": "未設定混合產業權重",
+        }
+
+    primary_base = _safe_float_for_profile(p.get("base_pe"))
+    primary_floor = _safe_float_for_profile(p.get("floor_pe"))
+    primary_soft = _safe_float_for_profile(p.get("soft_ceiling_pe"))
+    primary_hard = _safe_float_for_profile(p.get("hard_ceiling_pe"))
+    if primary_base is None:
+        return {"enabled": False, "original_text": "—", "mixed_text": "—", "reason": "主分類缺少 base_pe"}
+
+    valid = []
+    total_w = 0.0
+    for h in hybrids:
+        if not isinstance(h, dict):
+            continue
+        taxon = str(h.get("taxon") or "").strip()
+        if not taxon:
+            continue
+        w = _safe_float_for_profile(h.get("weight"), 0.0) or 0.0
+        w = max(0.0, min(w, 0.50))
+        if total_w + w > 0.50:
+            w = max(0.0, 0.50 - total_w)
+        if w <= 0:
+            continue
+        ht = get_taxonomy(taxon)
+        valid.append((taxon, w, ht, h.get("reason", "")))
+        total_w += w
+        if total_w >= 0.50:
+            break
+
+    if not valid:
+        return {"enabled": False, "original_text": f"{primary_floor}x / {primary_soft}x / {primary_hard}x", "mixed_text": "—", "reason": "混合分類未通過防呆"}
+
+    primary_w = 1.0 - total_w
+
+    def mix(key, primary_val):
+        if primary_val is None:
+            return None
+        out = primary_val * primary_w
+        for _, w, ht, _ in valid:
+            hv = _safe_float_for_profile(ht.get(key))
+            if hv is not None:
+                out += hv * w
+        return out
+
+    mixed_base = mix("base_pe", primary_base)
+    mixed_floor = mix("floor_pe", primary_floor)
+    mixed_soft = mix("soft_ceiling_pe", primary_soft)
+    mixed_hard = mix("hard_ceiling_pe", primary_hard)
+    parts = [f"主分類 {primary_w:.0%}"] + [f"{taxon} {w:.0%}" for taxon, w, _, _ in valid]
+    return {
+        "enabled": True,
+        "original_text": f"{primary_floor:g}x / {primary_soft:g}x / {primary_hard:g}x",
+        "mixed_text": f"base {mixed_base:.2f}x / floor {mixed_floor:.2f}x / soft {mixed_soft:.2f}x / hard {mixed_hard:.2f}x",
+        "mixed_base_pe": mixed_base,
+        "mixed_floor_pe": mixed_floor,
+        "mixed_soft_ceiling_pe": mixed_soft,
+        "mixed_hard_ceiling_pe": mixed_hard,
+        "reason": "；".join(parts),
+    }
+
 def _classification_factor(confidence, source):
     """分類可信度折扣；正式 mapping 不折扣，AI 建議分類需折扣。"""
     if source == "stock_mapping.py":
@@ -212,6 +294,9 @@ def get_industry_valuation_profile(stock_id, stock_name="", sector="", industry=
 
     tax = dict(get_taxonomy(taxon_key))
     profile = dict(tax)
+    # 17-C-7C-1：先把 hybrid_taxons 放入 profile，供混合倍率顯示計算。
+    profile["hybrid_taxons"] = hybrid_taxons
+    hybrid_cap_display = _compute_hybrid_cap_display(profile)
     profile.update({
         "model_key": taxon_key,
         "taxon_key": taxon_key,
@@ -223,6 +308,10 @@ def get_industry_valuation_profile(stock_id, stock_name="", sector="", industry=
         "themes_text": "、".join(themes) if themes else "—",
         "hybrid_taxons": hybrid_taxons,
         "hybrid_taxons_text": "；".join([f"{h.get('taxon')} {float(h.get('weight', 0) or 0):.0%}" for h in hybrid_taxons if isinstance(h, dict)]) if hybrid_taxons else "—",
+        "hybrid_cap_display": hybrid_cap_display,
+        "hybrid_mixed_caps_text": hybrid_cap_display.get("mixed_text", "—"),
+        "hybrid_original_caps_text": hybrid_cap_display.get("original_text", "—"),
+        "hybrid_note": hybrid_cap_display.get("reason", "—"),
         "matched_category": category or "未在 stocklist.txt 找到分類",
         "stocklist_category": category or "未在 stocklist.txt 找到分類",
         "mapping_source": mapping_source,
@@ -276,8 +365,9 @@ def build_industry_valuation_model_report(profile):
         {"項目": "次要估值方式", "內容": "、".join(p.get("secondary_valuation", [])) if isinstance(p.get("secondary_valuation"), list) else p.get("secondary_valuation", "—")},
         {"項目": "優先觀察指標", "內容": p.get("primary_metrics", "—")},
         {"項目": "P/E 參考區間", "內容": pe_range_text},
-        {"項目": "Dynamic Cap floor / soft / hard", "內容": f"{p.get('floor_pe', '—')}x / {p.get('soft_ceiling_pe', '—')}x / {p.get('hard_ceiling_pe', '—')}x"},
+        {"項目": "主分類原始 floor / soft / hard", "內容": p.get("hybrid_original_caps_text") or f"{p.get('floor_pe', '—')}x / {p.get('soft_ceiling_pe', '—')}x / {p.get('hard_ceiling_pe', '—')}x"},
         {"項目": "混合產業權重", "內容": p.get("hybrid_taxons_text", "—")},
+        {"項目": "混合後 base / floor / soft / hard", "內容": p.get("hybrid_mixed_caps_text", "—")},
         {"項目": "混合權重說明", "內容": p.get("hybrid_note", "—") or "—"},
         {"項目": "校準來源", "內容": p.get("calibration_source", "taxonomy")},
         {"項目": "P/B 參考區間", "內容": pb_range_text},

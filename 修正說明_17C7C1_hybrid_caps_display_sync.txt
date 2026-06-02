@@ -1,0 +1,26 @@
+第 17-C-7C-1：混合後 base / soft / hard 顯示同步修正
+
+本次修正目的：
+17-C-7C 後，Dynamic Cap 實際計算已經使用 hybrid 後的 base / soft / hard，
+但【產業估值模型】區塊仍可能只顯示主分類原始 floor / soft / hard，
+例如聯發科仍顯示 14 / 38 / 50，容易誤解為 hybrid 沒有生效。
+
+本次完成：
+1. industry_model.py 新增 _compute_hybrid_cap_display()
+   - 依 stock_mapping.py 的 hybrid_taxons 重新計算顯示用混合倍率。
+   - 顯示用途，不取代 dynamic_cap_model.py 的實際計算。
+2. 產業估值模型明細新增：
+   - 主分類原始 floor / soft / hard
+   - 混合產業權重
+   - 混合後 base / floor / soft / hard
+   - 混合權重說明
+3. 買進決策版與研究完整版打包提示詞同步新增：
+   - 主分類原始 floor/soft/hard
+   - 混合後 base/floor/soft/hard
+4. 模型版本字樣更新為 Dynamic Cap 2.0 calibration 17-C-7C-1。
+
+聯發科預期顯示：
+- 主分類原始 floor / soft / hard：14 / 38 / 50
+- 混合產業權重：IC_DESIGN_ASIC_HIGH_VISIBILITY 25%
+- 混合後 base / floor / soft / hard：約 29.25 / 17.50 / 46.00 / 58.75
+- Dynamic Cap 實際計算仍以 dynamic_cap_model.py 報表為準。
