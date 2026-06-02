@@ -1455,119 +1455,192 @@ def render_main_page(sidebar_state=None):
             industry_report_for_prompt = build_industry_valuation_model_report(industry_profile)
             dynamic_cap_report_for_prompt = dynamic_cap_pack.get("report") if isinstance(dynamic_cap_pack, dict) else None
 
+            def _prompt_quality_summary(df):
+                """第 17-B-6：資料品質只打包摘要，不塞完整表格。"""
+                try:
+                    if df is None or getattr(df, "empty", True):
+                        return "NULL"
+                    cols = list(df.columns)
+                    field_col = next((c for c in cols if "欄位" in str(c) or "項目" in str(c)), cols[0])
+                    adopted_col = next((c for c in cols if "採用" in str(c) and ("值" in str(c) or "來源" in str(c))), None)
+                    status_col = next((c for c in cols if "品質" in str(c) or "狀態" in str(c)), None)
+                    note_col = next((c for c in cols if "備註" in str(c) or "警告" in str(c) or "說明" in str(c)), None)
+                    rows = []
+                    important_fields = ["P/E", "Forward", "PEG", "P/B", "EPS", "營收", "YoY", "MoM", "毛利", "營益", "ROE", "D/E", "目標價"]
+                    for _, row in df.iterrows():
+                        field = _nullize_text(row.get(field_col, ""))
+                        row_text = " ".join([_nullize_text(row.get(c, "")) for c in cols])
+                        is_important = any(k.lower() in row_text.lower() for k in important_fields)
+                        is_abnormal = any(k in row_text for k in ["異常", "分歧", "校正", "缺", "NULL", "過期", "警告"])
+                        if is_important or is_abnormal:
+                            parts = [f"欄位={field}"]
+                            if adopted_col:
+                                parts.append(f"採用={_nullize_text(row.get(adopted_col, ''))}")
+                            if status_col:
+                                parts.append(f"狀態={_nullize_text(row.get(status_col, ''))}")
+                            if note_col:
+                                note = _nullize_text(row.get(note_col, ''))
+                                if note != "NULL":
+                                    parts.append(f"備註={note}")
+                            rows.append("- " + "；".join(parts))
+                        if len(rows) >= 14:
+                            break
+                    return "\n".join(rows) if rows else _prompt_df(df, max_rows=8)
+                except Exception as e:
+                    try:
+                        log_exception("PromptPack", "_prompt_quality_summary", e)
+                    except Exception:
+                        pass
+                    return "NULL"
+
+            def _prompt_ai_source_summary(df):
+                """第 17-B-6：AI 來源只打包被採用、分歧、異常、估值關鍵欄位。"""
+                try:
+                    if df is None or getattr(df, "empty", True):
+                        return "NULL"
+                    keywords = ["eps", "forward", "gross", "margin", "roe", "debt", "d/e", "revenue", "yoy", "target", "price", "毛利", "營益", "目標", "負債", "營收", "分歧", "校正", "採用"]
+                    keep = []
+                    for _, row in df.iterrows():
+                        row_text = " ".join([_nullize_text(row.get(c, "")) for c in df.columns])
+                        if any(k.lower() in row_text.lower() for k in keywords):
+                            parts = []
+                            for col in df.columns:
+                                val = _nullize_text(row.get(col, ""))
+                                if val != "NULL":
+                                    parts.append(f"{col}={val}")
+                            if parts:
+                                keep.append("- " + "；".join(parts))
+                        if len(keep) >= 10:
+                            break
+                    return "\n".join(keep) if keep else "NULL"
+                except Exception as e:
+                    try:
+                        log_exception("PromptPack", "_prompt_ai_source_summary", e)
+                    except Exception:
+                        pass
+                    return "NULL"
+
+            def _prompt_dynamic_cap_core(pack):
+                try:
+                    if not isinstance(pack, dict):
+                        return "NULL"
+                    keys = [
+                        ("使用模型", "valuation_mode"),
+                        ("產業基準倍率", "base_multiple"),
+                        ("成長係數", "growth_factor"),
+                        ("品質係數", "quality_factor"),
+                        ("題材係數", "theme_factor"),
+                        ("規模係數", "scale_factor"),
+                        ("資料可信度折扣", "data_confidence_factor"),
+                        ("估值風險折扣", "valuation_risk_factor"),
+                        ("流動性折扣", "liquidity_factor"),
+                        ("可操作倍率低", "operable_cap_low"),
+                        ("可操作倍率高", "operable_cap_high"),
+                        ("中性可操作倍率", "final_cap"),
+                        ("公式合理倍率", "formula_cap"),
+                        ("樂觀情境倍率", "optimistic_cap"),
+                        ("hard ceiling", "hard_ceiling_cap"),
+                        ("模型版本", "model_version"),
+                    ]
+                    lines = []
+                    for label, key in keys:
+                        val = _nullize_text(pack.get(key))
+                        if val != "NULL":
+                            lines.append(f"- {label}: {val}")
+                    warn = _nullize_text(pack.get("warnings"))
+                    if warn != "NULL":
+                        lines.append(f"- 模型警告: {warn}")
+                    inputs = _nullize_text(pack.get("cap_inputs"))
+                    if inputs != "NULL":
+                        lines.append(f"- Dynamic Cap 實際採用輸入值: {inputs}")
+                    notes = _nullize_text(pack.get("cap_adoption_notes"))
+                    if notes != "NULL":
+                        lines.append(f"- AI校對採用/保守值紀錄: {notes}")
+                    return "\n".join(lines) if lines else "NULL"
+                except Exception as e:
+                    try:
+                        log_exception("PromptPack", "_prompt_dynamic_cap_core", e)
+                    except Exception:
+                        pass
+                    return "NULL"
+
+            eps_adopted_for_prompt = _nullize_text(dynamic_cap_pack.get('cap_inputs') if isinstance(dynamic_cap_pack, dict) else 'NULL')
             context_str = f"""
-【0. WAY AI 投資戰情室 2.1 判讀總覽】
+【0. WAY AI 投資戰情室 2.1 精簡判讀總覽】
 - 股票: {c_name} ({curr_id})
 - 最新收盤價: {_nullize_text(curr_p)} 元
 - 系統版本: 2.1
 - 最終操作燈號: {_nullize_text(final_signal.get('signal') if isinstance(final_signal, dict) else 'NULL')}
 - 操作含義: {_nullize_text(final_signal.get('advice') if isinstance(final_signal, dict) else 'NULL')}
-- 資料可信度: {_nullize_text(final_signal.get('data_confidence') if isinstance(final_signal, dict) else 'NULL')}
-- 估值可信度: {_nullize_text(final_signal.get('valuation_confidence') if isinstance(final_signal, dict) else 'NULL')}
-- 操作可信度: {_nullize_text(final_signal.get('operation_confidence') if isinstance(final_signal, dict) else 'NULL')}
-- 法人目標價可信度: {_nullize_text(target_confidence.get('label') if isinstance(target_confidence, dict) else 'NULL')}｜{_nullize_text(target_confidence.get('message') if isinstance(target_confidence, dict) else 'NULL')}
+- 資料可信度 / 估值可信度 / 操作可信度: {_nullize_text(final_signal.get('data_confidence') if isinstance(final_signal, dict) else 'NULL')} / {_nullize_text(final_signal.get('valuation_confidence') if isinstance(final_signal, dict) else 'NULL')} / {_nullize_text(final_signal.get('operation_confidence') if isinstance(final_signal, dict) else 'NULL')}
 
-【1. 月營收公告月份與營收動能】
+【1. 月營收公告月份與財務動能】
 - 營收公告月份標籤: {_nullize_text(latest_rev_display_label)}
-- 最新單月營收 YoY [{latest_rev_display_label}]: {panel_rg}
-- 最新單月營收 MoM [{latest_rev_display_label}]: {_nullize_text(latest_mom_str)}
+- 最新單月營收 YoY / MoM: {panel_rg} / {_nullize_text(latest_mom_str)}
 - 月營收資料源: {_nullize_text(latest_rev_source)}
 - 月營收月份提示: {_nullize_text(latest_rev_notice)}
-- 注意: 若查詢當月尚未公告，不可把查詢月份誤當最新公告月份。
 
-【2. EPS 口徑拆欄（不可混用）】
-{_prompt_df(eps_report_df, max_rows=10)}
+【2. EPS 口徑摘要（不可混用）】
+{_prompt_df(eps_report_df, max_rows=8)}
+- Dynamic Cap / 估值採用 EPS 相關輸入: {eps_adopted_for_prompt}
 
-【3. 盤面與基礎估值（系統/AI整合值）】
-- 歷史本益比 Trailing P/E: {panel_pe}
-- 前瞻本益比 Forward P/E: {panel_fpe}
-- 股價淨值比 P/B: {panel_pb}
-- 前瞻 PEG: {panel_peg}
+【3. 盤面與基礎估值摘要】
+- Trailing P/E / Forward P/E / P/B / PEG: {panel_pe} / {panel_fpe} / {panel_pb} / {panel_peg}
 - EPS（TTM / Forward 顯示值）: {panel_eps}
 - 預估獲利成長 YoY: {panel_eg}
 - 毛利率 / 營益率: {panel_gmom}
-- ROE（恆等式校正）: {panel_roe}
-- 負債權益比 D/E: {panel_de}
-- 預估殖利率: {_nullize_text(dy_str)}
-- 自由現金流 FCF: {_nullize_text(fcf_str)}
-- 流動比率: {_nullize_text(cr_str)}
-- Piotroski F-Score: {_nullize_text(fs_str)}（滿分 9 分）
+- ROE / D/E: {panel_roe} / {panel_de}
+- 殖利率 / FCF / 流動比率 / F-Score: {_nullize_text(dy_str)} / {_nullize_text(fcf_str)} / {_nullize_text(cr_str)} / {_nullize_text(fs_str)}
 
-【4. 系統 / AI 分歧警告（2.1 風險層）】
+【4. 系統 / AI 分歧警告（必須完整解讀）】
 {_prompt_warnings(divergence_warnings)}
 
-【5. 統一資料品質報告（系統 / AI / 採用值）】
-{_prompt_df(dq_report_df, max_rows=30)}
+【5. 資料品質摘要（只列採用、缺值、異常、校正、關鍵欄位）】
+{_prompt_quality_summary(dq_report_df)}
 
 【6. 法人目標價與可信度】
-- 最高目標價: {_nullize_text(prompt_hi_str)}
-- 平均目標價: {_nullize_text(prompt_me_str)}
-- 最低保底價: {_nullize_text(prompt_lo_str)}
+- 最高 / 平均 / 最低目標價: {_nullize_text(prompt_hi_str)} / {_nullize_text(prompt_me_str)} / {_nullize_text(prompt_lo_str)}
 - AI 最新聯網目標價({ai_label}): {_nullize_text(ai_tp_str)}
-- 目標價分析師人數: {_nullize_text(ai_analyst_count)}
-- 目標價可信度: {_nullize_text(target_confidence.get('label') if isinstance(target_confidence, dict) else 'NULL')}
+- 分析師人數: {_nullize_text(ai_analyst_count)}
+- 目標價可信度: {_nullize_text(target_confidence.get('label') if isinstance(target_confidence, dict) else 'NULL')}｜{_nullize_text(target_confidence.get('message') if isinstance(target_confidence, dict) else 'NULL')}
 - 目標價核心理由: {_nullize_text(ai_target_rationale)}
-- 可信度明細:
-{_prompt_df(target_confidence_report_for_prompt, max_rows=5)}
 
-【7. 公式估值 / 可操作估值分離】
+【7. 公式估值 / 手動情境 / 可操作估值分離】
 - 系統逆向推算估值摘要: {ctx_tp_est}
 - 可操作估值提示: {_nullize_text(valuation_separation.get('action_hint') if isinstance(valuation_separation, dict) else 'NULL')}
 - 可操作估值區間低/中/高: {_nullize_text(valuation_separation.get('operable_low') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('operable_mid') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('operable_high') if isinstance(valuation_separation, dict) else 'NULL')}
-- 警告數: {_nullize_text(valuation_separation.get('warning_count') if isinstance(valuation_separation, dict) else 'NULL')}；重大警告數: {_nullize_text(valuation_separation.get('danger_count') if isinstance(valuation_separation, dict) else 'NULL')}
-- 估值分離表:
-{_prompt_df(valuation_report_for_prompt, max_rows=20)}
-
-【8. 產業估值模型】
-- 匹配模型: {_nullize_text(industry_profile.get('model_label') if isinstance(industry_profile, dict) else 'NULL')}
-- 主分類: {_nullize_text(industry_profile.get('parent_category') if isinstance(industry_profile, dict) else 'NULL')}
-- stocklist 分類: {_nullize_text(industry_profile.get('stocklist_category') if isinstance(industry_profile, dict) else 'NULL')}
-- 股票對應來源: {_nullize_text(industry_profile.get('mapping_source') if isinstance(industry_profile, dict) else 'NULL')}
-- 題材標籤: {_nullize_text(industry_profile.get('themes_text') if isinstance(industry_profile, dict) else 'NULL')}
-- 主要估值方式: {_nullize_text(industry_profile.get('primary_valuation') if isinstance(industry_profile, dict) else 'NULL')}
-- 次要估值方式: {_nullize_text(industry_profile.get('secondary_valuation') if isinstance(industry_profile, dict) else 'NULL')}
-- P/E 模型適用性: {_nullize_text(industry_profile.get('pe_applicability_text') if isinstance(industry_profile, dict) else 'NULL')}
-- 校準來源: {_nullize_text(industry_profile.get('calibration_source') if isinstance(industry_profile, dict) else 'NULL')}
-- Dynamic Cap floor / soft / hard: {_nullize_text(industry_profile.get('floor_pe') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('soft_ceiling_pe') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('hard_ceiling_pe') if isinstance(industry_profile, dict) else 'NULL')}
-- 事件模型切換: {_nullize_text(industry_profile.get('event_switch_note') if isinstance(industry_profile, dict) else 'NULL')}
-- 是否循環股: {_nullize_text(industry_profile.get('cyclical') if isinstance(industry_profile, dict) else 'NULL')}
-- 是否有 P/E 陷阱: {_nullize_text(industry_profile.get('pe_trap_warning') if isinstance(industry_profile, dict) else 'NULL')}
-- P/B 參考區間: {_nullize_text(industry_profile.get('pb_range') if isinstance(industry_profile, dict) else 'NULL')}
-- 風險旗標: {_nullize_text(industry_profile.get('risk_flags') if isinstance(industry_profile, dict) else 'NULL')}
-- 產業模型明細:
-{_prompt_df(industry_report_for_prompt, max_rows=25)}
-
-【9. Dynamic Cap 2.0 動態本益比 / P/B 模型】
-- 使用模型: {_nullize_text(dynamic_cap_pack.get('valuation_mode') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
-- 產業基準倍率: {_nullize_text(dynamic_cap_pack.get('base_multiple') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
-- 原始建議倍率: {_nullize_text(dynamic_cap_pack.get('raw_cap') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
-- 最終建議倍率/中性可操作倍率: {_nullize_text(dynamic_cap_pack.get('final_cap') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
-- 可操作倍率區間: {_nullize_text(dynamic_cap_pack.get('operable_cap_low') if isinstance(dynamic_cap_pack, dict) else 'NULL')} ～ {_nullize_text(dynamic_cap_pack.get('operable_cap_high') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
-- 公式合理倍率: {_nullize_text(dynamic_cap_pack.get('formula_cap') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
-- 樂觀情境倍率: {_nullize_text(dynamic_cap_pack.get('optimistic_cap') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
-- 使用者帶入可操作 Cap: {_nullize_text(target_pe_cap)}
 - 手動情境推估價: {_nullize_text(manual_target_price if 'manual_target_price' in locals() else None)}
-- AI手動情境推估價: {_nullize_text(ai_manual_target_price if 'ai_manual_target_price' in locals() else None)}
-- 樓地板 / soft ceiling / hard ceiling: {_nullize_text(dynamic_cap_pack.get('floor_cap') if isinstance(dynamic_cap_pack, dict) else 'NULL')} / {_nullize_text(dynamic_cap_pack.get('soft_ceiling_cap') if isinstance(dynamic_cap_pack, dict) else 'NULL')} / {_nullize_text(dynamic_cap_pack.get('hard_ceiling_cap') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
-- 模型版本: {_nullize_text(dynamic_cap_pack.get('model_version') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
-- P/B 週期模型 BVPS: {_nullize_text(dynamic_cap_pack.get('bvps') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
-- P/B 週期估值區間: {_nullize_text(dynamic_cap_pack.get('pb_low_price') if isinstance(dynamic_cap_pack, dict) else 'NULL')} ～ {_nullize_text(dynamic_cap_pack.get('pb_high_price') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
-- 模型提醒: {_nullize_text(dynamic_cap_pack.get('warnings') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
-- Dynamic Cap 實際採用輸入值: {_nullize_text(dynamic_cap_pack.get('cap_inputs') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
-- AI 校對採用/保守值紀錄: {_nullize_text(dynamic_cap_pack.get('cap_adoption_notes') if isinstance(dynamic_cap_pack, dict) else 'NULL')}
-- 倍率拆解表:
-{_prompt_df(dynamic_cap_report_for_prompt, max_rows=30)}
+- AI 手動情境推估價: {_nullize_text(ai_manual_target_price if 'ai_manual_target_price' in locals() else None)}
+- 警告數 / 重大警告數: {_nullize_text(valuation_separation.get('warning_count') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('danger_count') if isinstance(valuation_separation, dict) else 'NULL')}
+- 提醒: 公式合理價、樂觀情境價與 hard ceiling 不是買進目標；買賣以可操作區間與最終燈號為主。
+
+【8. 產業估值模型（只列本股模型）】
+- 匹配模型: {_nullize_text(industry_profile.get('model_label') if isinstance(industry_profile, dict) else 'NULL')}
+- 主分類 / stocklist 分類: {_nullize_text(industry_profile.get('parent_category') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('stocklist_category') if isinstance(industry_profile, dict) else 'NULL')}
+- 題材標籤: {_nullize_text(industry_profile.get('themes_text') if isinstance(industry_profile, dict) else 'NULL')}
+- 主要 / 次要估值方式: {_nullize_text(industry_profile.get('primary_valuation') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('secondary_valuation') if isinstance(industry_profile, dict) else 'NULL')}
+- P/E 適用性: {_nullize_text(industry_profile.get('pe_applicability_text') if isinstance(industry_profile, dict) else 'NULL')}
+- 是否循環股 / P/E 陷阱: {_nullize_text(industry_profile.get('cyclical') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('pe_trap_warning') if isinstance(industry_profile, dict) else 'NULL')}
+- Dynamic Cap floor / soft / hard: {_nullize_text(industry_profile.get('floor_pe') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('soft_ceiling_pe') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('hard_ceiling_pe') if isinstance(industry_profile, dict) else 'NULL')}
+- P/B 參考區間: {_nullize_text(industry_profile.get('pb_range') if isinstance(industry_profile, dict) else 'NULL')}
+- 事件模型切換: {_nullize_text(industry_profile.get('event_switch_note') if isinstance(industry_profile, dict) else 'NULL')}
+- 校準來源: {_nullize_text(industry_profile.get('calibration_source') if isinstance(industry_profile, dict) else 'NULL')}
+- 風險旗標: {_nullize_text(industry_profile.get('risk_flags') if isinstance(industry_profile, dict) else 'NULL')}
+
+【9. Dynamic Cap 2.0 摘要（核心拆解，不含完整表格）】
+{_prompt_dynamic_cap_core(dynamic_cap_pack)}
 
 【10. 最終操作燈號明細】
-{_prompt_df(final_signal_report_for_prompt, max_rows=20)}
+{_prompt_df(final_signal_report_for_prompt, max_rows=12)}
 
-【11. AI 逐欄來源追蹤與 JSON 驗證】
+【11. AI 來源與 JSON 驗證摘要】
 - AI 模型/資料期間: {_nullize_text(temp_ai_fin.get('model_used') if isinstance(temp_ai_fin, dict) else 'NULL')}｜{_nullize_text(raw_ai_period)}
 - AI JSON 驗證狀態: {_nullize_text(ai_validation_status_for_prompt)}
-- AI JSON 驗證警告: {_nullize_text('；'.join([str(x) for x in ai_validation_warnings_for_prompt[:20]]) if ai_validation_warnings_for_prompt else 'NULL')}
-- AI 逐欄來源追蹤:
-{_prompt_df(ai_source_trace_df_for_prompt, max_rows=30)}
+- AI JSON 驗證警告: {_nullize_text('；'.join([str(x) for x in ai_validation_warnings_for_prompt[:8]]) if ai_validation_warnings_for_prompt else 'NULL')}
+- 重要 AI 來源追蹤（只列被採用、分歧、異常或估值關鍵欄位）:
+{_prompt_ai_source_summary(ai_source_trace_df_for_prompt)}
 """
+
 
             full_prompt_for_copy = f"""你是台股研究總監 + 交易策略專家。請用繁體中文、條列、可執行結論，並嚴格使用下方 WAY AI 投資戰情室 2.1 數據。
 
@@ -1604,7 +1677,7 @@ def render_main_page(sidebar_state=None):
 - [風險與反證]
 - [下月追蹤清單]
 
-以下是系統面板完整數據（含網路抓取 / AI 抓取 / 推估 / 2.1 風險判斷；無資料為 NULL）。若出現數據不合理，可上網查詢並說明不合理原因，但不可忽略系統已標示的分歧與資料品質警告：
+以下是系統面板 2.1 精簡打包數據（只保留會影響外部 AI 判斷的採用值、分歧、估值層級、產業模型、Dynamic Cap 與燈號；無資料為 NULL）。若出現數據不合理，可上網查詢並說明不合理原因，但不可忽略系統已標示的分歧與資料品質警告：
 {context_str}
 """
             
