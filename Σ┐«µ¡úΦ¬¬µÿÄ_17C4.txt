@@ -1,0 +1,51 @@
+第 17-C-4：產業基準倍率重構 + 市場 / 法人隱含倍率對照 + 負 EPS 防呆完成版
+
+本次核心修正：
+1. 新增 / 拆分產業模型：
+   - FOUNDRY_ADVANCED：先進晶圓代工 / HPC / AI
+   - FOUNDRY_MATURE：成熟晶圓代工
+   - IC_DESIGN_ASIC_IP：矽智財 / AI ASIC / 高毛利設計服務
+   - IC_DESIGN_CONSUMER：一般消費性 IC 設計
+   - PROBE_AI_ASIC：高階 AI ASIC / CPO 探針卡與測試介面
+   - PROBE_STANDARD：一般探針卡 / 傳統測試介面
+   - TURNAROUND_PROBE_TEST_THEME：轉機 / 虧損探針與測試題材
+   - THERMAL_LIQUID：液冷 / 水冷散熱核心供應鏈
+   - THERMAL_AIR：傳統氣冷 / 風扇 / 常態散熱
+   - ROBOTICS_THEME_EVENT：機器人純題材 / EPS 未落地
+
+2. 調整產業基準倍率：
+   - 台積電類先進晶圓代工維持 24 / 30 / 35。
+   - 成熟晶圓代工改為 12 / 18 / 22。
+   - 高階 AI ASIC 探針卡改為 45 / 65 / 75。
+   - 一般探針卡改為 18 / 28 / 35。
+   - CoWoS 設備上修至 32 / 50 / 65。
+   - 重電 / 電網由原高估值降為 18 / 30 / 38。
+   - GENERAL 未分類降為 15 / 24 / 30，並套分類可信度折扣。
+
+3. 修正代表股票分類：
+   - 台積電 2330 → FOUNDRY_ADVANCED。
+   - 聯電 2303 → FOUNDRY_MATURE。
+   - 世芯-KY 3661、創意 3443、智原 3035 → IC_DESIGN_ASIC_IP。
+   - 旺矽 6223、精測 6510、穎崴 6515 → PROBE_AI_ASIC。
+   - 中探針 6217 → TURNAROUND_PROBE_TEST_THEME。
+
+4. 負 EPS / 轉機股防呆：
+   - 若 Forward EPS 與 TTM EPS 尚未穩定轉正，停止 P/E 公式估值。
+   - 不再輸出負的公式合理價、公式極限價、手動情境價。
+   - 改用轉機 / 事件模型，看單季 EPS 連續轉正、營收成長、訂單落地、P/B 與法人是否開始給 EPS。
+
+5. 市場 / 法人隱含倍率對照：
+   - 新增現價隱含 Forward P/E。
+   - 新增法人平均 / 高標 / 低標目標價隱含 Forward P/E。
+   - 若現價或法人隱含倍率超過 hard ceiling，顯示「市場重估 / 題材動能區」，不自動提高可操作買進價。
+
+6. 題材 EPS 落地檢查：
+   - CPO / 矽光子、低軌衛星、機器人、生技等題材若 EPS / 訂單未落地，切換事件模型。
+
+建議覆蓋檔案：
+- industry_taxonomy.py
+- stock_mapping.py
+- industry_model.py
+- dynamic_cap_model.py
+- ui_main.py
+- stocklist.txt（若要同步顯示分類，可整包覆蓋）

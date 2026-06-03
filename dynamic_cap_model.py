@@ -457,7 +457,7 @@ CALIBRATION_DEFAULTS.update({
 
 
 
-# ===== 第 17-C-8A-1：第一批 AI 混合股補充預設校準 =====
+# ===== 第 17-C-9：第一批 AI 混合股補充預設校準 =====
 CALIBRATION_DEFAULTS.update({
     "EMS_PLATFORM_CONTRACT_MANUFACTURING": {
         "base_pe": 14.0, "floor_pe": 8.0, "soft_ceiling_pe": 24.0, "hard_ceiling_pe": 32.0,
@@ -1210,7 +1210,7 @@ def calculate_dynamic_cap_v2(
     # 若 TTM 與 Forward 都尚未穩定轉正，全面停用 P/E 估值；若 TTM 為負但有明確正 Forward EPS，可保留 Forward P/E 但列高風險。
     if primary_valuation in {"forward_pe", "pe_pb_crosscheck", "forward_pe_pb_cycle"} and ((adopted_forward_eps is None or adopted_forward_eps <= 0) and (adopted_ttm_eps is None or adopted_ttm_eps <= 0)):
         pack = build_turnaround_event_pack(p, "EPS 尚未穩定轉正，Dynamic Cap 停用 P/E 估值，改用轉機 / 事件模型。")
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "model_version": "Dynamic Cap 2.0 calibration 17-C-8A-1-1"})
+        pack.update({"stock_id": stock_id, "stock_name": stock_name, "model_version": "Dynamic Cap 2.0 calibration 17-C-9-1"})
         return pack
 
     # 17-B-4：低軌衛星、機器人、生技等條件式 P/E 模型，若 EPS / 訂單未落地，直接切換事件模型。
@@ -1218,21 +1218,21 @@ def calculate_dynamic_cap_v2(
         pack = build_event_theme_pack(p)
         note = p.get("event_switch_note") or "EPS / 訂單未落地，依 17-B-4 校準規則改用事件模型。"
         pack["warnings"] = list(pack.get("warnings") or []) + [note]
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-8A-1-1"})
+        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-9-1"})
         return pack
 
     if pe_app is False or primary_valuation in {"event_chip", "theme_event"}:
         pack = build_event_theme_pack(p)
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-8A-1-1"})
+        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-9-1"})
         return pack
     if primary_valuation.startswith("pb") or primary_valuation in {"pb", "pb_roe"}:
         pack = build_pb_cycle_pack(current_price, pb_ratio, p)
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-8A-1-1"})
+        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-9-1"})
         return pack
 
     base = _sf(c.get("base_pe"), 20.0) or 20.0
     rows: List[Dict[str, Any]] = []
-    _add_row(rows, "基準", "產業基準倍率", f"{base:.1f}x", f"{p.get('model_label', p.get('display_name', '一般產業'))} 17-C-8A-1 校準後 base_pe；非買進追價倍率")
+    _add_row(rows, "基準", "產業基準倍率", f"{base:.1f}x", f"{p.get('model_label', p.get('display_name', '一般產業'))} 17-C-9 校準後 base_pe；非買進追價倍率")
     hybrid_summary = c.get("hybrid_summary") or {}
     if hybrid_summary.get("enabled"):
         _add_row(rows, "基準", "混合產業權重", f"base {hybrid_summary.get('mixed_base_pe'):.1f}x / soft {hybrid_summary.get('mixed_soft_ceiling_pe'):.1f}x / hard {hybrid_summary.get('mixed_hard_ceiling_pe'):.1f}x", hybrid_summary.get("reason", ""))
@@ -1366,7 +1366,7 @@ def calculate_dynamic_cap_v2(
     return {
         "available": True,
         "valuation_mode": primary_valuation,
-        "model_version": "Dynamic Cap 2.0 calibration 17-C-8A-1-1",
+        "model_version": "Dynamic Cap 2.0 calibration 17-C-9-1",
         "base_multiple": base,
         "growth_premium": g,  # 保留舊 key，實際為 growth factor pack
         "gross_margin_premium": q,  # 保留舊 key，實際為 quality factor pack

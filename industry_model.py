@@ -1,5 +1,5 @@
 """
-產業估值模型模組（第 17-C-8A-1 階段）。
+產業估值模型模組（第 17-C-9 階段）。
 
 資料流：
 1. stock_mapping.py 明確指定：股票 → primary_taxon + themes
@@ -14,10 +14,10 @@ from industry_taxonomy import INDUSTRY_TAXONOMY, get_taxonomy
 from stock_mapping import STOCK_MAPPING
 
 
-# ===== 第 17-C-8A-1：產業估值模型維護資訊 =====
-INDUSTRY_MODEL_BUILD_VERSION = "17-C-8A-1"
+# ===== 第 17-C-9：產業估值模型維護資訊 =====
+INDUSTRY_MODEL_BUILD_VERSION = "17-C-9"
 INDUSTRY_MODEL_BUILT_AT = "2026-06-02"
-INDUSTRY_MODEL_BUILD_NOTE = "17-C-8A-1 單次快照稽核表；17-C-7C-1 已完成 hybrid 權重顯示同步。"
+INDUSTRY_MODEL_BUILD_NOTE = "17-C-9 單次快照稽核表；17-C-7C-1 已完成 hybrid 權重顯示同步。"
 INDUSTRY_MODEL_REVIEW_SUGGESTION = "建議每月做 mapping/hybrid 小檢查，每季檢查產業 base/soft/hard；本系統目前未啟用歷史紀錄。"
 
 

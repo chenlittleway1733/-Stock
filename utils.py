@@ -1853,3 +1853,132 @@ def build_industry_model_snapshot_audit(
     report = pd.DataFrame(checks or [{"稽核項目": "快照稽核", "數值": "—", "判斷": label, "說明": action}])
     return {"summary": summary, "report": report}
 
+
+
+
+# =========================================================
+# 第 17-C-9：Forward EPS 年期分層估值模型
+# =========================================================
+def build_forward_eps_tiered_valuation_report(
+    *,
+    current_price=None,
+    broker_target_avg=None,
+    broker_target_high=None,
+    broker_target_low=None,
+    ttm_eps=None,
+    fy1_eps=None,
+    fy2_eps=None,
+    fy3_eps=None,
+    fy1_year=None,
+    fy2_year=None,
+    fy3_year=None,
+    formula_cap=None,
+    operable_cap=None,
+    soft_ceiling=None,
+    hard_ceiling=None,
+    eps_source_note=None,
+    eps_basis=None,
+):
+    """建立 TTM / FY1 / FY2 / FY3 EPS 分層估值與法人目標價反推表。
+
+    第 17-C-9a 定義：
+    - TTM EPS：近四季已實現 EPS，用於目前實際獲利估值與風控。
+    - FY1/FY2/FY3 EPS：法人預估「年度 EPS 序列」，不是從查詢日起算 1/2/3 年後 EPS。
+    - FY1：第一個市場/法人主要預估年度 EPS。
+    - FY2：第二個法人預估年度 EPS。
+    - FY3：第三個法人預估年度 EPS 或長期情境 EPS；僅供高風險情境。
+    """
+    def sf(v):
+        try:
+            return float(v) if v is not None else None
+        except Exception:
+            return None
+
+    cp = sf(current_price)
+    tgt_avg = sf(broker_target_avg)
+    tgt_hi = sf(broker_target_high)
+    tgt_lo = sf(broker_target_low)
+    caps = {
+        "formula": sf(formula_cap),
+        "operable": sf(operable_cap),
+        "soft": sf(soft_ceiling),
+        "hard": sf(hard_ceiling),
+    }
+
+    fy_definition = "FY1/FY2/FY3 EPS 是法人預估年度 EPS 序列，不是查詢日後 1/2/3 年的滾動 EPS；請以 EPS 對應年度欄位解讀。"
+
+    rows = []
+    tiers = [
+        ("TTM 目前實際獲利估值", "TTM EPS", ttm_eps, "近四季", caps["formula"], "看目前已實現獲利與風控；不反映未來成長。"),
+        ("FY1 保守 Forward 估值", "FY1 EPS", fy1_eps, fy1_year, caps["formula"], "第一個法人主要預估年度 EPS；主要作防守與合理估值參考。"),
+        ("FY2 市場先行估值", "FY2 EPS", fy2_eps, fy2_year, caps["formula"], "第二個法人預估年度 EPS；可解釋市場先行 6～18 個月，但需折扣看待。"),
+        ("FY3 高風險樂觀情境", "FY3 EPS", fy3_eps, fy3_year, caps["soft"], "第三個法人預估年度或長期情境 EPS；不可直接視為買進目標。"),
+    ]
+
+    for tier_name, eps_label, eps, year, cap, note in tiers:
+        e = sf(eps)
+        c = sf(cap)
+        price = e * c if e is not None and e > 0 and c is not None else None
+        market_pe = cp / e if cp is not None and e is not None and e > 0 else None
+        avg_pe = tgt_avg / e if tgt_avg is not None and e is not None and e > 0 else None
+        hi_pe = tgt_hi / e if tgt_hi is not None and e is not None and e > 0 else None
+        lo_pe = tgt_lo / e if tgt_lo is not None and e is not None and e > 0 else None
+        rows.append({
+            "估值層": tier_name,
+            "EPS口徑": eps_label,
+            "EPS對應年度/期間": year if year is not None else "未標示",
+            "EPS數值": e,
+            "採用倍率": c,
+            "估值": price,
+            "現價隱含PE": market_pe,
+            "法人均價隱含PE": avg_pe,
+            "法人高標隱含PE": hi_pe,
+            "法人低標隱含PE": lo_pe,
+            "用途/限制": note,
+        })
+
+    report = pd.DataFrame(rows)
+
+    # 判斷市場比較可能在看哪一年 EPS。
+    market_view = "資料不足，無法判斷市場看哪一個 EPS 年期"
+    hard = caps["hard"]
+    ttm = sf(ttm_eps)
+    fy1 = sf(fy1_eps)
+    fy2 = sf(fy2_eps)
+    fy3 = sf(fy3_eps)
+    cp_pe_ttm = cp / ttm if cp and ttm and ttm > 0 else None
+    cp_pe_fy1 = cp / fy1 if cp and fy1 and fy1 > 0 else None
+    cp_pe_fy2 = cp / fy2 if cp and fy2 and fy2 > 0 else None
+    cp_pe_fy3 = cp / fy3 if cp and fy3 and fy3 > 0 else None
+
+    if cp_pe_fy1 is not None and hard is not None and cp_pe_fy1 <= hard:
+        market_view = "現價用 FY1 EPS 看仍在 hard ceiling 內，市場尚未明顯透支遠期 EPS。"
+    elif cp_pe_fy1 is not None and hard is not None and cp_pe_fy1 > hard:
+        if cp_pe_fy2 is not None and hard is not None and cp_pe_fy2 <= hard:
+            market_view = "用 FY1 EPS 看高於 hard，但用 FY2 EPS 看回到 hard 內；市場可能已在看 FY2 EPS。"
+        elif cp_pe_fy3 is not None and hard is not None and cp_pe_fy3 <= hard:
+            market_view = "用 FY1/FY2 EPS 看偏高，但用 FY3 EPS 看回到 hard 內；市場可能在提前反映 FY3，高風險。"
+        else:
+            market_view = "即使用 FY2/FY3 EPS 仍高於 hard 或資料不足，較可能是市場過熱、EPS 假設太樂觀或倍率假設偏高。"
+    elif cp_pe_ttm is not None and hard is not None and cp_pe_ttm > hard and cp_pe_fy1 is not None and cp_pe_fy1 <= hard:
+        market_view = "用 TTM EPS 看偏高，但用 FY1 EPS 看可回到 hard 內；市場可能已反映 FY1 成長。"
+
+    summary = {
+        "fy_definition": fy_definition,
+        "ttm_eps": ttm,
+        "fy1_eps": fy1,
+        "fy2_eps": fy2,
+        "fy3_eps": fy3,
+        "fy1_year": fy1_year,
+        "fy2_year": fy2_year,
+        "fy3_year": fy3_year,
+        "eps_basis": eps_basis or "未標示",
+        "eps_source_note": eps_source_note or "—",
+        "market_view": market_view,
+        "market_pe_ttm": cp_pe_ttm,
+        "market_pe_fy1": cp_pe_fy1,
+        "market_pe_fy2": cp_pe_fy2,
+        "market_pe_fy3": cp_pe_fy3,
+    }
+    return {"summary": summary, "report": report}
+
