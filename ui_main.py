@@ -1174,7 +1174,7 @@ def render_main_page(sidebar_state=None):
                 # 1) 公式合理估值保留「系統 Forward EPS × formula cap」。
                 # 2) AI估值保留「AI/法人 Forward EPS × formula cap」。
                 # 3) 年度 FY1/FY2/FY3 估值另外列示，不再混入公式合理估值。
-                # 4) 手動年度情境價與樂觀年度情境價改用 FY1 EPS 作年度情境基礎。
+                # 4) 手動年度情境價以 FY1 EPS × 使用者手動 Cap 計算，用於壓力測試/反推現價倍率；樂觀年度情境價以 FY1 EPS × soft ceiling 計算。
                 def _valuation_num(v):
                     try:
                         if v is None:
@@ -1231,9 +1231,9 @@ def render_main_page(sidebar_state=None):
                     f"FY1年度估值(FY1 EPS×formula cap): {fy1_formula_txt}；"
                     f"FY2第二年度估值(FY2 EPS×formula cap): {fy2_formula_txt}；"
                     f"FY3第三年度估值(FY3 EPS×formula cap，高風險): {fy3_formula_txt}；"
-                    f"手動年度情境價(FY1 EPS×可操作Cap): {fy1_manual_txt}；"
+                    f"手動年度情境價(FY1 EPS×使用者手動Cap，壓力測試): {fy1_manual_txt}；"
                     f"樂觀年度情境價(FY1 EPS×soft ceiling): {fy1_optimistic_txt}；"
-                    f"公式倍率: {_fmt_cap(formula_pe_cap)}；手動/可操作倍率: {_fmt_cap(manual_cap_for_calc)}；樂觀倍率: {_fmt_cap(extreme_pe_cap_for_calc)}"
+                    f"公式倍率: {_fmt_cap(formula_pe_cap)}；使用者手動倍率: {_fmt_cap(manual_cap_for_calc)}；樂觀倍率: {_fmt_cap(extreme_pe_cap_for_calc)}"
                 )
 
                 eps_period_note = raw_ai_period or "系統/推估，請確認 EPS 年期"
@@ -1245,7 +1245,7 @@ def render_main_page(sidebar_state=None):
                     ("📅 3. FY1年度估值", f"FY1 EPS × formula cap｜{fy1_year_text}", ai_forward_eps_fy1, formula_pe_cap, fy1_formula_target_price, "#93C5FD"),
                     ("📆 4. FY2第二年度估值", f"FY2 EPS × formula cap｜{fy2_year_text}｜僅供市場先行定價判斷", ai_forward_eps_fy2, formula_pe_cap, fy2_formula_target_price, "#A7F3D0"),
                     ("🚧 5. FY3第三年度估值", f"FY3 EPS × formula cap｜{fy3_year_text}｜高風險遠期情境", ai_forward_eps_fy3, formula_pe_cap, fy3_formula_target_price, "#FCA5A5"),
-                    ("🛠️ 6. 手動年度情境價", "FY1 EPS × 使用者可操作 Cap", fy1_eps_for_annual, manual_cap_for_calc, fy1_manual_target_price, "#00BFFF"),
+                    ("🛠️ 6. 手動年度情境價", "FY1 EPS × 使用者手動 Cap（壓力測試 / 反推現價倍率）", fy1_eps_for_annual, manual_cap_for_calc, fy1_manual_target_price, "#00BFFF"),
                     ("🚀 7. 樂觀年度情境價", "FY1 EPS × soft ceiling，高風險情境", fy1_eps_for_annual, extreme_pe_cap_for_calc, fy1_optimistic_target_price, "#ff4d4d"),
                 ]
 
@@ -1280,7 +1280,7 @@ def render_main_page(sidebar_state=None):
                         公式合理估值保留系統 EPS 口徑；AI估值獨立顯示；FY1 是年度主估值參考；FY2 只用於市場先行定價判斷；FY3 為高風險遠期情境，不可直接當買點。
                     </div>
                     <div style='background:#2c2c2c; padding:4px 8px; border-radius:4px; margin-top:4px;'>
-                        <small style='color:#00bfff;'>🐛 [底層運算除錯] 系統EPS: {_fmt_eps(eff_f_eps)}｜AI EPS: {_fmt_eps(ai_f_eps_calc)}｜FY1 EPS: {_fmt_eps(ai_forward_eps_fy1)}｜FY2 EPS: {_fmt_eps(ai_forward_eps_fy2)}｜FY3 EPS: {_fmt_eps(ai_forward_eps_fy3)}｜EPS 年期/來源: {eps_period_note}｜公式倍率: {_fmt_cap(formula_pe_cap)}｜手動/可操作倍率: {_fmt_cap(manual_cap_for_calc)}｜樂觀倍率: {_fmt_cap(extreme_pe_cap_for_calc)}</small>
+                        <small style='color:#00bfff;'>🐛 [底層運算除錯] 系統EPS: {_fmt_eps(eff_f_eps)}｜AI EPS: {_fmt_eps(ai_f_eps_calc)}｜FY1 EPS: {_fmt_eps(ai_forward_eps_fy1)}｜FY2 EPS: {_fmt_eps(ai_forward_eps_fy2)}｜FY3 EPS: {_fmt_eps(ai_forward_eps_fy3)}｜EPS 年期/來源: {eps_period_note}｜公式倍率: {_fmt_cap(formula_pe_cap)}｜使用者手動倍率: {_fmt_cap(manual_cap_for_calc)}｜樂觀倍率: {_fmt_cap(extreme_pe_cap_for_calc)}</small>
                     </div>
                     {implied_html}{cap_warning_html}
                     </div>
@@ -1627,6 +1627,18 @@ def render_main_page(sidebar_state=None):
             st.markdown(clean_html(dfens_html), unsafe_allow_html=True)
             st.markdown("---")
 
+            # ✅ hotfix：建立「法人目標價面板快照」，後面的打包提示詞只讀這個快照，
+            # 避免提示詞重新抓其他來源造成與面板顯示不同步。
+            target_panel_for_prompt = {
+                "high": ai_hi_val,
+                "mean": ai_me_val,
+                "low": ai_lo_val,
+                "analyst_count": ai_analyst_count,
+                "confidence": locals().get("target_confidence", classify_target_price_confidence(ai_analyst_count)),
+                "source": "法人目標價面板顯示值：AI/法人聯網 target_price_high-target_price_avg-target_price_low" if (ai_hi_val is not None and ai_me_val is not None and ai_lo_val is not None) else ("法人目標價面板顯示值：AI/法人聯網平均目標價" if ai_me_val is not None else "無可用法人目標價"),
+                "rationale": ai_target_rationale,
+            }
+
             analyst_count_display = ai_analyst_count if ai_analyst_count not in (None, "", "null") else "無"
             target_confidence = locals().get("target_confidence", classify_target_price_confidence(ai_analyst_count))
             conf_color = target_confidence.get("color", "#FFD700")
@@ -1814,61 +1826,75 @@ def render_main_page(sidebar_state=None):
             panel_roe = _nullize_text(roe_str)
             panel_de = _nullize_text(de_str)
 
-            # 🚀 法人目標價：提示詞必須跟「法人預估目標價」面板同源。
-            # 面板實際顯示順序是：AI/法人聯網高均低 > AI 單一目標價 > 系統/yfinance 高均低。
-            # 之前提示詞優先抓系統 targetHigh/Mean/Low，會出現面板 3030/2600/2288，提示詞卻 3250/2589.6/2051 的錯位。
-            sys_hi = s_float(info.get('targetHighPrice'))
-            sys_me = s_float(info.get('targetMeanPrice'))
-            sys_lo = s_float(info.get('targetLowPrice'))
-            hi_str = f"{sys_hi:.1f}" if sys_hi is not None else "N/A"
-            me_str = f"{sys_me:.1f}" if sys_me is not None else "N/A"
-            lo_str = f"{sys_lo:.1f}" if sys_lo is not None else "N/A"
+            # 🚀 hotfix-final：法人目標價提示詞「直接讀面板同源變數」，不只依賴 snapshot。
+            # 前幾版若 snapshot 在某些 rerun/分支未帶到值，提示詞會變成「無可用法人目標價」；
+            # 這裡改成：snapshot → AI/法人聯網欄位 → yfinance/info 欄位，並同步分析師人數。
+            _target_panel = locals().get("target_panel_for_prompt", {})
+            if not isinstance(_target_panel, dict):
+                _target_panel = {}
 
-            if ai_hi_val is not None and ai_me_val is not None and ai_lo_val is not None:
-                prompt_hi_str = f"{ai_hi_val:.1f}"
-                prompt_me_str = f"{ai_me_val:.1f}"
-                prompt_lo_str = f"{ai_lo_val:.1f}"
-                prompt_target_source = "法人目標價面板顯示值：AI/法人聯網 target_price_high-target_price_avg-target_price_low"
-            elif ai_me_val is not None:
-                prompt_hi_str = "N/A"
-                prompt_me_str = f"{ai_me_val:.1f}"
-                prompt_lo_str = "N/A"
-                prompt_target_source = "法人目標價面板顯示值：AI/法人聯網平均目標價"
-            elif ai_target_price is not None:
-                prompt_hi_str = "N/A"
-                prompt_me_str = f"{ai_target_price:.1f}"
-                prompt_lo_str = "N/A"
-                prompt_target_source = "法人目標價面板顯示值：AI 單一目標價"
-            elif sys_hi is not None and sys_me is not None and sys_lo is not None:
-                prompt_hi_str = f"{sys_hi:.1f}"
-                prompt_me_str = f"{sys_me:.1f}"
-                prompt_lo_str = f"{sys_lo:.1f}"
-                prompt_target_source = "法人目標價面板備援值：系統/yfinance targetHighPrice-targetMeanPrice-targetLowPrice"
-            elif sys_me is not None:
-                prompt_hi_str = "N/A"
-                prompt_me_str = f"{sys_me:.1f}"
-                prompt_lo_str = "N/A"
-                prompt_target_source = "法人目標價面板備援值：系統/yfinance targetMeanPrice"
+            def _prompt_first_float(*vals):
+                for v in vals:
+                    fv = s_float(v)
+                    if fv is not None and fv > 0:
+                        return fv
+                return None
+
+            _tp_hi = _prompt_first_float(
+                _target_panel.get("high"),
+                locals().get("ai_hi_val"),
+                ai_fin.get("target_price_high") if isinstance(ai_fin, dict) else None,
+                info.get("targetHighPrice") if isinstance(info, dict) else None,
+            )
+            _tp_me = _prompt_first_float(
+                _target_panel.get("mean"),
+                locals().get("ai_me_val"),
+                ai_fin.get("target_price_avg") if isinstance(ai_fin, dict) else None,
+                ai_fin.get("target_price") if isinstance(ai_fin, dict) else None,
+                info.get("targetMeanPrice") if isinstance(info, dict) else None,
+            )
+            _tp_lo = _prompt_first_float(
+                _target_panel.get("low"),
+                locals().get("ai_lo_val"),
+                ai_fin.get("target_price_low") if isinstance(ai_fin, dict) else None,
+                info.get("targetLowPrice") if isinstance(info, dict) else None,
+            )
+
+            prompt_hi_str = f"{_tp_hi:.1f}" if _tp_hi is not None else "N/A"
+            prompt_me_str = f"{_tp_me:.1f}" if _tp_me is not None else "N/A"
+            prompt_lo_str = f"{_tp_lo:.1f}" if _tp_lo is not None else "N/A"
+
+            prompt_analyst_count = _first_valid_analyst_count(
+                _target_panel.get("analyst_count"),
+                locals().get("ai_analyst_count"),
+                ai_fin.get("target_price_analyst_count") if isinstance(ai_fin, dict) else None,
+                ai_fin.get("analyst_count") if isinstance(ai_fin, dict) else None,
+                ai_fin.get("target_analyst_count") if isinstance(ai_fin, dict) else None,
+                info.get("numberOfAnalystOpinions") if isinstance(info, dict) else None,
+            )
+
+            if _tp_hi is not None or _tp_me is not None or _tp_lo is not None:
+                if (locals().get("ai_hi_val") is not None or locals().get("ai_me_val") is not None or locals().get("ai_lo_val") is not None):
+                    prompt_target_source = "法人目標價面板同源：AI/法人聯網 target_price_high-target_price_avg-target_price_low"
+                else:
+                    prompt_target_source = "系統/info 法人目標價備援：targetHighPrice-targetMeanPrice-targetLowPrice"
             else:
-                prompt_hi_str = prompt_me_str = prompt_lo_str = "N/A"
                 prompt_target_source = "無可用法人目標價"
 
-            # 分析師人數也跟面板同源：面板標題使用 ai_analyst_count；前面已把 AI / 系統 numberOfAnalystOpinions 做過 first_valid 合併。
-            prompt_analyst_count = _first_valid_analyst_count(
-                ai_analyst_count,
-                sys_analyst_count,
-                ai_fin.get('analyst_count') if has_ai_fin_fetch else None,
-                ai_fin.get('target_analyst_count') if has_ai_fin_fetch else None,
-            )
             prompt_target_confidence = classify_target_price_confidence(prompt_analyst_count)
             target_confidence = prompt_target_confidence
+            prompt_target_rationale = (
+                _target_panel.get("rationale")
+                or (ai_fin.get("target_price_rationale") if isinstance(ai_fin, dict) else "")
+                or ""
+            )
 
             ai_source_trace_df_for_prompt = build_ai_source_trace_report(temp_ai_fin) if isinstance(temp_ai_fin, dict) else pd.DataFrame()
             ai_validation_warnings_for_prompt = temp_ai_fin.get("_ai_validation_warnings", []) if isinstance(temp_ai_fin, dict) else []
             ai_validation_status_for_prompt = temp_ai_fin.get("_ai_validation_status", "") if isinstance(temp_ai_fin, dict) else ""
             final_signal_report_for_prompt = final_signal.get("report") if isinstance(final_signal, dict) else None
             valuation_report_for_prompt = valuation_separation.get("report") if isinstance(valuation_separation, dict) else None
-            target_confidence_report_for_prompt = build_target_price_confidence_report(prompt_analyst_count, sys_hi if sys_hi is not None else ai_hi_val, sys_me if sys_me is not None else ai_me_val, sys_lo if sys_lo is not None else ai_lo_val, ai_target_rationale)
+            target_confidence_report_for_prompt = build_target_price_confidence_report(prompt_analyst_count, _tp_hi, _tp_me, _tp_lo, prompt_target_rationale)
             industry_report_for_prompt = build_industry_valuation_model_report(industry_profile)
             dynamic_cap_report_for_prompt = dynamic_cap_pack.get("report") if isinstance(dynamic_cap_pack, dict) else None
 
@@ -1945,43 +1971,244 @@ def render_main_page(sidebar_state=None):
                         pass
                     return "NULL"
 
-            def _prompt_dynamic_cap_core(pack):
+            def _prompt_dynamic_cap_core(pack, mode="research"):
+                """Dynamic Cap 提示詞摘要：避免 raw dict/debug log，統一格式化倍率、折扣與採用輸入。"""
                 try:
                     if not isinstance(pack, dict):
                         return "NULL"
-                    keys = [
-                        ("使用模型", "valuation_mode"),
-                        ("產業基準倍率", "base_multiple"),
-                        ("成長係數", "growth_factor"),
-                        ("品質係數", "quality_factor"),
-                        ("題材係數", "theme_factor"),
-                        ("規模係數", "scale_factor"),
-                        ("資料可信度折扣", "data_confidence_factor"),
-                        ("估值風險折扣", "valuation_risk_factor"),
-                        ("流動性折扣", "liquidity_factor"),
-                        ("可操作倍率低", "operable_cap_low"),
-                        ("可操作倍率高", "operable_cap_high"),
-                        ("中性可操作倍率", "final_cap"),
-                        ("公式合理倍率", "formula_cap"),
-                        ("樂觀情境倍率", "optimistic_cap"),
-                        ("hard ceiling", "hard_ceiling_cap"),
-                        ("模型版本", "model_version"),
-                    ]
+
+                    def _sf2(v):
+                        try:
+                            return s_float(v)
+                        except Exception:
+                            return None
+
+                    def _has(v):
+                        return _sf2(v) is not None or (_nullize_text(v) not in ("NULL", "[]", "{}"))
+
+                    def _fmt_num(v, digits=2):
+                        x = _sf2(v)
+                        return "NULL" if x is None else f"{x:.{digits}f}"
+
+                    def _fmt_x(v, digits=1):
+                        x = _sf2(v)
+                        return "NULL" if x is None else f"{x:.{digits}f}x"
+
+                    def _fmt_pct(v, digits=1):
+                        x = _sf2(v)
+                        if x is None:
+                            return "NULL"
+                        # Dynamic Cap 內部多數用 0.662 = 66.2%，但也容忍 66.2 這類輸入。
+                        if abs(x) <= 3:
+                            x *= 100
+                        return f"{x:.{digits}f}%"
+
+                    def _fmt_money(v):
+                        x = _sf2(v)
+                        if x is None:
+                            return "NULL"
+                        ax = abs(x)
+                        if ax >= 1_000_000_000_000:
+                            return f"約 {x/1_000_000_000_000:.2f} 兆"
+                        if ax >= 100_000_000:
+                            return f"約 {x/100_000_000:.1f} 億"
+                        return f"{x:,.0f}"
+
+                    def _fmt_factor(raw):
+                        """把 {'factor':0.9,'label':'中','reason':'...'} 轉成可讀文字。"""
+                        if isinstance(raw, dict):
+                            factor = _fmt_num(raw.get("factor"), 2)
+                            label = _nullize_text(raw.get("label"))
+                            reason = _nullize_text(raw.get("reason"))
+                            avg_lots = _sf2(raw.get("avg_lots"))
+                            parts = []
+                            if factor != "NULL":
+                                parts.append(f"×{factor}")
+                            if label != "NULL":
+                                parts.append(label)
+                            if avg_lots is not None:
+                                parts.append(f"近20日均量約 {avg_lots:,.0f} 張")
+                            if reason != "NULL":
+                                parts.append(f"原因: {reason}")
+                            return "；".join(parts) if parts else "NULL"
+                        x = _sf2(raw)
+                        return "NULL" if x is None else f"×{x:.2f}"
+
+                    def _fmt_list(v):
+                        if isinstance(v, (list, tuple, set)):
+                            vals = [_nullize_text(x) for x in v if _nullize_text(x) != "NULL"]
+                            return "；".join(vals) if vals else "無"
+                        t = _nullize_text(v)
+                        if t in ("NULL", "[]"):
+                            return "無"
+                        return t
+
+                    def _get_input(inp, key, fallback=None):
+                        if isinstance(inp, dict) and key in inp and _nullize_text(inp.get(key)) != "NULL":
+                            return inp.get(key)
+                        return fallback
+
+                    cap_inputs = pack.get("cap_inputs") if isinstance(pack.get("cap_inputs"), dict) else {}
+                    warnings = _fmt_list(pack.get("warnings"))
+                    notes = _fmt_list(pack.get("cap_adoption_notes"))
+
+                    valuation_mode = _nullize_text(pack.get("valuation_mode"))
+                    model_version = _nullize_text(pack.get("model_version"))
+                    base_multiple = _fmt_x(pack.get("base_multiple"), 1)
+                    op_low = _fmt_x(pack.get("operable_cap_low"), 1)
+                    op_high = _fmt_x(pack.get("operable_cap_high"), 1)
+                    final_cap = _fmt_x(pack.get("final_cap"), 1)
+                    formula_cap = _fmt_x(pack.get("formula_cap"), 1)
+                    optimistic_cap = _fmt_x(pack.get("optimistic_cap"), 1)
+                    hard_cap = _fmt_x(pack.get("hard_ceiling_cap"), 1)
+
+                    # 與 EPS/PEG 面板保持同一口徑：cap_inputs 優先，缺值時才讀畫面變數。
+                    try:
+                        _fallback_ttm = eff_t_eps
+                    except Exception:
+                        _fallback_ttm = None
+                    try:
+                        _fallback_sys_f = sys_forward_eps_system
+                    except Exception:
+                        _fallback_sys_f = None
+                    try:
+                        _fallback_ai_f = ai_f_eps_calc
+                    except Exception:
+                        _fallback_ai_f = None
+                    try:
+                        _fallback_adopted = cap_adopted_forward_eps
+                    except Exception:
+                        _fallback_adopted = None
+                    try:
+                        _fallback_fy1 = ai_forward_eps_fy1
+                    except Exception:
+                        _fallback_fy1 = None
+                    try:
+                        _fallback_fy2 = ai_forward_eps_fy2
+                    except Exception:
+                        _fallback_fy2 = None
+                    try:
+                        _fallback_fy3 = ai_forward_eps_fy3
+                    except Exception:
+                        _fallback_fy3 = None
+                    try:
+                        _fallback_fy1_year = ai_forward_eps_fy1_year
+                    except Exception:
+                        _fallback_fy1_year = None
+                    try:
+                        _fallback_fy2_year = ai_forward_eps_fy2_year
+                    except Exception:
+                        _fallback_fy2_year = None
+                    try:
+                        _fallback_fy3_year = ai_forward_eps_fy3_year
+                    except Exception:
+                        _fallback_fy3_year = None
+                    try:
+                        _fallback_fy_note = ai_forward_eps_fy_source_note
+                    except Exception:
+                        _fallback_fy_note = None
+
+                    ttm_eps = _get_input(cap_inputs, "ttm_eps", _fallback_ttm)
+                    sys_feps = _get_input(cap_inputs, "system_forward_eps", _fallback_sys_f)
+                    ai_feps = _get_input(cap_inputs, "ai_forward_eps", _fallback_ai_f)
+                    adopted_eps = _get_input(cap_inputs, "adopted_valuation_forward_eps", _fallback_adopted)
+                    fy1_eps = _get_input(cap_inputs, "adopted_fy1_eps", _fallback_fy1)
+                    fy2_eps = _get_input(cap_inputs, "adopted_fy2_eps", _fallback_fy2)
+                    fy3_eps = _get_input(cap_inputs, "adopted_fy3_eps", _fallback_fy3)
+                    fy1_year = _get_input(cap_inputs, "fy1_year", _fallback_fy1_year)
+                    fy2_year = _get_input(cap_inputs, "fy2_year", _fallback_fy2_year)
+                    fy3_year = _get_input(cap_inputs, "fy3_year", _fallback_fy3_year)
+                    fy_note = _get_input(cap_inputs, "fy_eps_source_note", _fallback_fy_note)
+
+                    gm = _get_input(cap_inputs, "gross_margin")
+                    om = _get_input(cap_inputs, "operating_margin")
+                    roe = _get_input(cap_inputs, "roe")
+                    de = _get_input(cap_inputs, "debt_to_equity")
+                    rev_yoy = _get_input(cap_inputs, "revenue_yoy")
+                    fcf = _get_input(cap_inputs, "free_cash_flow")
+
+                    # 共同核心摘要，買進版與研究版都需要，但避免 raw dict。
                     lines = []
-                    for label, key in keys:
-                        val = _nullize_text(pack.get(key))
-                        if val != "NULL":
-                            lines.append(f"- {label}: {val}")
-                    warn = _nullize_text(pack.get("warnings"))
-                    if warn != "NULL":
-                        lines.append(f"- 模型警告: {warn}")
-                    inputs = _nullize_text(pack.get("cap_inputs"))
-                    if inputs != "NULL":
-                        lines.append(f"- Dynamic Cap 實際採用輸入值: {inputs}")
-                    notes = _nullize_text(pack.get("cap_adoption_notes"))
-                    if notes != "NULL":
-                        lines.append(f"- AI校對採用/保守值紀錄: {notes}")
-                    return "\n".join(lines) if lines else "NULL"
+                    if valuation_mode != "NULL":
+                        lines.append(f"- 使用模型: {valuation_mode}")
+                    if model_version != "NULL":
+                        lines.append(f"- 模型版本: {model_version}")
+                    if base_multiple != "NULL":
+                        lines.append(f"- 產業基準倍率: {base_multiple}")
+                    if op_low != "NULL" or op_high != "NULL":
+                        lines.append(f"- 可操作倍率區間: {op_low} ～ {op_high}")
+                    if final_cap != "NULL":
+                        lines.append(f"- 中性可操作倍率: {final_cap}")
+                    if formula_cap != "NULL":
+                        lines.append(f"- 公式合理倍率: {formula_cap}（模型理論估值，不等於買點）")
+                    if optimistic_cap != "NULL":
+                        lines.append(f"- 樂觀情境倍率: {optimistic_cap}（高風險情境，不等於買點）")
+                    if hard_cap != "NULL":
+                        lines.append(f"- hard ceiling: {hard_cap}（強制估值上限，不可因股價上漲直接調高）")
+
+                    discount_parts = []
+                    for label, key in [
+                        ("資料可信度", "data_confidence_factor"),
+                        ("估值風險", "valuation_risk_factor"),
+                        ("流動性", "liquidity_factor"),
+                    ]:
+                        txt = _fmt_factor(pack.get(key))
+                        if txt != "NULL":
+                            discount_parts.append(f"{label} {txt}")
+                    if discount_parts:
+                        lines.append("- 折扣摘要: " + "；".join(discount_parts))
+
+                    eps_parts = []
+                    if _fmt_num(adopted_eps, 2) != "NULL":
+                        eps_parts.append(f"Dynamic Cap 採用估值 EPS={_fmt_num(adopted_eps, 2)}")
+                    if _fmt_num(ttm_eps, 2) != "NULL":
+                        eps_parts.append(f"TTM EPS={_fmt_num(ttm_eps, 2)}")
+                    if _fmt_num(sys_feps, 2) != "NULL":
+                        eps_parts.append(f"系統 Forward EPS={_fmt_num(sys_feps, 2)}")
+                    if _fmt_num(ai_feps, 2) != "NULL":
+                        eps_parts.append(f"AI/法人 Forward EPS={_fmt_num(ai_feps, 2)}")
+                    if eps_parts:
+                        lines.append("- EPS 採用摘要: " + "；".join(eps_parts))
+                    if any(_fmt_num(v, 2) != "NULL" for v in [fy1_eps, fy2_eps, fy3_eps]):
+                        lines.append(f"- FY1 / FY2 / FY3 EPS: {_fmt_num(fy1_eps, 2)} / {_fmt_num(fy2_eps, 2)} / {_fmt_num(fy3_eps, 2)}")
+                    if any(_nullize_text(v) != "NULL" for v in [fy1_year, fy2_year, fy3_year]):
+                        lines.append(f"- FY 年度: {_nullize_text(fy1_year)} / {_nullize_text(fy2_year)} / {_nullize_text(fy3_year)}")
+                    if _nullize_text(fy_note) != "NULL":
+                        lines.append(f"- EPS 來源說明: {_nullize_text(fy_note)}")
+                    if notes != "無":
+                        lines.append(f"- AI校對採用紀錄: {notes}")
+                    if warnings != "無":
+                        lines.append(f"- 模型警告: {warnings}")
+                    lines.append("- 使用限制: 公式合理倍率與樂觀倍率不是買點；操作應優先看系統可操作倍率區間、Forward PEG 估值分層與最終燈號；使用者手動倍率僅供壓力測試/反推現價倍率。")
+
+                    if str(mode).lower() in {"decision", "buy", "compact"}:
+                        return "\n".join(lines) if lines else "NULL"
+
+                    # 研究完整版：補充模型採用輸入，但仍不輸出 raw dict。
+                    research_lines = list(lines)
+                    factor_parts = []
+                    if _fmt_pct(gm) != "NULL":
+                        factor_parts.append(f"毛利率 {_fmt_pct(gm)}")
+                    if _fmt_pct(om) != "NULL":
+                        factor_parts.append(f"營益率 {_fmt_pct(om)}")
+                    if _fmt_pct(roe) != "NULL":
+                        factor_parts.append(f"ROE {_fmt_pct(roe)}")
+                    if _fmt_num(de, 2) != "NULL":
+                        factor_parts.append(f"D/E {_fmt_num(de, 2)}")
+                    if factor_parts:
+                        research_lines.append("\n【9-1. Dynamic Cap 採用品質/風險因子】")
+                        research_lines.append("- " + "；".join(factor_parts))
+                    growth_parts = []
+                    if _fmt_pct(rev_yoy) != "NULL":
+                        growth_parts.append(f"營收 YoY {_fmt_pct(rev_yoy)}")
+                    if _fmt_money(fcf) != "NULL":
+                        growth_parts.append(f"FCF {_fmt_money(fcf)}")
+                    if growth_parts:
+                        research_lines.append("\n【9-2. Dynamic Cap 採用成長/現金流因子】")
+                        research_lines.append("- " + "；".join(growth_parts))
+                    research_lines.append("\n【9-3. EPS 採用規則】")
+                    research_lines.append("- TTM EPS 看目前實際獲利；FY1 作主估值；FY2 判斷市場是否先行定價；FY3 僅作高風險樂觀情境；最新單季 EPS 不進年度估值。")
+                    return "\n".join(research_lines) if research_lines else "NULL"
                 except Exception as e:
                     try:
                         log_exception("PromptPack", "_prompt_dynamic_cap_core", e)
@@ -2061,7 +2288,7 @@ def render_main_page(sidebar_state=None):
                         ("3. FY1年度估值", f"FY1 EPS × formula cap｜{_y(fy1_year)}", fy1_eps, formula_cap, fy1_price, "一年預估 EPS 的年度主估值參考。"),
                         ("4. FY2第二年度估值", f"FY2 EPS × formula cap｜{_y(fy2_year)}", fy2_eps, formula_cap, fy2_price, "只用於判斷市場是否提前反映第二年獲利，不直接當買點。"),
                         ("5. FY3第三年度估值", f"FY3 EPS × formula cap｜{_y(fy3_year)}", fy3_eps, formula_cap, fy3_price, "高風險遠期情境，需多家法人共識或人工確認，不可直接當買進目標。"),
-                        ("6. 手動年度情境價", "FY1 EPS × 使用者可操作 Cap", fy1_eps_for_annual, manual_cap, manual_price, "用 FY1 EPS 搭配使用者可操作倍率，才接近可操作情境。"),
+                        ("6. 手動年度情境價", "FY1 EPS × 使用者手動 Cap（壓力測試 / 反推現價倍率）", fy1_eps_for_annual, manual_cap, manual_price, "用 FY1 EPS 搭配使用者手動倍率，供壓力測試/反推現價倍率；不代表系統建議買點。"),
                         ("7. 樂觀年度情境價", "FY1 EPS × soft ceiling，高風險情境", fy1_eps_for_annual, optimistic_cap, optimistic_price, "樂觀情境價不是買點；若現價高於此值，追高風險極高。"),
                     ]
                     lines = []
@@ -2076,40 +2303,188 @@ def render_main_page(sidebar_state=None):
                         pass
                     return _nullize_text(tp_est_str)
 
-            def _prompt_snapshot_audit_core(audit, industry_profile=None, dynamic_cap_pack=None):
-                """第 17-C-9c-hotfix44-1：把單次快照稽核與是否需更新模型的判斷要求打包給外部 AI。"""
+            def _prompt_snapshot_audit_summary(
+                audit,
+                industry_profile=None,
+                dynamic_cap_pack=None,
+                market_implied_pe_val=locals().get('market_implied_pe'),
+                target_avg_implied_pe_val=locals().get('target_avg_implied_pe'),
+                target_high_implied_pe_val=locals().get('target_high_implied_pe'),
+            ):
+                """買進決策版：只放產業模型稽核摘要，避免模型維護資訊干擾交易判斷。"""
                 try:
                     if not isinstance(audit, dict):
-                        return "NULL"
+                        return "- 本次無產業模型稽核資料。"
                     s = audit.get("summary", {}) or {}
                     p = industry_profile or {}
                     dcp = dynamic_cap_pack or {}
-                    lines = [
-                        f"- 稽核結果: {_nullize_text(s.get('audit_label'))}",
-                        f"- 稽核分數: {_nullize_text(s.get('audit_score'))}",
-                        f"- 系統建議動作: {_nullize_text(s.get('action'))}",
-                        f"- 產業模型建置時間 / 版本: {_nullize_text(s.get('model_built_at'))} / {_nullize_text(p.get('model_build_version'))}",
-                        f"- 目前 primary_taxon: {_nullize_text(s.get('primary_taxon'))}",
-                        f"- 目前 hybrid_taxons: {_nullize_text(s.get('hybrid_taxons'))}",
-                        f"- 混合後 base/floor/soft/hard: {_nullize_text(s.get('mixed_caps'))}",
-                        f"- 現價隱含 Forward P/E: {_nullize_text(market_implied_pe if 'market_implied_pe' in locals() else None)}x",
-                        f"- 法人均價隱含 Forward P/E: {_nullize_text(target_avg_implied_pe if 'target_avg_implied_pe' in locals() else None)}x",
-                        f"- 法人高標隱含 Forward P/E: {_nullize_text(target_high_implied_pe if 'target_high_implied_pe' in locals() else None)}x",
-                        f"- 系統 hard ceiling: {_nullize_text(dcp.get('hard_ceiling_cap') if isinstance(dcp, dict) else None)}x",
-                        f"- 正面支持因素: {_nullize_text(s.get('positives'))}",
-                        f"- 風險/反對因素: {_nullize_text(s.get('negatives'))}",
-                        f"- 歷史紀錄狀態: {_nullize_text(s.get('history_note'))}",
-                        "- 請 AI 判斷：這是市場短線過熱、法人目標價過度樂觀、EPS/營收/毛利率尚未落地、hybrid 權重可能偏低、primary_taxon 可能已不符合公司營運型態，或整個產業 base/soft/hard 需要重新校準。",
-                        "- 請 AI 僅能從下列 5 種回答模型更新建議：不建議更新模型 / 暫時觀察 / 建議檢查 hybrid 權重 / 建議檢查 primary_taxon / 建議檢查整個產業倍率。",
-                        "- 重要限制：單次快照不能當成長期重估證據；不可因現價高於 hard ceiling 就直接調高模型；若要正式更新模型，必須說明要改 primary_taxon、hybrid_taxons 或 base/soft/hard，以及依據是 EPS、營收、毛利率、法人共識還是產業結構變化。",
-                    ]
-                    return "\\n".join(lines)
+
+                    def _clean(v, default="無"):
+                        if v is None:
+                            return default
+                        try:
+                            if pd.isna(v):
+                                return default
+                        except Exception:
+                            pass
+                        if isinstance(v, (list, tuple, set)):
+                            vals = [str(x).strip() for x in v if str(x).strip() and str(x).strip().upper() not in {"NULL", "NONE", "N/A"}]
+                            return "、".join(vals) if vals else default
+                        t = str(v).strip()
+                        return default if t == "" or t.upper() in {"NULL", "NONE", "N/A", "—", "[]"} else t
+
+                    def _x(v):
+                        n = s_float(v)
+                        return "無" if n is None else f"{n:.1f}x"
+
+                    def _line(label, value):
+                        value = _clean(value)
+                        return None if value == "無" else f"- {label}: {value}"
+
+                    positives = _clean(s.get('positives'))
+                    negatives = _clean(s.get('negatives'))
+                    lines = []
+                    for item in [
+                        _line("稽核結果", s.get('audit_label')),
+                        _line("稽核分數", s.get('audit_score')),
+                        _line("系統建議動作", s.get('action')),
+                        _line("目前 primary_taxon", s.get('primary_taxon')),
+                    ]:
+                        if item:
+                            lines.append(item)
+
+                    hard = dcp.get('hard_ceiling_cap') if isinstance(dcp, dict) else None
+                    if s_float(hard) is not None:
+                        lines.append(f"- 系統 hard ceiling: {_x(hard)}")
+
+                    implied_parts = []
+                    if s_float(market_implied_pe_val) is not None:
+                        implied_parts.append(f"現價 {_x(market_implied_pe_val)}")
+                    if s_float(target_avg_implied_pe_val) is not None:
+                        implied_parts.append(f"法人均價 {_x(target_avg_implied_pe_val)}")
+                    if s_float(target_high_implied_pe_val) is not None:
+                        implied_parts.append(f"法人高標 {_x(target_high_implied_pe_val)}")
+                    if implied_parts:
+                        lines.append("- 現價 / 法人均價 / 法人高標隱含 Forward P/E: " + " / ".join(implied_parts))
+
+                    lines.append(f"- 正面支持因素: {positives}")
+                    lines.append(f"- 風險/反對因素: {negatives}")
+                    lines.append("- 重要限制: 本區僅供模型是否失準之輔助判斷，不可因現價或法人目標價接近/高於 hard ceiling 就直接調高模型，也不可直接作為買進依據。")
+                    return "\n".join(lines)
+                except Exception as e:
+                    try:
+                        log_exception("PromptPack", "_prompt_snapshot_audit_summary", e)
+                    except Exception:
+                        pass
+                    return "- 產業模型稽核摘要產生失敗。"
+
+            def _prompt_snapshot_audit_core(
+                audit,
+                industry_profile=None,
+                dynamic_cap_pack=None,
+                market_implied_pe_val=locals().get('market_implied_pe'),
+                target_avg_implied_pe_val=locals().get('target_avg_implied_pe'),
+                target_high_implied_pe_val=locals().get('target_high_implied_pe'),
+            ):
+                """研究完整版：完整打包單次快照稽核與是否需更新模型的判斷要求。"""
+                try:
+                    if not isinstance(audit, dict):
+                        return "- 本次無產業模型稽核資料。"
+                    s = audit.get("summary", {}) or {}
+                    p = industry_profile or {}
+                    dcp = dynamic_cap_pack or {}
+
+                    def _clean(v, default="無"):
+                        if v is None:
+                            return default
+                        try:
+                            if pd.isna(v):
+                                return default
+                        except Exception:
+                            pass
+                        if isinstance(v, (list, tuple, set)):
+                            vals = [str(x).strip() for x in v if str(x).strip() and str(x).strip().upper() not in {"NULL", "NONE", "N/A"}]
+                            return "、".join(vals) if vals else default
+                        t = str(v).strip()
+                        return default if t == "" or t.upper() in {"NULL", "NONE", "N/A", "—", "[]"} else t
+
+                    def _x(v):
+                        n = s_float(v)
+                        return "無" if n is None else f"{n:.1f}x"
+
+                    built_at = _clean(s.get('model_built_at'))
+                    version = _clean(p.get('model_build_version'))
+                    if built_at != "無" and version != "無":
+                        build_text = f"{built_at} / {version}"
+                    elif built_at != "無":
+                        build_text = built_at
+                    elif version != "無":
+                        build_text = version
+                    else:
+                        build_text = "無"
+
+                    lines = []
+                    for label, value in [
+                        ("稽核結果", s.get('audit_label')),
+                        ("稽核分數", s.get('audit_score')),
+                        ("系統建議動作", s.get('action')),
+                        ("產業模型建置時間 / 版本", build_text),
+                        ("目前 primary_taxon", s.get('primary_taxon')),
+                        ("目前 hybrid_taxons", s.get('hybrid_taxons')),
+                        ("混合後 base / floor / soft / hard", s.get('mixed_caps')),
+                    ]:
+                        v = _clean(value)
+                        if v != "無":
+                            lines.append(f"- {label}: {v}")
+
+                    if s_float(market_implied_pe_val) is not None:
+                        lines.append(f"- 現價隱含 Forward P/E: {_x(market_implied_pe_val)}")
+                    if s_float(target_avg_implied_pe_val) is not None:
+                        lines.append(f"- 法人均價隱含 Forward P/E: {_x(target_avg_implied_pe_val)}")
+                    if s_float(target_high_implied_pe_val) is not None:
+                        lines.append(f"- 法人高標隱含 Forward P/E: {_x(target_high_implied_pe_val)}")
+                    hard = dcp.get('hard_ceiling_cap') if isinstance(dcp, dict) else None
+                    if s_float(hard) is not None:
+                        lines.append(f"- 系統 hard ceiling: {_x(hard)}")
+
+                    lines.append(f"- 正面支持因素: {_clean(s.get('positives'))}")
+                    lines.append(f"- 風險/反對因素: {_clean(s.get('negatives'))}")
+                    history_note = _clean(s.get('history_note'))
+                    if history_note != "無":
+                        lines.append(f"- 歷史紀錄狀態: {history_note}")
+                    else:
+                        lines.append("- 歷史紀錄狀態: 目前未啟用歷史紀錄，本表僅為本次快照稽核，不能判斷連續幾次或長期重估。")
+
+                    lines.extend([
+                        "",
+                        "請 AI 判斷這次差異屬於下列哪一類：",
+                        "1. 市場短線過熱",
+                        "2. 法人目標價過度樂觀",
+                        "3. EPS / 營收 / 毛利率尚未落地",
+                        "4. hybrid 權重可能偏低",
+                        "5. primary_taxon 可能已不符合公司營運型態",
+                        "6. 整個產業 base / soft / hard ceiling 可能需要重新校準",
+                        "",
+                        "請 AI 僅能從下列 5 種回答模型更新建議：",
+                        "- 不建議更新模型",
+                        "- 暫時觀察",
+                        "- 建議檢查 hybrid 權重",
+                        "- 建議檢查 primary_taxon",
+                        "- 建議檢查整個產業倍率",
+                        "",
+                        "重要限制：",
+                        "- 單次快照不能當成長期重估證據。",
+                        "- 不可因現價高於 hard ceiling 就直接調高模型。",
+                        "- 若要正式更新模型，必須說明要改 primary_taxon、hybrid_taxons 或 base/soft/hard。",
+                        "- 更新依據必須來自 EPS、營收、毛利率、法人共識或產業結構變化，而不是單純股價上漲。",
+                    ])
+                    return "\n".join(lines)
                 except Exception as e:
                     try:
                         log_exception("PromptPack", "_prompt_snapshot_audit_core", e)
                     except Exception:
                         pass
-                    return "NULL"
+                    return "- 產業模型稽核內容產生失敗。"
 
             def _prompt_eps_adoption_sync_summary(
                 sys_latest_quarter_eps_val=locals().get('sys_latest_quarter_eps'),
@@ -2211,7 +2586,7 @@ def render_main_page(sidebar_state=None):
                     if _cap(formula_pe_cap_val) != "NULL":
                         cap_parts.append(f"formula cap={_cap(formula_pe_cap_val)}")
                     if _cap(manual_cap_for_calc_val) != "NULL":
-                        cap_parts.append(f"可操作 Cap={_cap(manual_cap_for_calc_val)}")
+                        cap_parts.append(f"使用者手動 Cap={_cap(manual_cap_for_calc_val)}")
                     if _cap(extreme_pe_cap_for_calc_val) != "NULL":
                         cap_parts.append(f"soft ceiling={_cap(extreme_pe_cap_for_calc_val)}")
                     if cap_parts:
@@ -2254,8 +2629,8 @@ def render_main_page(sidebar_state=None):
                         lines.append(f"- 目標價資料來源: {_nullize_text(prompt_target_source)}")
                     if _nullize_text(ai_tp_str) != "NULL":
                         lines.append(f"- AI 最新目標價補充: {_nullize_text(ai_tp_str)}")
-                    if _nullize_text(ai_target_rationale) != "NULL":
-                        lines.append(f"- 核心理由: {_nullize_text(ai_target_rationale)}")
+                    if _nullize_text(prompt_target_rationale) != "NULL":
+                        lines.append(f"- 核心理由: {_nullize_text(prompt_target_rationale)}")
                     lines.append("- 同步規則: 以法人目標價面板顯示值為準；若面板無系統值，才回填 AI 目標價；沒有資料的 AI 欄位不輸出 NULL。")
                     return "\n".join(lines) if lines else "無可用法人目標價面板資料，本次不納入法人目標價判斷。"
                 except Exception as e:
@@ -2380,6 +2755,122 @@ def render_main_page(sidebar_state=None):
                     return "\n".join(lines)
                 except Exception:
                     return "NULL"
+
+
+
+
+            def _prompt_model_gap_trigger_conditions():
+                """研究完整版專用：市場價/法人價/系統估值落差過大時，啟動模型落差診斷。"""
+                return """本區只放在研究完整版；用途是讓外部 AI 在市場價、法人價、系統估值差距過大時，先做模型落差診斷，再給研究結論。
+
+若符合下列任一條件，請啟動模型落差診斷：
+- 現價高於系統可操作區間高標 20% 以上。
+- 現價高於 FY1 公式估值 30% 以上。
+- 法人平均目標價與系統可操作區間中值差距超過 30%。
+- 法人最高目標價與最低目標價差距超過平均目標價 60%。
+- 現價用 FY1 EPS 看高於 hard ceiling，但用 FY2 / FY3 EPS 看可解釋。
+
+請 AI 逐項判斷落差可能來源：
+1. 市場是否已提前反映 FY2 / FY3 EPS。
+2. primary_taxon 是否可能已不符合市場定價邏輯。
+3. hybrid 權重是否可能不足。
+4. 是否只是市場題材或短線過熱。
+5. 法人目標價是否分歧過大，導致平均目標價可信度下降。
+
+請 AI 最後只能從下列 5 種模型診斷結論選一種：
+- 模型暫不需調整，市場短線過熱。
+- 模型暫不需調整，但市場正在提前反映 FY2/FY3。
+- 建議檢查 hybrid 權重。
+- 建議檢查 primary_taxon。
+- 建議檢查整個產業倍率。
+
+重要限制：
+- 不可因股價高於模型價就直接調高模型。
+- 不可因單一法人高標就調高模型。
+- FY2 只能解釋市場先行定價，不等於買點。
+- FY3 只作高風險遠期情境，不可作一般買進依據。
+- 若建議調整模型，必須說明是 primary_taxon、hybrid 權重，還是 base / soft / hard ceiling 的問題。"""
+
+            def _prompt_buy_decision_gap_risk_conditions():
+                """買進決策版專用：市場價/法人價/系統估值落差過大時，只提醒買進安全邊際，不做模型庫回饋。"""
+                return """本區只放在買進決策版；用途是讓外部 AI 在判斷是否買進前，先檢查市場價、法人目標價、系統可操作估值與 FY1/FY2/FY3 估值是否落差過大。
+
+若符合下列任一條件，請啟動買進風險檢查：
+- 現價高於系統可操作區間高標 20% 以上。
+- 現價高於 FY1 公式估值 30% 以上。
+- 現價只能用 FY2 / FY3 EPS 才能解釋。
+- 法人平均目標價與系統可操作區間中值差距超過 30%。
+- 法人最高目標價與最低目標價差距超過平均目標價 60%。
+
+請 AI 判斷此落差對「買進安全邊際」的影響：
+1. 現價是否已提前反映 FY2 / FY3 EPS。
+2. 法人高標是否過度樂觀或高低標分歧過大。
+3. 現價是否高於系統可操作區間，導致追價風險偏高。
+4. 若只能用 FY2 / FY3 解釋現價，請說明 EPS / 營收 / 毛利率是否已經落地。
+5. 若差距過大，請明確標示：不宜追價 / 只能觀察 / 需等 EPS 或營收落地後再評估。
+
+重要限制：
+- 本區不是模型庫修正建議，只用於買進風險判斷。
+- FY2 只能解釋市場先行定價，不等於買點。
+- FY3 只作高風險遠期情境，不可作一般買進依據。
+- 法人高標不可直接視為合理買進價。
+- 公式合理價、樂觀情境價、使用者手動壓力測試價都不是系統建議買點。"""
+
+            def _prompt_model_library_feedback_request():
+                """研究完整版專用：請外部 AI 把個案分析回饋成模型庫修正候選，不放入買進決策版。"""
+                try:
+                    primary_taxon = _nullize_text(industry_profile.get('primary_taxon') if isinstance(industry_profile, dict) else 'NULL')
+                    model_label = _nullize_text(industry_profile.get('model_label') if isinstance(industry_profile, dict) else 'NULL')
+                    hybrid_taxons = _nullize_text(industry_profile.get('hybrid_taxons_text') if isinstance(industry_profile, dict) else 'NULL')
+                    mixed_caps = _nullize_text(industry_profile.get('hybrid_mixed_caps_text') if isinstance(industry_profile, dict) else 'NULL')
+                    source = _nullize_text(industry_profile.get('classification_source') if isinstance(industry_profile, dict) else 'NULL')
+                    confidence = _nullize_text(industry_profile.get('classification_confidence') if isinstance(industry_profile, dict) else 'NULL')
+                    hard_cap = _nullize_text(industry_profile.get('hard_ceiling_pe') if isinstance(industry_profile, dict) else 'NULL')
+                    soft_cap = _nullize_text(industry_profile.get('soft_ceiling_pe') if isinstance(industry_profile, dict) else 'NULL')
+
+                    lines = [
+                        "本區只放在研究完整版；目的不是產生買賣建議，而是把本次個案分析整理成模型庫修正候選清單。",
+                        f"- 目前 primary_taxon: {primary_taxon}",
+                        f"- 目前匹配模型: {model_label}",
+                        f"- 目前 hybrid_taxons / 權重: {hybrid_taxons}",
+                        f"- 混合後估值區間: {mixed_caps}",
+                        f"- 分類來源 / 可信度: {source} / {confidence}",
+                        f"- 主模型 soft / hard ceiling: {soft_cap} / {hard_cap}",
+                        "- 可參考落差來源: 現價、法人目標價、系統可操作估值、FY1/FY2/FY3 估值、Dynamic Cap、產業模型單次快照稽核。",
+                        "",
+                        "請 AI 僅能從下列模型庫回饋類型選擇，可複選：",
+                        "- primary_taxon_review：主分類可能需要人工檢查。",
+                        "- hybrid_weight_review：hybrid 權重可能需要人工檢查。",
+                        "- industry_cap_review：整個產業 base / soft / hard ceiling 可能需要檢查。",
+                        "- eps_timing_review：市場可能已提前反映 FY2/FY3 EPS。",
+                        "- target_confidence_review：法人目標價可信度或高低標分歧規則需檢查。",
+                        "- no_model_change：目前不建議調整模型庫。",
+                        "",
+                        "請 AI 輸出以下欄位：",
+                        "- 模型庫回饋類型。",
+                        "- 是否建議立即修改模型庫: 是 / 否 / 觀察。",
+                        "- 建議檢查的檔案: stock_mapping.py / industry_taxonomy.py / dynamic_cap_model.py / 目標價可信度規則。",
+                        "- 具體建議。",
+                        "- 支持證據。",
+                        "- 反對證據。",
+                        "- 需要追蹤的條件。",
+                        "- 信心等級: 高 / 中 / 低。",
+                        "",
+                        "重要限制：",
+                        "- 不可因單次股價上漲就建議調高模型。",
+                        "- 不可因單一法人高標就建議調高模型。",
+                        "- 若建議調整 primary_taxon，必須說明公司營收結構或獲利來源已明顯轉型。",
+                        "- 若建議調整 hybrid 權重，必須說明新成長曲線如何影響 FY1/FY2/FY3 EPS、毛利率或法人目標價。",
+                        "- 若建議調整產業倍率，必須說明是否多檔同產業股票都出現系統性偏差。",
+                        "- AI 回饋只進入模型庫修正候選清單，不可自動覆蓋 stock_mapping.py 或產業倍率。",
+                    ]
+                    return "\n".join(lines)
+                except Exception as e:
+                    try:
+                        log_exception("PromptPack", "_prompt_model_library_feedback_request", e)
+                    except Exception:
+                        pass
+                    return "NULL"
             context_str = f"""
 【0. WAY AI 投資戰情室 2.1 精簡判讀總覽】
 - 股票: {c_name} ({curr_id})
@@ -2427,10 +2918,10 @@ def render_main_page(sidebar_state=None):
 - 系統逆向推算估值摘要: {ctx_tp_est}
 - 可操作估值提示: {_nullize_text(valuation_separation.get('action_hint') if isinstance(valuation_separation, dict) else 'NULL')}
 - 可操作估值區間低/中/高: {_nullize_text(valuation_separation.get('operable_low') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('operable_mid') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('operable_high') if isinstance(valuation_separation, dict) else 'NULL')}
-- 手動年度情境價（FY1 EPS × 可操作 Cap）: {_nullize_text(fy1_manual_target_price if 'fy1_manual_target_price' in locals() else None)}
+- 手動年度情境價（FY1 EPS × 使用者手動 Cap，壓力測試 / 反推現價倍率）: {_nullize_text(fy1_manual_target_price if 'fy1_manual_target_price' in locals() else None)}
 - 樂觀年度情境價（FY1 EPS × soft ceiling）: {_nullize_text(fy1_optimistic_target_price if 'fy1_optimistic_target_price' in locals() else None)}
 - 警告數 / 重大警告數: {_nullize_text(valuation_separation.get('warning_count') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('danger_count') if isinstance(valuation_separation, dict) else 'NULL')}
-- 提醒: 公式合理價、樂觀情境價與 hard ceiling 不是買進目標；買賣以可操作區間與最終燈號為主。
+- 提醒: 手動年度情境價為使用者手動倍率壓力測試，不等於系統可操作買點；公式合理價、樂觀情境價與 hard ceiling 也不是買進目標；買賣以系統可操作區間與最終燈號為主。
 
 【10. 產業估值模型（只列本股模型）】
 - 匹配模型: {_nullize_text(industry_profile.get('model_label') if isinstance(industry_profile, dict) else 'NULL')}
@@ -2450,7 +2941,7 @@ def render_main_page(sidebar_state=None):
 - 風險旗標: {_nullize_text(industry_profile.get('risk_flags') if isinstance(industry_profile, dict) else 'NULL')}
 
 【11. Dynamic Cap 2.0 摘要（核心拆解，不含完整表格）】
-{_prompt_dynamic_cap_core(dynamic_cap_pack)}
+{_prompt_dynamic_cap_core(dynamic_cap_pack, mode="research")}
 
 【12. 產業模型單次快照稽核與更新判斷】
 {_prompt_snapshot_audit_core(snapshot_audit, industry_profile, dynamic_cap_pack)}
@@ -2477,6 +2968,12 @@ def render_main_page(sidebar_state=None):
 
 【17. 提示詞與面板同步自檢】
 {_prompt_panel_sync_audit()}
+
+【18. 模型落差觸發條件與診斷要求（研究完整版專用）】
+{_prompt_model_gap_trigger_conditions()}
+
+【19. 模型庫回饋建議（研究完整版專用）】
+{_prompt_model_library_feedback_request()}
 """
 
 
@@ -2525,7 +3022,10 @@ def render_main_page(sidebar_state=None):
 - 可操作估值區間低/中/高: {_nullize_text(valuation_separation.get('operable_low') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('operable_mid') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('operable_high') if isinstance(valuation_separation, dict) else 'NULL')}
 - 可操作估值提示: {_nullize_text(valuation_separation.get('action_hint') if isinstance(valuation_separation, dict) else 'NULL')}
 
-【8. 產業估值模型】
+【8. 模型落差風險提示（買進決策版專用）】
+{_prompt_buy_decision_gap_risk_conditions()}
+
+【9. 產業估值模型】
 - 產業模型建置時間 / 版本: {_nullize_text(industry_profile.get('model_built_at') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('model_build_version') if isinstance(industry_profile, dict) else 'NULL')}
 - 正式/匹配分類: {_nullize_text(industry_profile.get('model_label') if isinstance(industry_profile, dict) else 'NULL')}
 - 分類來源 / 可信度 / 折扣: {_nullize_text(industry_profile.get('classification_source') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('classification_confidence') if isinstance(industry_profile, dict) else 'NULL')} / ×{_nullize_text(industry_profile.get('classification_confidence_factor') if isinstance(industry_profile, dict) else 'NULL')}
@@ -2537,13 +3037,13 @@ def render_main_page(sidebar_state=None):
 - 混合產業權重: {_nullize_text(industry_profile.get('hybrid_taxons_text') if isinstance(industry_profile, dict) else 'NULL')}
 - 混合後 base / floor / soft / hard: {_nullize_text(industry_profile.get('hybrid_mixed_caps_text') if isinstance(industry_profile, dict) else 'NULL')}
 
-【9. Dynamic Cap 2.0 決策摘要】
-{_prompt_dynamic_cap_core(dynamic_cap_pack)}
+【10. Dynamic Cap 2.0 決策摘要】
+{_prompt_dynamic_cap_core(dynamic_cap_pack, mode="decision")}
 
-【10. 產業模型單次快照稽核與更新判斷】
-{_prompt_snapshot_audit_core(snapshot_audit, industry_profile, dynamic_cap_pack)}
+【11. 產業模型稽核摘要】
+{_prompt_snapshot_audit_summary(snapshot_audit, industry_profile, dynamic_cap_pack)}
 
-【11. ETF / 防禦力 / 籌碼摘要】
+【12. ETF / 防禦力 / 籌碼摘要】
 - ETF 持有與曝險：
 {_prompt_etf_panel_summary()}
 - 防禦力/財務健康：
@@ -2551,10 +3051,10 @@ def render_main_page(sidebar_state=None):
 - 籌碼/股權結構：
 {_prompt_chip_panel_summary()}
 
-【12. 提示詞與面板同步自檢】
+【13. 提示詞與面板同步自檢】
 {_prompt_panel_sync_audit()}
 
-【13. AI 來源與驗證摘要】
+【14. AI 來源與驗證摘要】
 - AI JSON 驗證: {_nullize_text(ai_validation_status_for_prompt)}；警告: {_nullize_text('；'.join([str(x) for x in ai_validation_warnings_for_prompt[:5]]) if ai_validation_warnings_for_prompt else 'NULL')}
 - 估值採用 AI 欄位來源摘要:
 {_prompt_ai_source_summary(ai_source_trace_df_for_prompt)}
@@ -2573,6 +3073,7 @@ def render_main_page(sidebar_state=None):
 7) 若產業分類來源為 AI 建議或 keyword_fallback，請先檢查分類是否合理；AI 建議分類屬待確認，不可視為正式 stock_mapping.py 分類。
 8) 請閱讀「產業模型單次快照稽核與更新判斷」，判斷是否需人工檢查產業估值模型；但不可把單次快照直接當成必須更新模型。
 9) 請閱讀「Forward EPS 年期分層估值」，判斷市場/法人是否可能已經用 FY2 或 FY3 EPS 定價；若是，請說明這是先行定價還是過度樂觀。
+10) 研究完整版請額外輸出「模型庫回饋建議」：這不是買賣建議，而是協助日後修正 stock_mapping.py、industry_taxonomy.py、dynamic_cap_model.py 或法人目標價可信度規則；AI 回饋只能作為候選清單，不可直接覆蓋模型庫。
 
 任務要求：
 1) 先做「2.1 資料品質盤點」：逐項說明哪些欄位是系統/AI/推估/NULL，並指出最影響結論的 3 個資料風險。
@@ -2587,6 +3088,7 @@ def render_main_page(sidebar_state=None):
    - 倉位建議：保守 / 中性 / 積極三種配置比例。
 6) 三情境目標價：牛市 / 基準 / 熊市，各列目標價區間、假設前提、觸發條件。
 7) 下月追蹤清單：列出 8 個要追蹤的指標與警戒閾值，必須包含月營收 YoY、MoM、毛利率、EPS、法人目標價或 EPS 預估調整。
+8) 模型庫回饋建議：請依【18. 模型庫回饋建議】輸出模型庫修正候選，並明確標示是否只是觀察，不得把模型回饋混成買賣結論。
 
 輸出格式（必須照做）：
 - [投資結論一句話]
@@ -2598,6 +3100,7 @@ def render_main_page(sidebar_state=None):
 - [三情境目標價]
 - [風險與反證]
 - [下月追蹤清單]
+- [模型庫回饋建議｜研究用途，非買賣建議]
 
 以下是系統面板 2.1 精簡打包數據（只保留會影響外部 AI 判斷的採用值、分歧、估值層級、產業模型、Dynamic Cap 與燈號；無資料為 NULL）。若出現數據不合理，可上網查詢並說明不合理原因，但不可忽略系統已標示的分歧與資料品質警告：
 {context_str}
@@ -2616,19 +3119,21 @@ def render_main_page(sidebar_state=None):
 - 若法人目標價分析師人數為 NULL 或少於 3 人，請降低目標價可信度。
 - 若資料品質不足或關鍵欄位異常，請明確說「暫不適合做買進判斷」。
 - 若同一欄位同時列出系統值與 AI 值，請說明採用哪一個，以及是否影響估值可信度。
+- 若觸發「模型落差風險提示」，請優先判斷落差是否會傷害買進安全邊際；但不要在買進決策版提出模型庫修正建議。
 
 請依序回答：
 1. [投資結論一句話]：可買 / 觀望 / 不建議 / 資料異常，並說明是否同意系統最終燈號。
 2. [買進前資料檢查]：檢查月營收公告月份、EPS 口徑、Forward EPS、法人目標價可信度、公式估值是否被樂觀 EPS 放大，並列出最影響買進判斷的 3 個資料風險。
 3. [產業與成長邏輯]：說明產業主線、未來 1～2 年成長動能，以及成長失速條件。
 4. [估值判斷]：分開說明公式合理價、公式極限價、可操作估值區間、法人目標價，並判斷現價低估 / 合理 / 偏高 / 高估。不可只用 PEG 判斷便宜。
-5. [買進策略]：現價可不可以買？給 2～3 個分批買點與理由；若不建議買，說明跌到哪裡或出現什麼條件才可重新評估。
-6. [賣出與風控]：給 2～3 個停利區與 2～3 個停損 / 減碼條件；高題材股需說明拉高是否先收一部分。
-7. [倉位建議]：保守 / 中性 / 積極三種配置比例；資料可信度不足時限制最高倉位。
-8. [三情境目標價]：牛市 / 基準 / 熊市，各列目標價區間、假設前提、觸發條件。
-9. [下月追蹤清單]：列 8 個指標與警戒值，必須包含月營收 YoY、MoM、毛利率、EPS、Forward EPS 或法人 EPS 預估、法人目標價可信度、營益率或 ROE、重要訂單 / 產業事件。
-10. [EPS 年期判斷]：請先用 TTM EPS 判斷目前實際獲利估值，再說明目前股價與法人目標價比較像用 FY1、FY2 還是 FY3 EPS 定價；FY1/FY2/FY3 是預估年度 EPS 序列，不是查詢日後1/2/3年。若用 FY2/FY3 才合理，請說明風險與是否能作為買進依據。
-11. [產業模型是否需更新]：請根據「17-C-9c-hotfix44 單次快照稽核」回答：不建議更新模型 / 暫時觀察 / 建議檢查 hybrid 權重 / 建議檢查 primary_taxon / 建議檢查整個產業倍率。若建議檢查，請說明是市場過熱、法人過度樂觀、EPS/營收尚未落地，還是公司營運型態已改變；不可因單次現價高於 hard ceiling 就直接調高模型。
+5. [模型落差風險]：若現價、法人目標價、系統可操作估值與 FY1/FY2/FY3 估值落差過大，請判斷是否只靠 FY2/FY3 才能解釋現價，以及這是否降低買進安全邊際。
+6. [買進策略]：現價可不可以買？給 2～3 個分批買點與理由；若不建議買，說明跌到哪裡或出現什麼條件才可重新評估。
+7. [賣出與風控]：給 2～3 個停利區與 2～3 個停損 / 減碼條件；高題材股需說明拉高是否先收一部分。
+8. [倉位建議]：保守 / 中性 / 積極三種配置比例；資料可信度不足時限制最高倉位。
+9. [三情境目標價]：牛市 / 基準 / 熊市，各列目標價區間、假設前提、觸發條件。
+10. [下月追蹤清單]：列 8 個指標與警戒值，必須包含月營收 YoY、MoM、毛利率、EPS、Forward EPS 或法人 EPS 預估、法人目標價可信度、營益率或 ROE、重要訂單 / 產業事件。
+11. [EPS 年期判斷]：請先用 TTM EPS 判斷目前實際獲利估值，再說明目前股價與法人目標價比較像用 FY1、FY2 還是 FY3 EPS 定價；FY1/FY2/FY3 是預估年度 EPS 序列，不是查詢日後1/2/3年。若用 FY2/FY3 才合理，請說明風險與是否能作為買進依據。
+12. [產業模型是否需更新]：請根據「17-C-9c-hotfix44 單次快照稽核」回答：不建議更新模型 / 暫時觀察 / 建議檢查 hybrid 權重 / 建議檢查 primary_taxon / 建議檢查整個產業倍率。若建議檢查，請說明是市場過熱、法人過度樂觀、EPS/營收尚未落地，還是公司營運型態已改變；不可因單次現價高於 hard ceiling 就直接調高模型。
 
 以下是 WAY AI 投資戰情室 2.1「買進決策版」系統資料。這不是完整研究資料包，只保留會直接影響買進判斷的採用值、系統值/AI值、分歧、估值層級、產業模型、Dynamic Cap 與燈號。若資料不合理，可上網查證，但不可忽略系統標示的資料品質與分歧警告：
 {decision_context_str}
@@ -2708,7 +3213,7 @@ def render_main_page(sidebar_state=None):
                     value=selected_prompt_for_copy,
                     height=330,
                     label_visibility="collapsed",
-                    key=f"copy_prompt_textarea_{curr_id}_{'buy' if prompt_mode.startswith('買進決策版') else 'research'}"
+                    key=f"copy_prompt_textarea_{curr_id}_{'buy' if prompt_mode.startswith('買進決策版') else 'research'}_{abs(hash(selected_prompt_for_copy)) % 100000000}"
                 )
             
             st.markdown("---")
@@ -3042,5 +3547,4 @@ def render_main_page(sidebar_state=None):
             fig_k.update_layout(height=750, xaxis_rangeslider_visible=False, margin=dict(l=10,r=10,t=10,b=10), template="plotly_dark", hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
             st.plotly_chart(fig_k, use_container_width=True)
         else:
-            st.error(f"找不到代號 {curr_id} 的資料，請確認代號是否正確或重新整理。") 
- 
+            st.error(f"找不到代號 {curr_id} 的資料，請確認代號是否正確或重新整理。")

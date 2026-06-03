@@ -1302,7 +1302,7 @@ def get_streak(series):
 # 2. Session State 初始化 & 狀態管理
 # ==========================================
 def init_session_state():
-    if 'selected_stock' not in st.session_state: st.session_state.selected_stock = "2330"
+    if 'selected_stock' not in st.session_state: st.session_state.selected_stock = ""  # 初始不自動查詢，避免冷啟動時誤顯示找不到 2330
     if 'topic_results' not in st.session_state: st.session_state.topic_results = None
     if 'show_whale' not in st.session_state: st.session_state.show_whale = False
     if 'api_key' not in st.session_state: st.session_state.api_key = ""
@@ -1313,7 +1313,7 @@ def init_session_state():
     if 'ai_industry_result' not in st.session_state: st.session_state.ai_industry_result = None
     if 'run_screener' not in st.session_state: st.session_state.run_screener = False
     if 'quick_select' not in st.session_state: st.session_state.quick_select = "-- 快速切換標的 --"
-    if 'stock_input_widget' not in st.session_state: st.session_state.stock_input_widget = "2330"
+    if 'stock_input_widget' not in st.session_state: st.session_state.stock_input_widget = ""  # 初始輸入框留白，由使用者輸入後再查詢
     if 'show_watchlist_manager' not in st.session_state: st.session_state.show_watchlist_manager = False
     if 'w_valuation' not in st.session_state: st.session_state.w_valuation = 35
     if 'w_growth' not in st.session_state: st.session_state.w_growth = 30
@@ -1348,6 +1348,7 @@ def log_data_health(source, ok, status_code=None):
     st.session_state.data_health_stats = stats
 
 def reset_all_states_on_stock_change(stock_code):
+    stock_code = str(stock_code or "").strip()
     st.session_state.selected_stock = stock_code
     st.session_state.quick_select = "-- 快速切換標的 --"
     st.session_state.show_pk = False
@@ -1358,15 +1359,15 @@ def reset_all_states_on_stock_change(stock_code):
 # 🌟 這裡就是修正的部分：加入 .get() 安全讀取機制
 # ==========================================
 def on_stock_input_change():
-    new_stock = st.session_state.get('stock_input_widget', '2330')
-    selected_stock = st.session_state.get('selected_stock', '2330')
+    new_stock = str(st.session_state.get('stock_input_widget', '') or '').strip()
+    selected_stock = str(st.session_state.get('selected_stock', '') or '').strip()
     
     if new_stock != selected_stock: 
         reset_all_states_on_stock_change(new_stock)
 
 def on_quick_select_change():
     selected = st.session_state.get('quick_select', '-- 快速切換標的 --')
-    selected_stock = st.session_state.get('selected_stock', '2330')
+    selected_stock = str(st.session_state.get('selected_stock', '') or '').strip()
     
     if selected != "-- 快速切換標的 --":
         if not selected.startswith("🏷️"):
