@@ -1,0 +1,3578 @@
+import re
+"""
+主畫面 UI 模組：
+包含個股儀表板、AI 分析、財務資料、圖表、ETF 曝險等主要畫面。
+"""
+from ui_common import *
+
+def render_main_page(sidebar_state=None):
+    """渲染主畫面。"""
+
+    # 17-C-9c-hotfix：此 helper 會在 Forward EPS 區塊與後方提示詞打包區重複使用，
+    # 必須放在 render_main_page 開頭；若放在函式後段，前面先呼叫時會觸發 UnboundLocalError。
+    def _nullize_text(s):
+        s = str(s) if s is not None else ""
+        s = re.sub(r'<[^>]+>', ' ', s)
+        s = s.replace("N/A", "NULL").replace("無資料", "NULL").replace("未捕捉到", "NULL")
+        s = re.sub(r'\s+', ' ', s)
+        return s.strip() if s.strip() else "NULL"
+    hi_val = None
+    me_val = None
+    lo_val = None
+    sidebar_state = sidebar_state or {}
+    topic_q = sidebar_state.get("topic_q", "")
+    f_ok = sidebar_state.get("f_ok", None)
+    m_ok = sidebar_state.get("m_ok", None)
+
+    # ==========================================
+    # 5. 主畫面開始
+    # ==========================================
+    st.markdown("## 📈 WAY AI 投資戰情室 版本2.1")
+
+    if st.session_state.fugle_key and not f_ok:
+        st.error("🚨 **系統警報**：您輸入的「富果 (Fugle) API Key」驗證失敗！請至左側欄檢查金鑰是否輸入正確。")
+    if st.session_state.finmind_key and not m_ok:
+        st.error("🚨 **系統警報**：您輸入的「FinMind API Key」驗證失敗！請至左側欄檢查金鑰是否輸入正確。")
+
+    if st.session_state.topic_results == "LOADING":
+        with st.spinner(f"🤖 AI 正在連線推演「{topic_q}」..."):
+            data, links = get_ai_analysis_final(topic_q, st.session_state.api_key, st.session_state.get('selected_model', 'gemini-3.1-pro-preview'))
+            if isinstance(data, dict):
+                st.session_state.topic_results = {"data": data, "links": links, "topic": topic_q}
+                st.session_state.show_whale = False
+                st.rerun()
+            else:
+                st.error(f"AI 解析失敗或逾時無回應。\n\n詳細原因：{data}")
+                st.session_state.topic_results = None
+
+    if isinstance(st.session_state.topic_results, dict):
+        t = st.session_state.topic_results
+        st.success("✅ AI 議題推演完成！系統已為您捕捉以下關聯受惠股，點擊按鈕即可一鍵切換至該檔股票的戰情室面板！")
+    
+        ai_topic_html = f"""
+        <div style='background: linear-gradient(90deg, #1e3c72 0%, #2a5298 100%); padding: 20px; border-radius: 10px; margin-bottom: 20px; border-left: 5px solid #FFD700;'>
+            <h3 style='color: white; margin-top: 0;'>💡 議題動態推演：【{t['topic']}】</h3>
+            <div style='color: #e0e0e0; font-size: 1.05rem; line-height: 1.6;'>{t['data'].get('reasoning', '無分析內容')}</div>
+        </div>
+        """
+        st.markdown(clean_html(ai_topic_html), unsafe_allow_html=True)
+    
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("#### 🛡️ 潛力權值股 (點擊切換)")
+            for s in [x for x in t['data'].get('stocks', []) if "權值" in x.get('type', '') or "潛力" in x.get('type', '')]:
+                st.button(f"📌 {s.get('name', '未知')} ({s.get('id', '')})", on_click=reset_all_states_on_stock_change, args=(s.get('id', ''),), key=f"tp_{s.get('id', '')}", use_container_width=True)
+                st.caption(f"理由：{s.get('why', '')}")
+        with c2:
+            st.markdown("#### 🚀 爆發中小型股 (點擊切換)")
+            for s in [x for x in t['data'].get('stocks', []) if "中小" in x.get('type', '') or "爆發" in x.get('type', '')]:
+                st.button(f"🔥 {s.get('name', '未知')} ({s.get('id', '')})", on_click=reset_all_states_on_stock_change, args=(s.get('id', ''),), key=f"ts_{s.get('id', '')}", use_container_width=True)
+                st.caption(f"理由：{s.get('why', '')}")
+            
+        if t['links']:
+            with st.expander("🔗 查看 AI 參考來源"):
+                for link in t['links']: st.markdown(f"- [{link}]({link})")
+        st.markdown("---")
+
+    if st.session_state.show_whale:
+        st.markdown("### 🐳 近兩周大戶持股比例顯著增加標的")
+        whales = [("2317", "鴻海"), ("2382", "廣達"), ("1519", "華城"), ("6669", "緯穎"), ("3324", "雙鴻")]
+        cols = st.columns(5)
+        for idx, (code, name) in enumerate(whales):
+            with cols[idx]: st.button(f"{name}\n({code})", on_click=reset_all_states_on_stock_change, args=(code,), key=f"w_{code}", use_container_width=True)
+        st.markdown("---")
+
+    curr_id = st.session_state.selected_stock
+    if curr_id:
+        # 🚀 絕對防呆宣告：避免因任何例外導致變數未定義而觸發 NameError
+        ctx_pe, ctx_fpe, ctx_pb, ctx_peg = "N/A", "N/A", "N/A", "N/A"
+        hi_str, me_str, lo_str, ai_tp_str = "N/A", "N/A", "N/A", ""
+        latest_rev_month, latest_mom_str = "未知", "N/A"
+        latest_rev_notice, latest_rev_display_label = "", "公告月份：未知"
+        latest_rev_source = ""
+        dy_str, fcf_str, cr_str, fs_str = "N/A", "N/A", "N/A", "N/A"
+        ctx_eps, ctx_rg, ctx_eg, ctx_gm, ctx_om, ctx_roe, ctx_de = "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", "N/A"
+        tp_est_str, cap_warning_html = "無資料", ""
+
+        with st.spinner('同步數據中...'):
+            hist, info = get_stock_data(curr_id, st.session_state.fugle_key, st.session_state.finmind_key)
+            if info is None: info = {}
+            c_name = get_chinese_name(curr_id) or info.get('shortName', curr_id)
+        fallback_notes = info.get('__fallback_notes', []) if isinstance(info, dict) else []
+        price_source = info.get('__price_source') if isinstance(info, dict) else None
+        info_source = info.get('__info_source') if isinstance(info, dict) else None
+        if price_source or info_source:
+            st.caption(f"🛰️ 資料來源｜股價: {price_source or '未知'}；財務: {info_source or '未知'}")
+        if fallback_notes:
+            for note in fallback_notes:
+                st.info(f"💡 備援提示：{note}")
+
+        if hist is not None and not hist.empty:
+            col_title, col_star = st.columns([0.85, 0.15])
+            with col_title: st.markdown(f"### 🏢 {c_name} ({curr_id})")
+            with col_star:
+                in_watch = curr_id in get_watchlist()
+                btn_label = "⭐ 移除自選" if in_watch else "☆ 加入自選"
+                if st.button(btn_label, use_container_width=True):
+                    toggle_watchlist(curr_id, c_name)
+                    st.rerun()
+
+            sector_disp = SECTOR_MAP.get(info.get('sector', '未知'), info.get('sector', '未知'))
+            # 17-C-1：若 AI 全方位校對已補回產業分類，正式 mapping 找不到時可先採 AI 建議分類，但須標示待確認。
+            early_ai_fin = st.session_state.ai_fetched_financials.get(curr_id, {}) if hasattr(st.session_state, 'ai_fetched_financials') else {}
+            if isinstance(early_ai_fin, dict) and early_ai_fin:
+                if str(early_ai_fin.get('_stock_id') or curr_id) != str(curr_id):
+                    early_ai_fin = {}
+            industry_profile = get_industry_valuation_profile(curr_id, c_name, sector_disp, info.get('industry', '未知'), ai_financials=early_ai_fin)
+            st.markdown(
+                f"**🏷️ 產業分類：** {sector_disp} / {info.get('industry', '未知')}｜"
+                f"估值模型：{industry_profile.get('model_label', '一般產業')}｜"
+                f"題材標籤：{industry_profile.get('themes_text', '—')}｜"
+                f"分類來源：{industry_profile.get('classification_source', industry_profile.get('mapping_source', '—'))}"
+            )
+            if industry_profile.get('classification_needs_manual_review'):
+                st.warning(
+                    f"⚠️ 產業分類待確認：{industry_profile.get('classification_warning', '此分類不是正式 stock_mapping.py 指定。')}"
+                    f"｜可信度：{industry_profile.get('classification_confidence', 'low')}"
+                    f"｜Dynamic Cap 分類折扣：×{float(industry_profile.get('classification_confidence_factor', 1.0) or 1.0):.2f}"
+                )
+            if industry_profile.get('pe_trap_warning'):
+                st.warning("⚠️ 本產業具有 P/E 陷阱風險：低 P/E 不一定代表低估，請優先檢查 P/B、週期位置、報價或訂單落地。")
+            if industry_profile.get('pe_model_suitable') is False:
+                st.warning("⚠️ 本分類不適合使用一般 P/E 公式估值作為買進依據，應以事件、訂單、籌碼與財報落地程度評估。")
+            with st.expander("📖 查看公司詳細營業項目簡介 (自動英翻中)"):
+                st.write(translate_to_zh(info.get('longBusinessSummary', '暫無簡介。')))
+
+            # ==========================================
+            # ⚡ 即時報價
+            # ==========================================
+            st.markdown("#### ⚡ 即時報價與交易資訊")
+            today_data = hist.iloc[-1]
+            prev_data = hist.iloc[-2] if len(hist) > 1 else today_data
+        
+            curr_p = s_float(today_data.get('Close'), 0)
+            open_p = s_float(today_data.get('Open'), 0)
+            high_p = s_float(today_data.get('High'), 0)
+            low_p = s_float(today_data.get('Low'), 0)
+            vol_shares = s_float(today_data.get('Volume'), 0)
+        
+            vol_lots = int(vol_shares // 1000) if vol_shares else 0
+            prev_vol_lots = int(s_float(prev_data.get('Volume'), 0) // 1000) if len(hist) > 1 else 0
+        
+            prev_close = s_float(info.get('previousClose'), s_float(prev_data.get('Close'), 0))
+            change = curr_p - prev_close if prev_close else 0
+            change_pct = (change / prev_close) * 100 if prev_close else 0
+            amp = ((high_p - low_p) / prev_close) * 100 if prev_close and prev_close > 0 else 0
+            avg_price = (high_p + low_p + curr_p) / 3 if curr_p else 0
+            turnover_100m = (vol_shares * avg_price) / 100000000
+        
+            def get_color(val, base):
+                if val > base: return "#ff4d4d"
+                elif val < base: return "#00cc66"
+                return "#ffffff"
+            
+            c_curr = get_color(curr_p, prev_close)
+            c_open = get_color(open_p, prev_close)
+            c_high = get_color(high_p, prev_close)
+            c_low = get_color(low_p, prev_close)
+            c_change = get_color(change, 0)
+            arrow = "▲" if change > 0 else ("▼" if change < 0 else "")
+        
+            quote_html = f"""
+            <style>
+            .q-container {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px 30px; background: #1e1e1e; padding: 15px 20px; border-radius: 8px; font-family: sans-serif; margin-bottom: 20px; border: 1px solid #333; }}
+            .q-item {{ display: flex; justify-content: space-between; border-bottom: 1px solid #333; padding-bottom: 4px; }}
+            .q-label {{ color: #aaa; font-size: 1rem; }}
+            .q-val {{ font-weight: bold; font-size: 1.1rem; }}
+            </style>
+            <div class="q-container">
+                <div class="q-item"><span class="q-label">成交</span><span class="q-val" style="color: {c_curr};">{curr_p:,.2f}</span></div>
+                <div class="q-item"><span class="q-label">昨收</span><span class="q-val" style="color: #fff;">{prev_close:,.2f}</span></div>
+                <div class="q-item"><span class="q-label">開盤</span><span class="q-val" style="color: {c_open};">{open_p:,.2f}</span></div>
+                <div class="q-item"><span class="q-label">漲跌幅</span><span class="q-val" style="color: {c_change};">{arrow} {abs(change_pct):.2f}%</span></div>
+                <div class="q-item"><span class="q-label">最高</span><span class="q-val" style="color: {c_high};">{high_p:,.2f}</span></div>
+                <div class="q-item"><span class="q-label">漲跌</span><span class="q-val" style="color: {c_change};">{arrow} {abs(change):.2f}</span></div>
+                <div class="q-item"><span class="q-label">最低</span><span class="q-val" style="color: {c_low};">{low_p:,.2f}</span></div>
+                <div class="q-item"><span class="q-label">總量 (張)</span><span class="q-val" style="color: #ffd700;">{vol_lots:,}</span></div>
+                <div class="q-item"><span class="q-label">均價</span><span class="q-val" style="color: #fff;">{avg_price:,.2f}</span></div>
+                <div class="q-item"><span class="q-label">昨量 (張)</span><span class="q-val" style="color: #fff;">{prev_vol_lots:,}</span></div>
+                <div class="q-item"><span class="q-label">成交金額(億)</span><span class="q-val" style="color: #fff;">{turnover_100m:,.2f}</span></div>
+                <div class="q-item"><span class="q-label">振幅</span><span class="q-val" style="color: #fff;">{amp:.2f}%</span></div>
+            </div>
+            """
+            st.markdown(clean_html(quote_html), unsafe_allow_html=True)
+
+            # ==========================================
+            # 📌 主要 ETF 持有概況 + 獨立 AI ETF 補查
+            # ==========================================
+            st.markdown("#### 📌 主要 ETF 持有概況")
+            with st.expander(f"查看含有 {c_name} ({curr_id}) 的 ETF", expanded=False):
+                st.caption("一般頁面僅做快速查詢，不使用 AI、不掃描 MoneyDJ / Pocket / CMoney 快取，避免等待過久。此區主要來自 Yahoo 個股 ETF 頁，可能只涵蓋主要 / 前十大 ETF，不代表完整 ETF 持股清單。")
+
+                try:
+                    etf_holders = get_stock_etf_holders(curr_id, c_name)
+                except Exception as e:
+                    etf_holders = []
+                    st.warning(f"⚠️ ETF 快速資料源暫時無法取得：{str(e)[:120]}")
+
+                def _render_etf_holder_table(rows, title, source_tag):
+                    rows = rows or []
+                    if not rows:
+                        return False
+                    table_rows = []
+                    for r in rows:
+                        if not isinstance(r, dict):
+                            continue
+                        weight = r.get("weight")
+                        try:
+                            weight_text = f"{float(weight):.2f}%" if weight is not None and str(weight).strip() != "" else "N/A"
+                        except Exception:
+                            weight_text = str(weight) if weight else "N/A"
+                        table_rows.append({
+                            "ETF名稱": r.get("etf_name") or "",
+                            "代號": r.get("etf_code") or "",
+                            "持股比例": weight_text,
+                            "資料日期": r.get("data_date") or "來源未揭露",
+                            "來源": r.get("source") or source_tag,
+                            "資料性質": r.get("data_type") or source_tag,
+                        })
+                    if not table_rows:
+                        return False
+                    st.markdown(title)
+                    df_etf = pd.DataFrame(table_rows)
+                    st.dataframe(df_etf, use_container_width=True, hide_index=True)
+                    return True
+
+                has_system_etf = _render_etf_holder_table(etf_holders, "**主要 / 前十大 ETF 快速查詢**", "主要/前十大快速查詢")
+                if not has_system_etf:
+                    st.info("目前快速資料源查無 ETF 持有資料，或網站版面暫時無法解析。")
+
+                st.caption("⚠️ 此區不保證完整。像 00981A 這類主動式 ETF 可能因 Yahoo 個股頁只列主要/前十大而未出現；需要完整交叉檢查時，請按下方 AI 按鈕。")
+
+                st.markdown("---")
+                st.markdown("#### 🤖 AI 查完整 ETF 持有狀況")
+                st.caption("此按鈕與『AI 全方位校對與補齊財報』分開執行；只有按下時才會使用 AI + 搜尋補查 ETF，不會拖慢財報校對。")
+
+                if "ai_etf_holders" not in st.session_state:
+                    st.session_state.ai_etf_holders = {}
+
+                if st.button("🤖 AI 查完整 ETF 持有狀況", disabled=not st.session_state.api_key, key=f"ai_etf_lookup_{curr_id}", use_container_width=True, help="獨立查詢 ETF 持股；會特別檢查主動式 ETF，例如 00981A、00987A、00988A、00400A、00403A。"):
+                    with st.spinner("AI 正在獨立查詢 ETF 持有狀況，請稍候...（不會執行財報校對）"):
+                        ai_etf_data = get_etf_holders_from_ai(curr_id, c_name, st.session_state.api_key, get_selected_model_id())
+                        st.session_state.ai_etf_holders[curr_id] = ai_etf_data
+                    st.rerun()
+
+                ai_etf_data = st.session_state.ai_etf_holders.get(curr_id) if isinstance(st.session_state.get("ai_etf_holders"), dict) else None
+                if isinstance(ai_etf_data, dict) and ai_etf_data.get("error"):
+                    st.error(f"AI ETF 查詢失敗：{ai_etf_data.get('error')}")
+                elif isinstance(ai_etf_data, dict):
+                    ai_etf_rows = ai_etf_data.get("etf_holders_ai", [])
+                    if ai_etf_rows:
+                        _render_etf_holder_table(ai_etf_rows, "**🤖 AI 完整 ETF 補查結果**", "AI完整ETF補查")
+                        st.caption("⚠️ AI ETF 資料為獨立聯網補查結果，只作交叉比對；正式持股仍請以投信公告、PCF 或 ETF 官方持股明細為準。")
+                    else:
+                        st.info("AI 已查詢，但沒有回傳可用的 ETF 持股清單。")
+                    if ai_etf_data.get("summary"):
+                        st.caption(f"AI 摘要：{ai_etf_data.get('summary')}")
+                else:
+                    st.caption("尚未執行 AI ETF 補查。")
+
+            st.markdown("---")
+
+            # ==========================================
+            # 🌍 國際連動與動態時間趨勢推估
+            # ==========================================
+            st.markdown("<br>", unsafe_allow_html=True)
+            trend_data = get_global_market_trend()
+            if trend_data:
+                target_day_text = trend_data.get('target_day', '明日')
+                time_status_text = trend_data.get('time_status', '')
+                st.markdown(f"#### 🌍 國際連動與{target_day_text}趨勢推估 {time_status_text}", unsafe_allow_html=True)
+            
+                def c_color(v): return "#ff4d4d" if v > 0 else "#00cc66" if v < 0 else "#fff"
+                trend_html = f"""
+                <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {trend_data['color']}; margin-bottom: 20px; border-top:1px solid #333; border-right:1px solid #333; border-bottom:1px solid #333;'>
+                    <div style='font-size:1.15rem; font-weight:bold; color:{trend_data['color']}; margin-bottom:10px;'>{trend_data['trend']}</div>
+                    <div style='display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px;'>
+                        <div style='background:#2c2c2c; padding:8px 15px; border-radius:5px;'><span style='color:#aaa; font-size:0.9rem;'>費城半導體 (^SOX)</span><br><b style='font-size:1.1rem; color:#fff;'>{trend_data["sox_p"]:,.2f}</b> <span style='font-size:1rem; color:{c_color(trend_data["sox"])};'>({trend_data["sox"]:+.2f}%)</span></div>
+                        <div style='background:#2c2c2c; padding:8px 15px; border-radius:5px;'><span style='color:#aaa; font-size:0.9rem;'>台積電 ADR (TSM)</span><br><b style='font-size:1.1rem; color:#fff;'>{trend_data["tsm_p"]:,.2f}</b> <span style='font-size:1rem; color:{c_color(trend_data["tsm"])};'>({trend_data["tsm"]:+.2f}%)</span></div>
+                        <div style='background:#2c2c2c; padding:8px 15px; border-radius:5px;'><span style='color:#aaa; font-size:0.9rem;'>納斯達克期貨 (NQ=F)</span><br><b style='font-size:1.1rem; color:#fff;'>{trend_data["nq_p"]:,.2f}</b> <span style='font-size:1rem; color:{c_color(trend_data["nq"])};'>({trend_data["nq"]:+.2f}%)</span></div>
+                        <div style='background:#2c2c2c; padding:8px 15px; border-radius:5px;'><span style='color:#aaa; font-size:0.9rem;'>台股 ETF (EWT)</span><br><b style='font-size:1.1rem; color:#fff;'>{trend_data["ewt_p"]:,.2f}</b> <span style='font-size:1rem; color:{c_color(trend_data["ewt"])};'>({trend_data["ewt"]:+.2f}%)</span></div>
+                    </div>
+                </div>
+                """
+                st.markdown(clean_html(trend_html), unsafe_allow_html=True)
+
+            # ==========================================
+            # 📰 近期財報與法說會新聞
+            # ==========================================
+            st.markdown("#### 📰 近期財報與法說會新聞")
+            news_list = get_stock_news(curr_id)
+            if news_list:
+                for n in news_list[:5]:
+                    publish_time = datetime.datetime.fromtimestamp(n['timestamp']).strftime('%Y-%m-%d %H:%M') if n['timestamp'] else "未知時間"
+                    st.markdown(f"🔸 [{n['title']}]({n['link']}) <span style='color:gray; font-size:0.8rem;'>- {n['publisher']} ({publish_time})</span>", unsafe_allow_html=True)
+            else:
+                st.caption("目前無符合條件的基本面或財報新聞。")
+            st.markdown("---")
+
+            # ==========================================
+            # 💼 財務基本面與獲利基準微調
+            # ==========================================
+            col_fin_title, col_fin_btn = st.columns([0.6, 0.4])
+            with col_fin_title:
+                st.markdown("#### 💼 財務基本面與獲利基準微調")
+            with col_fin_btn:
+                if st.button("🪄 啟動 AI 全方位校對與補齊財報", disabled=not st.session_state.api_key, use_container_width=True, help="點此讓 AI 上網搜尋最新財報與估值指標，並與現有資料進行比對"):
+                    with st.spinner("AI 正在聯網為您強行抓取最新財報數據，請稍候...（Pro Only 最多重試 3 次，約需 30-90 秒）"):
+                        selected_model = get_selected_model_id()
+                        fetched_data = get_financials_from_ai(c_name, curr_id, st.session_state.api_key, selected_model)
+                    
+                        if isinstance(fetched_data, dict) and "error" not in fetched_data:
+                            core_fin_keys = ["pe", "trailing_eps", "ttm_eps", "latest_quarter_eps", "forward_eps", "forward_eps_ai", "forward_eps_consensus", "forward_eps_fy1", "forward_eps_fy2", "forward_eps_fy3", "pb", "gross_margin", "operating_margin", "roe", "yoy", "target_price", "mom", "dividend_yield"]
+                            has_effective_fin_data = any(fetched_data.get(k) not in (None, "", "null") for k in core_fin_keys)
+                            if not has_effective_fin_data:
+                                st.warning("⚠️ AI 本次有回應，但未抓到可用財報欄位（可能是來源暫無資料或回傳皆為 null）。請稍後重試或切換標的。")
+                                st.session_state.ai_fetched_financials.pop(curr_id, None)
+                                st.stop()
+
+                            model_label_map = {
+                                "gemini-3.1-pro-preview": "Gemini 3.1 Pro Preview (付費版)",
+                            }
+                            model_id = fetched_data.get('model_used', selected_model)
+                            model_label = model_label_map.get(model_id, model_id)
+                            fallback_reason = fetched_data.get('fallback_reason') or ""
+                            search_enabled = fetched_data.get('ai_search_enabled', True)
+                            if fallback_reason:
+                                model_label = f"{model_label}｜{fallback_reason}"
+                            fetched_data['model_used'] = model_label
+                            # 綁定本次 AI 財報資料所屬標的，避免切換股票後舊資料被誤套用。
+                            fetched_data['_stock_id'] = str(curr_id)
+                            fetched_data['_stock_name'] = str(c_name)
+                            if not search_enabled:
+                                st.warning("⚠️ 本次 AI 財報補齊未啟用 Google Search，資料不得納入公式極限價。")
+                            elif fallback_reason:
+                                st.warning(f"⚠️ {fallback_reason}")
+                            st.session_state.ai_fetched_financials[curr_id] = fetched_data
+                            # 第 17-B-3：AI 財報校對完成後，強制刷新 Dynamic Cap 2.0 輸入框 key，
+                            # 避免 Streamlit number_input 保留 AI 校對前的舊倍率。
+                            st.session_state[f"dynamic_cap_refresh_token_{curr_id}"] = str(int(time.time()))
+                            st.rerun()
+                        elif isinstance(fetched_data, dict) and "error" in fetched_data:
+                            st.error(f"🚨 AI 抓取失敗：{fetched_data['error']}")
+                            if fetched_data.get("last_error"):
+                                st.caption(f"最後錯誤：{fetched_data.get('last_error')}")
+                            if fetched_data.get("attempts"):
+                                with st.expander("🧾 查看 Pro Only 同模型重試紀錄", expanded=False):
+                                    st.json(fetched_data.get("attempts"))
+                        else:
+                            st.error("🚨 AI 暫時無法找到確切數據，或請求遭拒。")
+
+                temp_ai_fin = st.session_state.ai_fetched_financials.get(curr_id, {})
+                # 防止舊版 session 或切換股票後殘留的 AI 財報資料誤套到目前標的。
+                if isinstance(temp_ai_fin, dict) and temp_ai_fin:
+                    bound_stock_id = str(temp_ai_fin.get('_stock_id') or curr_id)
+                    if bound_stock_id != str(curr_id):
+                        st.session_state.ai_fetched_financials.pop(curr_id, None)
+                        temp_ai_fin = {}
+                has_ai_fin_fetch = bool(temp_ai_fin)
+                if temp_ai_fin.get('model_used'):
+                    st.markdown(f"<div style='text-align:right; color:#FFD700; font-size:0.85rem; margin-top:5px;'>🤖 驅動核心: <b>{temp_ai_fin['model_used']}</b></div>", unsafe_allow_html=True)
+                    if temp_ai_fin.get("_ai_validation_warnings"):
+                        st.warning("🧪 AI 財報 JSON 已觸發合理性校驗；部分欄位已自動校正或設為 NULL，詳情可展開原始回報面板查看。")
+                    raw_state_key = f"show_ai_raw_panel_{curr_id}"
+                    if raw_state_key not in st.session_state:
+                        st.session_state[raw_state_key] = False
+
+                    btn_label = "🧾 隱藏本次 AI 查詢與回報資料" if st.session_state[raw_state_key] else "🧾 顯示本次 AI 查詢與回報資料"
+                    if st.button(btn_label, key=f"toggle_ai_raw_btn_{curr_id}", use_container_width=True):
+                        st.session_state[raw_state_key] = not st.session_state[raw_state_key]
+
+                    if st.session_state[raw_state_key]:
+                        st.caption("以下為本次 AI 全方位校對與補齊財報的查詢內容與原始回報：")
+                        query_preview = temp_ai_fin.get("query_payload")
+                        if query_preview:
+                            st.code(query_preview, language="json")
+                        ai_source_df = build_ai_source_trace_report(temp_ai_fin)
+                        if ai_source_df is not None and not ai_source_df.empty:
+                            st.markdown("##### 🔗 AI 逐欄來源追蹤")
+                            st.dataframe(ai_source_df, use_container_width=True, hide_index=True)
+                        ai_validation_warnings = temp_ai_fin.get("_ai_validation_warnings") or []
+                        if ai_validation_warnings:
+                            st.markdown("##### 🧪 AI JSON 合理性驗證")
+                            st.warning(temp_ai_fin.get("_ai_validation_status", "⚠️ AI 欄位已校正"))
+                            for w in ai_validation_warnings[:20]:
+                                st.caption(f"- {w}")
+                        elif temp_ai_fin.get("_ai_validation_status"):
+                            st.success(temp_ai_fin.get("_ai_validation_status"))
+                        st.json(temp_ai_fin)    
+            df_rev_bk = get_monthly_revenue(curr_id, st.session_state.finmind_key)
+            df_per_bk = get_pe_pb_data(curr_id, st.session_state.finmind_key)
+            fm_health = get_finmind_financial_health(curr_id, st.session_state.finmind_key)
+        
+            if df_rev_bk is not None and not df_rev_bk.empty:
+                if 'actual_revenue_month' in df_rev_bk.columns:
+                    latest_rev_month = normalize_revenue_month(df_rev_bk['actual_revenue_month'].iloc[-1])
+                else:
+                    latest_rev_month = normalize_revenue_month(df_rev_bk['Month'].iloc[-1])
+                latest_mom_val = s_float(df_rev_bk['MoM'].iloc[-1])
+                latest_rev_source = str(df_rev_bk['revenue_source'].iloc[-1]) if 'revenue_source' in df_rev_bk.columns else "月營收資料源"
+                rev_notice_pack = build_revenue_month_notice(latest_rev_month)
+                latest_rev_notice = rev_notice_pack.get('notice', '')
+                latest_rev_display_label = rev_notice_pack.get('display_label', f"公告月份：{latest_rev_month}")
+            else:
+                latest_rev_month = "無資料"
+                latest_mom_val = None
+                latest_rev_notice = "未取得月營收資料，營收 YoY / MoM 將改用其他資料源或顯示 N/A。"
+                latest_rev_display_label = "公告月份：未取得"
+                latest_rev_source = ""
+        
+            if latest_rev_notice:
+                st.info(f"📅 月營收公告月份提示：{latest_rev_notice}")
+
+            pe_ratio = s_float(info.get('trailingPE'))
+            if (pe_ratio is None or pe_ratio > 1000) and df_per_bk is not None and not df_per_bk.empty:
+                if (pd.Timestamp.today() - df_per_bk.iloc[-1]['date']).days < 30: pe_ratio = s_float(df_per_bk['PER'].iloc[-1])
+            pb_ratio = s_float(info.get('priceToBook'))
+            if (pb_ratio is None or pb_ratio > 500) and df_per_bk is not None and not df_per_bk.empty and 'PBR' in df_per_bk.columns:
+                pb_ratio = s_float(df_per_bk['PBR'].iloc[-1])
+            
+            roe = s_float(info.get('returnOnEquity'))
+            sys_de = s_float(info.get('debtToEquity'))
+            if sys_de is not None: sys_de = sys_de / 100.0  
+        
+            gross_margin = s_float(info.get('grossMargins'))
+            op_margin = s_float(info.get('operatingMargins'))
+        
+            if gross_margin is None: gross_margin = fm_health.get('grossMargins')
+            if op_margin is None: op_margin = fm_health.get('operatingMargins')
+            if sys_de is None: sys_de = fm_health.get('debtToEquity')
+        
+            rev_growth = s_float(info.get('revenueGrowth'))
+            if rev_growth is None and df_rev_bk is not None and not df_rev_bk.empty:
+                rev_growth = s_float(df_rev_bk['YoY'].iloc[-1]) / 100.0
+            earn_growth = s_float(info.get('earningsGrowth'))
+        
+            t_eps = s_float(info.get('trailingEps'))
+            if t_eps is None and pe_ratio is not None and pe_ratio > 0 and curr_p > 0:
+                t_eps = curr_p / pe_ratio
+            
+            sys_f_eps_calc = s_float(info.get('forwardEps'))
+            # EPS 拆欄：yfinance 多數只提供 trailingEps / forwardEps；最新單季與完整年度 EPS 先保留 NULL，避免誤標口徑。
+            sys_latest_quarter_eps = None
+            sys_ttm_eps = t_eps
+            sys_fiscal_year_eps = None
+            sys_forward_eps_system = sys_f_eps_calc
+
+            if pe_ratio is None and t_eps is None and not st.session_state.ai_fetched_financials.get(curr_id):
+                st.warning("⚠️ **全球連線受阻**：目前免費資料庫限制了部分股票的抓取。👉 **解決方案**：請點擊上方【🪄 啟動 AI 全方位校對與補齊財報】讓 AI 強制為您抓回最新數據！")
+        
+            # 17-C-9c-hotfix44-hotfix：FY EPS 年期欄位預設值，避免 AI 未啟動/欄位缺失時 UnboundLocalError。
+            ai_forward_eps_fy1 = None
+            ai_forward_eps_fy2 = None
+            ai_forward_eps_fy3 = None
+            ai_forward_eps_fy1_year = None
+            ai_forward_eps_fy2_year = None
+            ai_forward_eps_fy3_year = None
+            ai_forward_eps_fy_source_note = None
+            ai_forward_eps_fy_basis = None
+
+            # 17-C-9c-hotfix442：FY EPS 年期欄位預設值，避免 AI 未啟動/欄位缺失時 UnboundLocalError。
+            ai_forward_eps_fy1 = None
+            ai_forward_eps_fy2 = None
+            ai_forward_eps_fy3 = None
+            ai_forward_eps_fy1_year = None
+            ai_forward_eps_fy2_year = None
+            ai_forward_eps_fy3_year = None
+            ai_forward_eps_fy_source_note = None
+            ai_forward_eps_fy_basis = None
+
+            ai_fin = st.session_state.ai_fetched_financials.get(curr_id, {})
+            if isinstance(ai_fin, dict) and ai_fin:
+                bound_stock_id = str(ai_fin.get('_stock_id') or curr_id)
+                if bound_stock_id != str(curr_id):
+                    ai_fin = {}
+                    st.session_state.ai_fetched_financials.pop(curr_id, None)
+            has_ai_fin_fetch = bool(ai_fin)
+            ai_pe = s_float(ai_fin.get('pe')) if has_ai_fin_fetch else None
+            ai_pb = s_float(ai_fin.get('pb')) if has_ai_fin_fetch else None
+            # EPS 拆欄：避免最新單季、TTM、年度、Forward EPS 混用。
+            ai_latest_quarter_eps = pick_first_number(ai_fin.get('latest_quarter_eps')) if has_ai_fin_fetch else None
+            ai_ttm_eps = pick_first_number(ai_fin.get('ttm_eps'), ai_fin.get('trailing_eps')) if has_ai_fin_fetch else None
+            ai_fiscal_year_eps = pick_first_number(ai_fin.get('fiscal_year_eps')) if has_ai_fin_fetch else None
+            ai_forward_eps_ai = pick_first_number(ai_fin.get('forward_eps_ai'), ai_fin.get('forward_eps')) if has_ai_fin_fetch else None
+            ai_forward_eps_consensus = pick_first_number(ai_fin.get('forward_eps_consensus')) if has_ai_fin_fetch else None
+            # 第 17-C-9c-hotfix44：Forward EPS 年期分層，避免市場/法人看 FY2/FY3 時被 FY1 低估。
+            ai_forward_eps_fy1 = pick_first_number(ai_fin.get('forward_eps_fy1'), ai_forward_eps_consensus, ai_forward_eps_ai) if has_ai_fin_fetch else None
+            ai_forward_eps_fy2 = pick_first_number(ai_fin.get('forward_eps_fy2')) if has_ai_fin_fetch else None
+            ai_forward_eps_fy3 = pick_first_number(ai_fin.get('forward_eps_fy3')) if has_ai_fin_fetch else None
+            ai_forward_eps_fy1_year = ai_fin.get('forward_eps_fy1_year') if has_ai_fin_fetch else None
+            ai_forward_eps_fy2_year = ai_fin.get('forward_eps_fy2_year') if has_ai_fin_fetch else None
+            ai_forward_eps_fy3_year = ai_fin.get('forward_eps_fy3_year') if has_ai_fin_fetch else None
+            ai_forward_eps_fy_source_note = ai_fin.get('forward_eps_fy_source_note') if has_ai_fin_fetch else None
+            ai_forward_eps_fy_basis = ai_fin.get('forward_eps_fy_basis') if has_ai_fin_fetch else None
+            ai_t_eps = ai_ttm_eps
+            ai_f_eps_calc = pick_first_number(ai_forward_eps_fy1, ai_forward_eps_consensus, ai_forward_eps_ai) if has_ai_fin_fetch else None
+            ai_yoy = s_float(ai_fin.get('yoy')) if has_ai_fin_fetch else None
+            ai_gm = s_float(ai_fin.get('gross_margin')) if has_ai_fin_fetch else None
+            ai_om = s_float(ai_fin.get('operating_margin')) if has_ai_fin_fetch else None
+            ai_roe = s_float(ai_fin.get('roe')) if has_ai_fin_fetch else None
+            ai_de = s_float(ai_fin.get('debt_to_equity')) if has_ai_fin_fetch else None
+            ai_dy = s_float(ai_fin.get('dividend_yield')) if has_ai_fin_fetch else None
+            
+            # 接取剛增加的三項防禦/主力籌碼指標
+            ai_fcf = s_float(ai_fin.get('free_cash_flow')) if has_ai_fin_fetch else None
+            ai_cr = s_float(ai_fin.get('current_ratio')) if has_ai_fin_fetch else None
+            ai_shares = s_float(ai_fin.get('shares_outstanding')) if has_ai_fin_fetch else None
+        
+            # 🚀 接收 AI 抓到的目標價、MoM 與 Dividend Yield，並覆蓋錯誤資料
+            ai_target_price = s_float(ai_fin.get('target_price')) if has_ai_fin_fetch else None
+            ai_hi_val = s_float(ai_fin.get('target_price_high')) if has_ai_fin_fetch else None
+            ai_me_val = (s_float(ai_fin.get('target_price_avg')) or ai_target_price) if has_ai_fin_fetch else None
+            ai_lo_val = s_float(ai_fin.get('target_price_low')) if has_ai_fin_fetch else None
+            ai_analyst_count = ai_fin.get('target_price_analyst_count') if has_ai_fin_fetch else None
+            ai_target_rationale = str(ai_fin.get('target_price_rationale') or "").strip() if has_ai_fin_fetch else ""
+
+            # 17-C-9c-hotfix45：法人目標價「面板」與「打包提示詞」同步修正。
+            # 有些標的的 AI JSON 沒回 target_price_analyst_count，但 yfinance/info 會有 numberOfAnalystOpinions；
+            # 若不回填，畫面可能顯示 17 位分析師，提示詞卻變成 NULL / 低可信。
+            def _first_valid_analyst_count(*vals):
+                for v in vals:
+                    fv = s_float(v)
+                    if fv is not None and fv > 0:
+                        return int(fv)
+                return None
+
+            sys_analyst_count = info.get('numberOfAnalystOpinions') if isinstance(info, dict) else None
+            ai_analyst_count = _first_valid_analyst_count(
+                ai_analyst_count,
+                ai_fin.get('analyst_count') if has_ai_fin_fetch else None,
+                ai_fin.get('target_analyst_count') if has_ai_fin_fetch else None,
+                sys_analyst_count,
+            )
+            ai_mom = normalize_financial_ratio(ai_fin.get('mom')) if has_ai_fin_fetch else None
+            if ai_mom is not None: 
+                latest_mom_val = ai_mom * 100
+
+            # ==========================================
+            # 🧯 資料品質閘門：避免欄位錯位直接進估值模型
+            # ==========================================
+            sys_vals_for_check = {
+                "gross_margin": gross_margin,
+                "operating_margin": op_margin,
+                "rev_growth": rev_growth,
+                "debt_to_equity": sys_de,
+            }
+            ai_vals_for_check = {
+                "gross_margin": ai_gm,
+                "operating_margin": ai_om,
+                "rev_growth": ai_yoy,
+                "debt_to_equity": ai_de,
+            }
+            corrected_sys, corrected_ai, dq_warnings = validate_and_correct_financial_metrics(
+                sys_vals_for_check,
+                ai_vals_for_check,
+                monthly_rev_df=df_rev_bk,
+                stock_id=curr_id,
+                stock_name=c_name,
+            )
+            # ✅ 重要：從這一行開始，所有估值、Markdown 顯示與 AI prompt 都只使用「校正後」資料。
+            # 不再讓校驗前的 gross_margin / op_margin / rev_growth / sys_de 進入畫面或公式極限價演算法。
+            gross_margin = corrected_sys.get("gross_margin")
+            op_margin = corrected_sys.get("operating_margin")
+            rev_growth = corrected_sys.get("rev_growth")
+            sys_de = corrected_sys.get("debt_to_equity")
+            ai_gm = corrected_ai.get("gross_margin")
+            ai_om = corrected_ai.get("operating_margin")
+            ai_yoy = corrected_ai.get("rev_growth")
+            ai_de = corrected_ai.get("debt_to_equity")
+
+            # 明確宣告「顯示層專用」變數，避免日後維護時誤拿校驗前欄位組 Markdown。
+            display_rev_growth = rev_growth
+            display_ai_yoy = ai_yoy
+            display_gross_margin = gross_margin
+            display_operating_margin = op_margin
+            display_ai_gross_margin = ai_gm
+            display_ai_operating_margin = ai_om
+            display_debt_to_equity = sys_de
+            display_ai_debt_to_equity = ai_de
+
+            if dq_warnings:
+                # 右下角短提示：讓操盤手知道資料已被校正，不是靜默改值
+                toast_key = f"dq_toast_{curr_id}_{hash(tuple(dq_warnings))}"
+                if not st.session_state.get(toast_key, False):
+                    try:
+                        st.toast(f"🩺 目前標的 {c_name} ({curr_id}) 觸發資料品質校驗，已啟動自動校正／NULL 防護。", icon="🩺")
+                    except Exception:
+                        pass
+                    st.session_state[toast_key] = True
+
+                with st.expander("🩺 資料品質校驗提醒", expanded=True):
+                    for w in dq_warnings:
+                        st.warning(w)
+        
+            if latest_mom_val is not None:
+                latest_mom_str = f"{latest_mom_val:.2f}%"
+            else:
+                latest_mom_str = "N/A"
+        
+            # 設定 AI 標籤與時間後綴
+            raw_ai_period = str(ai_fin.get('data_period', '')).replace('None', '').strip() if has_ai_fin_fetch else ""
+            ai_label = "AI捉取"
+            ai_period_val = f"({raw_ai_period})" if raw_ai_period else ""
+        
+            # 🚀 在目標價 html 生成前，先宣告給 prompt 用的純文字變數，絕對防禦 NameError
+            ai_tp_str = f"{ai_target_price:.1f}" if ai_target_price is not None else "未捕捉到"
+            target_price_html = ""
+            cap_warning_html = ""
+
+            eff_pe = pe_ratio if pe_ratio is not None else ai_pe
+            eff_pb = pb_ratio if pb_ratio is not None else ai_pb
+            eff_t_eps = t_eps if t_eps is not None else ai_t_eps
+            eff_rg = rev_growth if rev_growth is not None else ai_yoy
+            eff_eg = earn_growth if earn_growth is not None else ai_yoy
+            eff_gm = gross_margin if gross_margin is not None else ai_gm
+            eff_om = op_margin if op_margin is not None else ai_om
+            eff_roe = roe if roe is not None else ai_roe
+            eff_de = sys_de if sys_de is not None else ai_de
+
+            if eff_pe and eff_pe > 0 and eff_pb and eff_pb > 0:
+                eff_roe = eff_pb / eff_pe
+                roe = eff_roe 
+            
+            if ai_pe and ai_pe > 0 and ai_pb and ai_pb > 0:
+                ai_roe = ai_pb / ai_pe
+        
+            # 只有已按下 AI 財報補齊且 AI 有基礎欄位時，才推算 AI Forward EPS。
+            # 未按 AI 按鈕時，不得把系統值包裝成「AI推估」。
+            if has_ai_fin_fetch and ai_f_eps_calc is None and ai_t_eps is not None and ai_yoy is not None and -1 <= ai_yoy <= 5:
+                ai_f_eps_calc = ai_t_eps * (1 + ai_yoy)
+                # 這是 AI TTM EPS × AI 成長率推估，不是法人共識。
+                ai_forward_eps_ai = ai_f_eps_calc
+            
+            if sys_f_eps_calc is None and t_eps is not None and earn_growth is not None and -1 <= earn_growth <= 5:
+                sys_f_eps_calc = t_eps * (1 + earn_growth)
+            sys_forward_eps_system = sys_f_eps_calc
+
+            # ==========================================
+            # ⚙️ Dynamic Cap 2.0 專用採用值（第 17-B-3）
+            # ==========================================
+            # 原則：系統值仍是基礎，但 AI 全方位校對若有來源/期間且沒有重大分歧，
+            # 可進入 Dynamic Cap 計算；若分歧過大，採保守值並留下來源備註。
+            def _cap_rel_gap(a, b):
+                try:
+                    if a is None or b is None:
+                        return None
+                    aa, bb = float(a), float(b)
+                    denom = min(abs(aa), abs(bb))
+                    if denom <= 1e-9:
+                        return None
+                    return abs(aa - bb) / denom
+                except Exception:
+                    return None
+
+            def _ai_has_trace(*field_keys):
+                if not has_ai_fin_fetch or not isinstance(ai_fin, dict):
+                    return False
+                if raw_ai_period:
+                    return True
+                for fk in field_keys:
+                    try:
+                        meta = get_ai_field_source_meta(ai_fin, fk)
+                        if meta and (meta.get('source_url') or meta.get('published_date') or meta.get('source')):
+                            return True
+                    except Exception:
+                        pass
+                return False
+
+            cap_adoption_notes = []
+
+            def _adopt_for_cap(sys_val, ai_val, field_name, field_keys, mode='lower_better_when_diverged', gap_threshold=0.30):
+                ai_trace_ok = _ai_has_trace(*field_keys)
+                gap = _cap_rel_gap(sys_val, ai_val)
+                if sys_val is None and ai_val is not None:
+                    cap_adoption_notes.append(f"{field_name}：系統缺值，Dynamic Cap 採用 AI 補齊值。")
+                    return ai_val
+                if sys_val is not None and ai_val is None:
+                    return sys_val
+                if sys_val is None and ai_val is None:
+                    return None
+                if gap is not None and gap > gap_threshold:
+                    if mode == 'higher_risk_when_diverged':
+                        adopted = max(sys_val, ai_val)
+                    else:
+                        adopted = min(sys_val, ai_val)
+                    cap_adoption_notes.append(f"{field_name}：系統與 AI 差距 {gap*100:.1f}%，Dynamic Cap 採保守值 {adopted}。")
+                    return adopted
+                if ai_trace_ok and ai_val is not None:
+                    cap_adoption_notes.append(f"{field_name}：AI 有來源/期間，Dynamic Cap 採用 AI 校對值。")
+                    return ai_val
+                return sys_val
+
+            cap_gross_margin = _adopt_for_cap(gross_margin, ai_gm, '毛利率', ['gross_margin'], 'lower_better_when_diverged', 0.20)
+            cap_roe = _adopt_for_cap(eff_roe, ai_roe, 'ROE', ['roe'], 'lower_better_when_diverged', 0.30)
+            cap_debt_to_equity = _adopt_for_cap(sys_de, ai_de, 'D/E', ['debt_to_equity'], 'higher_risk_when_diverged', 0.50)
+            cap_revenue_yoy = _adopt_for_cap(rev_growth, ai_yoy, '營收 YoY', ['yoy', 'monthly_yoy'], 'lower_better_when_diverged', 0.20)
+            cap_ttm_eps = _adopt_for_cap(eff_t_eps, ai_t_eps, 'TTM EPS', ['ttm_eps', 'trailing_eps'], 'lower_better_when_diverged', 0.30)
+            cap_ai_forward_eps = ai_forward_eps_consensus if ai_forward_eps_consensus is not None else ai_forward_eps_ai
+            cap_system_forward_eps = sys_forward_eps_system
+            # 17-C-9c-hotfix44：估值用 Forward EPS 口徑統一。
+            # 優先順序：法人共識 Forward EPS > 系統 Forward EPS > AI Forward EPS。
+            # 最新單季 EPS 只用於短期獲利動能，不得直接帶入年度估值。
+            cap_adopted_forward_eps = ai_forward_eps_fy1 if ai_forward_eps_fy1 is not None else (ai_forward_eps_consensus if ai_forward_eps_consensus is not None else (cap_system_forward_eps if cap_system_forward_eps is not None else cap_ai_forward_eps))
+
+            # 先建立不依賴「公式合理價」的核心分歧警告，讓 Dynamic Cap 2.0 可即時折扣。
+            cap_divergence_warnings = build_divergence_warnings(
+                system_forward_eps=sys_forward_eps_system,
+                ai_forward_eps=ai_f_eps_calc,
+                system_yoy=rev_growth,
+                ai_yoy=ai_yoy,
+                system_peg=None,
+                ai_peg=None,
+                system_fair_value=None,
+                ai_fair_value=None,
+                system_de=sys_de,
+                ai_de=ai_de,
+                system_pb=pb_ratio,
+                ai_pb=ai_pb,
+                stock_id=curr_id,
+                stock_name=c_name,
+            )
+
+            # EPS 拆欄報告：顯示每一種 EPS 口徑，不再用「目前 EPS」混稱。
+            eps_rows = [
+                {"field": "最新單季 EPS", "definition": "最新已公告季度 EPS；用來判斷短期獲利動能", "system_value": sys_latest_quarter_eps, "ai_value": ai_latest_quarter_eps, "adopted_value": ai_latest_quarter_eps, "source": "AI補齊" if ai_latest_quarter_eps is not None else "未取得", "period": ai_period_val or raw_ai_period or "需查最新財報", "notes": "系統資料源未穩定提供單季 EPS，避免用 TTM 代替。"},
+                {"field": "TTM EPS", "definition": "近四季 EPS 合計；用於歷史 P/E", "system_value": sys_ttm_eps, "ai_value": ai_ttm_eps, "adopted_value": sys_ttm_eps if sys_ttm_eps is not None else ai_ttm_eps, "source": "系統優先" if sys_ttm_eps is not None else ("AI補齊" if ai_ttm_eps is not None else "未取得"), "period": "yfinance trailingEps / 現價÷P/E 反推" if sys_ttm_eps is not None else (raw_ai_period or "AI未揭露"), "notes": "原 trailing_eps 口徑統一視為 TTM EPS。"},
+                {"field": "完整年度 EPS", "definition": "最近完整會計年度 EPS；用來看年度基準", "system_value": sys_fiscal_year_eps, "ai_value": ai_fiscal_year_eps, "adopted_value": ai_fiscal_year_eps, "source": "AI補齊" if ai_fiscal_year_eps is not None else "未取得", "period": raw_ai_period or "需查年報", "notes": "不得用 TTM EPS 直接冒充完整年度 EPS。"},
+                {"field": "Forward EPS－系統", "definition": "yfinance forwardEps；缺值時由 TTM EPS × 成長率推估", "system_value": sys_forward_eps_system, "ai_value": None, "adopted_value": sys_forward_eps_system, "source": "系統/反推" if sys_forward_eps_system is not None else "未取得", "period": "forwardEps 或 earningsGrowth 推估", "notes": "用於系統 Forward P/E 與公式估值。"},
+                {"field": "Forward EPS－AI", "definition": "AI 從新聞/券商報告抓取或推估的 Forward EPS", "system_value": None, "ai_value": ai_forward_eps_ai, "adopted_value": ai_forward_eps_ai, "source": "AI補齊" if ai_forward_eps_ai is not None else "未取得", "period": raw_ai_period or "AI未揭露", "notes": "與法人共識 EPS 分開，避免單一來源誤當共識。"},
+                {"field": "Forward EPS－法人共識", "definition": "多家法人共識 EPS；若無明確樣本則為 NULL", "system_value": None, "ai_value": ai_forward_eps_consensus, "adopted_value": ai_forward_eps_consensus, "source": "AI/法人共識" if ai_forward_eps_consensus is not None else "未取得", "period": raw_ai_period or "AI未揭露", "notes": "後續可操作估值應優先考慮此欄；無共識不可視為強共識。"},
+            ]
+            eps_report_df = build_eps_breakdown_report(eps_rows)
+            with st.expander("🧾 EPS 口徑拆欄（單季 / TTM / 年度 / Forward）", expanded=False):
+                st.caption("避免把最新單季 EPS、TTM EPS、完整年度 EPS、Forward EPS 混稱為『目前 EPS』。目前估值仍以系統 Forward EPS 優先，AI EPS 作為補齊與交叉校對。")
+                st.dataframe(eps_report_df, use_container_width=True, hide_index=True)
+
+            # ==========================================
+            # 🚀 財務儀表板 (乾淨版)
+            # ==========================================
+            col_eps1, col_eps2 = st.columns([1, 1])
+            with col_eps1:
+                target_peg_adj = st.selectbox(
+                    "🎯 估值情境 (目標 PEG)", 
+                    [1.0, 1.2, 1.5], 
+                    format_func=lambda x: "保守 (1.0x)" if x==1.0 else ("穩健 (1.2x)" if x==1.2 else "樂觀高空 (1.5x)"),
+                    index=0,
+                    help="教練密技：目標價逆推公式的乘數。大盤熱度高或作夢空間大時可調升至 1.5。"
+                )
+            with col_eps2:
+                # ⚙️ 第 17-B 階段：Dynamic Cap 2.0 初算。
+                # 此處使用已取得的 EPS / 毛利率 / ROE / 題材 / 流動性資料建立可解釋倍率。
+                try:
+                    dynamic_cap_pack = calculate_dynamic_cap_v2(
+                        stock_id=curr_id,
+                        stock_name=c_name,
+                        current_price=curr_p,
+                        info=info,
+                        hist_data=hist,
+                        industry_profile=industry_profile,
+                        gross_margin=cap_gross_margin,
+                        operating_margin=eff_om,
+                        roe=cap_roe,
+                        debt_to_equity=cap_debt_to_equity,
+                        revenue_yoy=cap_revenue_yoy,
+                        free_cash_flow=ai_fcf,
+                        ttm_eps=cap_ttm_eps,
+                        system_forward_eps=cap_system_forward_eps,
+                        ai_forward_eps=cap_ai_forward_eps,
+                        consensus_forward_eps=ai_forward_eps_consensus,
+                        ai_ttm_eps=ai_t_eps,
+                        pb_ratio=eff_pb,
+                        divergence_warnings=cap_divergence_warnings,
+                        dq_warnings=dq_warnings,
+                    )
+                except Exception as e:
+                    log_exception("DynamicCapV2", "ui_main:calculate_dynamic_cap_v2", e)
+                    dynamic_cap_pack = {"available": False, "valuation_mode": "fallback", "final_cap": industry_profile.get('cap_hint') or 30.0, "report": pd.DataFrame()}
+
+                if dynamic_cap_pack.get("available") and dynamic_cap_pack.get("final_cap") is not None:
+                    suggested_cap = float(dynamic_cap_pack.get("final_cap"))
+                    # 第 17-B-3：保存 Dynamic Cap 實際採用值與 AI 校對採用備註，供 UI 與打包提示詞使用。
+                    dynamic_cap_pack["cap_adoption_notes"] = cap_adoption_notes
+                    dynamic_cap_pack["cap_inputs"] = {
+                        "gross_margin": cap_gross_margin,
+                        "operating_margin": eff_om,
+                        "roe": cap_roe,
+                        "debt_to_equity": cap_debt_to_equity,
+                        "revenue_yoy": cap_revenue_yoy,
+                        "free_cash_flow": ai_fcf,
+                        "ttm_eps": cap_ttm_eps,
+                        "system_forward_eps": cap_system_forward_eps,
+                        "ai_forward_eps": cap_ai_forward_eps,
+                        "adopted_valuation_forward_eps": cap_adopted_forward_eps,
+                        "adopted_fy1_eps": ai_forward_eps_fy1,
+                        "adopted_fy2_eps": ai_forward_eps_fy2,
+                        "adopted_fy3_eps": ai_forward_eps_fy3,
+                        "fy1_year": ai_forward_eps_fy1_year,
+                        "fy2_year": ai_forward_eps_fy2_year,
+                        "fy3_year": ai_forward_eps_fy3_year,
+                        "fy_eps_source_note": ai_forward_eps_fy_source_note,
+                        "fy_eps_basis": ai_forward_eps_fy_basis,
+                        "valuation_eps_rule": "TTM EPS 用於目前實際獲利估值；FY1/FY2/FY3 是法人預估年度EPS序列，不是查詢日後1/2/3年；FY2 用於市場先行估值；FY3 只作高風險樂觀情境；最新單季 EPS 不進年度估值。",
+                    }
+                    _cap_low = dynamic_cap_pack.get("operable_cap_low")
+                    _cap_high = dynamic_cap_pack.get("operable_cap_high")
+                    if _cap_low is not None and _cap_high is not None:
+                        cap_reason = f"Dynamic Cap 2.0 可操作倍率：{float(_cap_low):.1f}～{float(_cap_high):.1f}x；中性建議 {suggested_cap:.1f}x。已採 17-C-9c-hotfix44：AI 校對後採用值 + 分歧折扣校準 + 循環復甦區間 + 產業 hard ceiling。"
+                    else:
+                        cap_reason = f"Dynamic Cap 2.0 最終建議倍率：{suggested_cap:.1f}x。已採 17-C-9c-hotfix44：AI 校對後採用值 + 分歧折扣校準 + 循環復甦區間 + 產業 hard ceiling。"
+                else:
+                    suggested_cap = float(industry_profile.get('cap_hint') or 30.0)
+                    cap_reason = f"此產業主要估值模式為 {dynamic_cap_pack.get('valuation_mode', industry_profile.get('primary_valuation', 'N/A'))}，P/E Cap 僅作輔助；後續請優先看 P/B / 週期 / 題材落地。"
+
+                cap_refresh_token = st.session_state.get(f"dynamic_cap_refresh_token_{curr_id}", "base")
+                target_pe_cap = st.number_input(
+                    "⚙️ 動態本益比天花板 (Dynamic Cap 2.0)",
+                    value=float(suggested_cap),
+                    step=5.0,
+                    key=f"dynamic_cap_input_{curr_id}_{cap_refresh_token}",
+                    help="第 17-C-9c-hotfix44：重構產業基準倍率，加入市場/法人隱含倍率、負 EPS 防呆與題材落地檢查。"
+                )
+                if dynamic_cap_pack.get("available"):
+                    # 使用者仍可手動覆寫 Cap；若覆寫，估值公式採手動值，拆解表仍保留系統建議值。
+                    dynamic_cap_pack["user_selected_cap"] = target_pe_cap
+                st.markdown(f"<div style='color:#00bfff; font-size:0.75rem; margin-top:-10px; line-height:1.2;'>💡 {cap_reason}</div>", unsafe_allow_html=True)
+                if cap_adoption_notes:
+                    with st.expander("🔄 Dynamic Cap 2.0 採用 AI 校對值紀錄", expanded=False):
+                        for note in cap_adoption_notes[:20]:
+                            st.caption(f"- {note}")
+
+            is_base_normalized = False 
+
+            eff_f_eps = sys_f_eps_calc
+            eps_source_text = f"海外系統或反推 ({eff_f_eps:.2f}元)" if eff_f_eps is not None else "系統預估 (無資料)"
+            
+            # 使用新的排版函數呼叫
+            f_eps_display = build_cmp_dual_str(t_eps, sys_f_eps_calc, ai_t_eps, ai_f_eps_calc, 'num', 'num', 'AI推估', show_ai_missing=has_ai_fin_fetch, period=ai_period_val)
+    
+            sys_forward_pe = s_float(info.get('forwardPE'))
+            if sys_forward_pe is None and eff_f_eps is not None and eff_f_eps > 0: sys_forward_pe = curr_p / eff_f_eps
+        
+            ai_fpe = curr_p / ai_f_eps_calc if has_ai_fin_fetch and ai_f_eps_calc and ai_f_eps_calc > 0 else None
+            eff_forward_pe = sys_forward_pe if sys_forward_pe is not None else ai_fpe
+        
+            if eff_f_eps is not None and t_eps is not None and t_eps > 0:
+                if t_eps < 0.5:
+                    safe_base_eps = 0.5
+                    is_base_normalized = True
+                else: safe_base_eps = t_eps
+                real_cg = (eff_f_eps - safe_base_eps) / safe_base_eps
+            else: real_cg = earn_growth
+        
+            orig_peg = sys_forward_pe / (real_cg * 100) if sys_forward_pe is not None and real_cg is not None and real_cg > 0 else None
+        
+            ai_cg = None
+            if has_ai_fin_fetch:
+                if ai_f_eps_calc is not None and ai_t_eps is not None and ai_t_eps > 0:
+                    safe_base_eps_ai = 0.5 if ai_t_eps < 0.5 else ai_t_eps
+                    ai_cg = (ai_f_eps_calc - safe_base_eps_ai) / safe_base_eps_ai
+                else:
+                    ai_cg = ai_yoy
+            
+            ai_peg = ai_fpe / (ai_cg * 100) if has_ai_fin_fetch and ai_fpe is not None and ai_cg is not None and ai_cg > 0 else None
+        
+            eff_peg = orig_peg if orig_peg is not None else ai_peg
+            if real_cg is not None and real_cg <= 0: eff_peg = -999
+
+            # ==========================================
+            # 🩺 統一資料品質報告：把系統/AI/採用值與期間集中呈現
+            # ==========================================
+            dq_note_text = "；".join(dq_warnings) if dq_warnings else ""
+            ai_period_text = raw_ai_period if raw_ai_period else "AI未啟動或未揭露期間"
+
+            def _ai_src(field_key, fallback_label="AI補齊"):
+                return format_ai_source_detail(ai_fin, field_key, ai_period_text, fallback_label) if has_ai_fin_fetch else "AI未啟動"
+
+            def _ai_url(field_key):
+                return get_ai_source_url(ai_fin, field_key) if has_ai_fin_fetch else ""
+
+            latest_rev_period = latest_rev_display_label if latest_rev_month and latest_rev_month != "無資料" else "未取得月營收"
+            rev_is_stale = revenue_month_is_older(latest_rev_month) if latest_rev_month and latest_rev_month != "無資料" else False
+
+            def _adopt_src(sys_val, ai_val, sys_label="系統", ai_label_text="AI補齊"):
+                return sys_label if sys_val is not None else (ai_label_text if ai_val is not None else "無可用資料")
+
+            def _fy_year_display(y):
+                if y is None or str(y).strip() in ["", "None", "nan"]:
+                    return "年期未明"
+                s = str(y).strip()
+                return f"{s}E" if re.match(r"^\d{4}$", s) else s
+
+            # 17-C-9c-hotfix44-hotfix：建立資料品質列前再次確保 FY EPS 欄位存在。
+            ai_forward_eps_fy1 = locals().get("ai_forward_eps_fy1", None)
+            ai_forward_eps_fy2 = locals().get("ai_forward_eps_fy2", None)
+            ai_forward_eps_fy3 = locals().get("ai_forward_eps_fy3", None)
+            ai_forward_eps_fy1_year = locals().get("ai_forward_eps_fy1_year", None)
+            ai_forward_eps_fy2_year = locals().get("ai_forward_eps_fy2_year", None)
+            ai_forward_eps_fy3_year = locals().get("ai_forward_eps_fy3_year", None)
+            ai_forward_eps_fy_source_note = locals().get("ai_forward_eps_fy_source_note", None)
+            ai_forward_eps_fy_basis = locals().get("ai_forward_eps_fy_basis", None)
+
+            # 17-C-9c-hotfix442：資料品質列專用安全值，避免 dict 列表建立時任何區域變數未就緒。
+            _fy1_eps_safe = locals().get("ai_forward_eps_fy1", None)
+            _fy2_eps_safe = locals().get("ai_forward_eps_fy2", None)
+            _fy3_eps_safe = locals().get("ai_forward_eps_fy3", None)
+            _fy1_year_safe = locals().get("ai_forward_eps_fy1_year", None)
+            _fy2_year_safe = locals().get("ai_forward_eps_fy2_year", None)
+            _fy3_year_safe = locals().get("ai_forward_eps_fy3_year", None)
+
+            def _safe_ai_src(field_key, fallback_label="AI補齊"):
+                try:
+                    return _ai_src(field_key, fallback_label)
+                except Exception:
+                    return "AI未啟動"
+
+            def _safe_ai_url(field_key):
+                try:
+                    return _ai_url(field_key)
+                except Exception:
+                    return ""
+
+            def _fy_year_display_safe(y):
+                try:
+                    if y is None or str(y).strip() in ["", "None", "nan"]:
+                        return "年期未明"
+                    s = str(y).strip()
+                    return f"{s}E" if re.match(r"^\d{4}$", s) else s
+                except Exception:
+                    return "年期未明"
+
+            quality_rows = [
+                {"field": "現價", "system_source": "Yahoo/yfinance 即時或延遲行情", "system_value": curr_p, "ai_source": "不使用AI", "ai_value": None, "adopted_value": curr_p, "adopted_source": "系統行情", "period": "即時/延遲", "fmt": "price"},
+                {"field": "P/E", "system_source": "yfinance；異常時 FinMind PER 備援", "system_value": pe_ratio, "ai_source": _ai_src("pe"), "ai_source_url": _ai_url("pe"), "ai_value": ai_pe, "adopted_value": eff_pe, "adopted_source": _adopt_src(pe_ratio, ai_pe), "period": ai_period_text if pe_ratio is None and ai_pe is not None else "系統最新可得", "fmt": "x"},
+                {"field": "Forward P/E", "system_source": "yfinance forwardPE 或 EPS 反推", "system_value": sys_forward_pe, "ai_source": _ai_src("forward_eps"), "ai_source_url": _ai_url("forward_eps"), "ai_value": ai_fpe, "adopted_value": eff_forward_pe, "adopted_source": _adopt_src(sys_forward_pe, ai_fpe), "period": ai_period_text if sys_forward_pe is None and ai_fpe is not None else "系統/反推", "fmt": "x"},
+                {"field": "PEG", "system_source": "Forward P/E ÷ 預估成長率", "system_value": orig_peg, "ai_source": _ai_src("yoy"), "ai_source_url": _ai_url("yoy"), "ai_value": ai_peg, "adopted_value": None if eff_peg == -999 else eff_peg, "adopted_source": "系統優先/AI備援", "period": "推估值", "fmt": "x", "notes": "成長率為負時 PEG 無意義" if eff_peg == -999 else ""},
+                {"field": "P/B", "system_source": "yfinance；異常時 FinMind PBR 備援", "system_value": pb_ratio, "ai_source": _ai_src("pb"), "ai_source_url": _ai_url("pb"), "ai_value": ai_pb, "adopted_value": eff_pb, "adopted_source": _adopt_src(pb_ratio, ai_pb), "period": ai_period_text if pb_ratio is None and ai_pb is not None else "系統最新可得", "fmt": "x"},
+                {"field": "最新單季 EPS", "system_source": "系統未穩定提供，避免用 TTM 冒充", "system_value": sys_latest_quarter_eps, "ai_source": _ai_src("latest_quarter_eps"), "ai_source_url": _ai_url("latest_quarter_eps"), "ai_value": ai_latest_quarter_eps, "adopted_value": ai_latest_quarter_eps, "adopted_source": "AI補齊" if ai_latest_quarter_eps is not None else "無可用資料", "period": ai_period_text, "fmt": "num", "notes": "判斷最新獲利動能"},
+                {"field": "TTM EPS", "system_source": "yfinance trailingEps；必要時用 現價÷P/E 反推", "system_value": sys_ttm_eps, "ai_source": _ai_src("ttm_eps"), "ai_source_url": _ai_url("ttm_eps"), "ai_value": ai_ttm_eps, "adopted_value": eff_t_eps, "adopted_source": _adopt_src(sys_ttm_eps, ai_ttm_eps), "period": ai_period_text if sys_ttm_eps is None and ai_ttm_eps is not None else "系統/反推", "fmt": "num", "notes": "用於歷史 P/E"},
+                {"field": "完整年度 EPS", "system_source": "未穩定提供，需 AI/年報補齊", "system_value": sys_fiscal_year_eps, "ai_source": _ai_src("fiscal_year_eps"), "ai_source_url": _ai_url("fiscal_year_eps"), "ai_value": ai_fiscal_year_eps, "adopted_value": ai_fiscal_year_eps, "adopted_source": "AI補齊" if ai_fiscal_year_eps is not None else "無可用資料", "period": ai_period_text, "fmt": "num", "notes": "年度基準，不與 TTM 混用"},
+                {"field": "Forward EPS－系統", "system_source": "yfinance forwardEps；必要時由 TTM EPS×成長率推估", "system_value": sys_forward_eps_system, "ai_source": "不使用AI", "ai_source_url": "", "ai_value": None, "adopted_value": sys_forward_eps_system, "adopted_source": "系統/推估" if sys_forward_eps_system is not None else "無可用資料", "period": "系統/推估", "fmt": "num"},
+                {"field": "Forward EPS－AI/共識", "system_source": "不使用系統", "system_value": None, "ai_source": _ai_src("forward_eps_consensus") if ai_forward_eps_consensus is not None else _ai_src("forward_eps_ai"), "ai_source_url": _ai_url("forward_eps_consensus") if ai_forward_eps_consensus is not None else _ai_url("forward_eps_ai"), "ai_value": ai_f_eps_calc, "adopted_value": ai_f_eps_calc, "adopted_source": "法人共識/FY1" if ai_forward_eps_fy1 is not None or ai_forward_eps_consensus is not None else ("AI補齊" if ai_forward_eps_ai is not None else "無可用資料"), "period": ai_period_text, "fmt": "num", "notes": "與系統 Forward EPS 分開比較"},
+                {"field": "Forward EPS－FY1", "system_source": "不使用系統", "system_value": None, "ai_source": _safe_ai_src("forward_eps_fy1"), "ai_source_url": _safe_ai_url("forward_eps_fy1"), "ai_value": _fy1_eps_safe, "adopted_value": _fy1_eps_safe, "adopted_source": "AI/法人FY1" if _fy1_eps_safe is not None else "無可用資料", "period": _fy_year_display_safe(_fy1_year_safe), "fmt": "num", "notes": "第17-C-9c-hotfix442：FY1 一年預估估值用"},
+                {"field": "Forward EPS－FY2", "system_source": "不使用系統", "system_value": None, "ai_source": _safe_ai_src("forward_eps_fy2"), "ai_source_url": _safe_ai_url("forward_eps_fy2"), "ai_value": _fy2_eps_safe, "adopted_value": _fy2_eps_safe, "adopted_source": "AI/法人FY2" if _fy2_eps_safe is not None else "無可用資料", "period": _fy_year_display_safe(_fy2_year_safe), "fmt": "num", "notes": "第17-C-9c-hotfix442：FY2 第二年預估估值用，不直接當買點"},
+                {"field": "Forward EPS－FY3", "system_source": "不使用系統", "system_value": None, "ai_source": _safe_ai_src("forward_eps_fy3"), "ai_source_url": _safe_ai_url("forward_eps_fy3"), "ai_value": _fy3_eps_safe, "adopted_value": _fy3_eps_safe, "adopted_source": "AI/法人FY3" if _fy3_eps_safe is not None else "無可用資料", "period": _fy_year_display_safe(_fy3_year_safe), "fmt": "num", "notes": "第17-C-9c-hotfix442：FY3 第三年預估/高風險情境，不作買點"},
+                {"field": "營收 YoY", "system_source": "FinMind 月營收優先；yfinance 備援", "system_value": rev_growth, "ai_source": _ai_src("yoy"), "ai_source_url": _ai_url("yoy"), "ai_value": ai_yoy, "adopted_value": eff_rg, "adopted_source": _adopt_src(rev_growth, ai_yoy, "FinMind/yfinance", "AI補齊"), "period": latest_rev_period, "fmt": "pct", "is_stale": rev_is_stale, "notes": latest_rev_notice or ("月營收可能不是最新公告月份" if rev_is_stale else "")},
+                {"field": "營收 MoM", "system_source": "FinMind 月營收", "system_value": (latest_mom_val / 100.0) if latest_mom_val is not None else None, "ai_source": _ai_src("mom"), "ai_source_url": _ai_url("mom"), "ai_value": ai_mom, "adopted_value": (latest_mom_val / 100.0) if latest_mom_val is not None else ai_mom, "adopted_source": "FinMind 月營收/AI覆蓋", "period": latest_rev_period, "fmt": "pct", "is_stale": rev_is_stale},
+                {"field": "毛利率", "system_source": "yfinance；缺值時 FinMind 財報健康度", "system_value": gross_margin, "ai_source": _ai_src("gross_margin"), "ai_source_url": _ai_url("gross_margin"), "ai_value": ai_gm, "adopted_value": eff_gm, "adopted_source": _adopt_src(gross_margin, ai_gm), "period": ai_period_text if gross_margin is None and ai_gm is not None else "系統最新可得", "fmt": "pct", "notes": dq_note_text if "毛利率" in dq_note_text else ""},
+                {"field": "營益率", "system_source": "yfinance；缺值時 FinMind 財報健康度", "system_value": op_margin, "ai_source": _ai_src("operating_margin"), "ai_source_url": _ai_url("operating_margin"), "ai_value": ai_om, "adopted_value": eff_om, "adopted_source": _adopt_src(op_margin, ai_om), "period": ai_period_text if op_margin is None and ai_om is not None else "系統最新可得", "fmt": "pct", "notes": dq_note_text if "營益率" in dq_note_text else ""},
+                {"field": "ROE", "system_source": "yfinance；或用 P/B÷P/E 校正", "system_value": roe, "ai_source": _ai_src("roe"), "ai_source_url": _ai_url("roe"), "ai_value": ai_roe, "adopted_value": eff_roe, "adopted_source": _adopt_src(roe, ai_roe, "系統/恆等式校正", "AI補齊"), "period": ai_period_text if roe is None and ai_roe is not None else "系統/校正", "fmt": "pct"},
+                {"field": "D/E", "system_source": "yfinance；缺值時 FinMind 財報健康度", "system_value": sys_de, "ai_source": _ai_src("debt_to_equity"), "ai_source_url": _ai_url("debt_to_equity"), "ai_value": ai_de, "adopted_value": eff_de, "adopted_source": _adopt_src(sys_de, ai_de), "period": ai_period_text if sys_de is None and ai_de is not None else "系統最新可得", "fmt": "x", "notes": dq_note_text if "D/E" in dq_note_text or "債" in dq_note_text else ""},
+            ]
+            dq_report_df = build_financial_quality_report(quality_rows)
+            with st.expander("🩺 統一資料品質報告（系統 / AI / 採用值）", expanded=False):
+                st.caption("此表用來檢查每個估值欄位的來源、採用值、期間、AI來源網址與品質狀態。估值模型仍採系統值優先、AI 作為補齊與交叉校對。")
+                st.dataframe(dq_report_df, use_container_width=True, hide_index=True)
+        
+            def _cap_float(v, default=None):
+                try:
+                    return float(v) if v is not None else default
+                except Exception:
+                    return default
+
+            # 17-C-9c-hotfix44：倍率分層。可操作倍率 ≠ 公式合理倍率 ≠ 樂觀/極限倍率。
+            operable_pe_cap = _cap_float(target_pe_cap, suggested_cap)
+            formula_pe_cap = _cap_float(dynamic_cap_pack.get("formula_cap"), None)
+            if formula_pe_cap is None:
+                formula_pe_cap = _cap_float(dynamic_cap_pack.get("raw_cap"), operable_pe_cap)
+            soft_pe_cap = _cap_float(dynamic_cap_pack.get("optimistic_cap"), None)
+            if soft_pe_cap is None:
+                soft_pe_cap = _cap_float(dynamic_cap_pack.get("soft_ceiling_cap"), formula_pe_cap)
+            hard_pe_cap = _cap_float(dynamic_cap_pack.get("hard_ceiling_cap"), _cap_float(dynamic_cap_pack.get("ceiling_cap"), soft_pe_cap))
+            if formula_pe_cap is not None and soft_pe_cap is not None:
+                formula_pe_cap = min(formula_pe_cap, soft_pe_cap)
+            extreme_pe_cap_for_calc = soft_pe_cap if soft_pe_cap is not None else operable_pe_cap
+
+            # 17-C-9c-hotfix44：公式合理估值口徑修正。
+            # 舊邏輯曾使用 PEG/成長率推導倍率，容易把 5.11% 成長率誤當 5.11x 倍率。
+            # 新邏輯一律使用：Forward EPS × formula_cap；若系統 Forward EPS 缺值，系統公式價維持 N/A。
+            if eff_f_eps is not None and eff_f_eps > 0 and formula_pe_cap is not None:
+                sys_target_price_est = eff_f_eps * formula_pe_cap
+                is_capped = False
+            else:
+                sys_target_price_est = None; is_capped = False
+            
+            extreme_target_price = eff_f_eps * extreme_pe_cap_for_calc if eff_f_eps is not None and eff_f_eps > 0 and extreme_pe_cap_for_calc is not None else None
+            # 17-B-5：使用者手動調整 Cap 時，公式合理估值仍受公式倍率/soft ceiling 控制；
+            # 但額外顯示「手動情境推估價」，讓使用者可以看見自行提高可操作 Cap 後的情境價。
+            # 若手動倍率超過 hard ceiling，情境價仍以 hard ceiling 截斷並顯示警示。
+            manual_cap_input = operable_pe_cap
+            manual_cap_for_calc = manual_cap_input
+            manual_cap_hit_hard = False
+            if manual_cap_input is not None and hard_pe_cap is not None and manual_cap_input > hard_pe_cap:
+                manual_cap_for_calc = hard_pe_cap
+                manual_cap_hit_hard = True
+            manual_target_price = eff_f_eps * manual_cap_for_calc if eff_f_eps is not None and eff_f_eps > 0 and manual_cap_for_calc is not None else None
+
+            # 17-C-9c-hotfix44：AI/法人共識公式合理估值同樣使用 Forward EPS × formula_cap。
+            # 不再把 AI 成長率直接當成 PE 倍數。
+            if has_ai_fin_fetch and ai_f_eps_calc is not None and ai_f_eps_calc > 0 and formula_pe_cap is not None:
+                ai_target_price_est = ai_f_eps_calc * formula_pe_cap
+                ai_is_capped = False
+            else:
+                ai_target_price_est = None; ai_is_capped = False
+
+            ai_extreme_target_price = ai_f_eps_calc * extreme_pe_cap_for_calc if has_ai_fin_fetch and ai_f_eps_calc is not None and ai_f_eps_calc > 0 and extreme_pe_cap_for_calc is not None else None
+            ai_manual_target_price = ai_f_eps_calc * manual_cap_for_calc if has_ai_fin_fetch and ai_f_eps_calc is not None and ai_f_eps_calc > 0 and manual_cap_for_calc is not None else None
+
+            # 17-C-9c-hotfix44：市場 / 法人隱含 Forward P/E 對照。用來解釋現價、法人價與系統估值差距。
+            implied_eps = cap_adopted_forward_eps
+            market_implied_pe = curr_p / implied_eps if implied_eps is not None and implied_eps > 0 and curr_p is not None else None
+            target_avg_implied_pe = ai_me_val / implied_eps if implied_eps is not None and implied_eps > 0 and ai_me_val is not None else None
+            target_high_implied_pe = ai_hi_val / implied_eps if implied_eps is not None and implied_eps > 0 and ai_hi_val is not None else None
+            target_low_implied_pe = ai_lo_val / implied_eps if implied_eps is not None and implied_eps > 0 and ai_lo_val is not None else None
+            implied_status = "Forward EPS 缺值或 <= 0，無法反推市場 / 法人隱含 Forward P/E。"
+            if market_implied_pe is not None:
+                if hard_pe_cap is not None and market_implied_pe > hard_pe_cap:
+                    implied_status = "現價隱含倍率已高於系統 hard ceiling，屬市場重估 / 題材動能區，不代表可操作買點。"
+                elif soft_pe_cap is not None and market_implied_pe > soft_pe_cap:
+                    implied_status = "現價隱含倍率高於 soft ceiling，屬偏樂觀估值區。"
+                elif operable_pe_cap is not None and market_implied_pe > operable_pe_cap:
+                    implied_status = "現價隱含倍率高於可操作倍率，但仍未突破系統 hard ceiling。"
+                else:
+                    implied_status = "現價隱含倍率未高於可操作倍率。"
+            implied_html = ""
+            if market_implied_pe is not None or target_avg_implied_pe is not None:
+                _mkt = f"{market_implied_pe:.1f}x" if market_implied_pe is not None else "N/A"
+                _avg = f"{target_avg_implied_pe:.1f}x" if target_avg_implied_pe is not None else "N/A"
+                _hi = f"{target_high_implied_pe:.1f}x" if target_high_implied_pe is not None else "N/A"
+                _lo = f"{target_low_implied_pe:.1f}x" if target_low_implied_pe is not None else "N/A"
+                _eps = f"{implied_eps:.2f}" if implied_eps is not None else "N/A"
+                implied_html = f"<div style='background:#1f2937;color:#E5E7EB;padding:7px 9px;border-radius:6px;margin-top:7px;line-height:1.55;'><b>🧭 市場 / 法人隱含倍率對照</b><br>採用 Forward EPS：{_eps}｜現價隱含：{_mkt}｜法人均價隱含：{_avg}｜法人高標隱含：{_hi}｜法人低標隱含：{_lo}<br><span style='color:#FBBF24;'>{implied_status}</span></div>"
+            if isinstance(dynamic_cap_pack, dict):
+                dynamic_cap_pack["market_implied_forward_pe"] = market_implied_pe
+                dynamic_cap_pack["target_avg_implied_forward_pe"] = target_avg_implied_pe
+                dynamic_cap_pack["target_high_implied_forward_pe"] = target_high_implied_pe
+                dynamic_cap_pack["target_low_implied_forward_pe"] = target_low_implied_pe
+                dynamic_cap_pack["implied_forward_eps"] = implied_eps
+                dynamic_cap_pack["implied_status"] = implied_status
+
+            # ==========================================
+            # ⚠️ 系統 / AI 分歧警告：EPS / YoY / PEG / 合理價 / D/E
+            # ==========================================
+            divergence_warnings = build_divergence_warnings(
+                system_forward_eps=sys_forward_eps_system,
+                ai_forward_eps=ai_f_eps_calc,
+                system_yoy=rev_growth,
+                ai_yoy=ai_yoy,
+                system_peg=orig_peg,
+                ai_peg=ai_peg,
+                system_fair_value=sys_target_price_est,
+                ai_fair_value=ai_target_price_est,
+                system_de=sys_de,
+                ai_de=ai_de,
+                system_pb=pb_ratio,
+                ai_pb=ai_pb,
+                stock_id=curr_id,
+                stock_name=c_name,
+            )
+            if divergence_warnings:
+                danger_count = sum(1 for w in divergence_warnings if w.get("嚴重度") == "danger")
+                with st.expander(f"⚠️ 系統 / AI 分歧警告（{len(divergence_warnings)} 項）", expanded=True):
+                    if danger_count:
+                        st.error("偵測到重大估值分歧：請先確認 EPS、YoY、PEG、合理價或 D/E 口徑，再使用買賣結論。")
+                    else:
+                        st.warning("偵測到資料口徑分歧：建議先檢查來源與期間，再解讀估值。")
+                    for w in divergence_warnings:
+                        msg = (
+                            f"**{w.get('規則', '分歧警告')}**：{w.get('警告文字', '')}  \n"
+                            f"系統值：`{w.get('系統值', 'NULL')}`｜AI值：`{w.get('AI值', 'NULL')}`｜差距：`{w.get('差距', 'N/A')}`  \n"
+                            f"建議：{w.get('建議處理', '')}"
+                        )
+                        if w.get("嚴重度") == "danger":
+                            st.error(msg)
+                        else:
+                            st.warning(msg)
+                    st.dataframe(build_divergence_warning_report(divergence_warnings), use_container_width=True, hide_index=True)
+        
+            # 手動組合區域
+            time_str = f", {ai_period_val}" if ai_period_val else ""
+
+            # 1. 預估獲利成長 (YoY)
+            eg_str_disp = build_cmp_str(real_cg, ai_cg, 'pct', 'AI推估', show_ai_missing=has_ai_fin_fetch, period=ai_period_val)
+            if is_base_normalized: eg_str_disp += "<br><span style='color:#FFD700; font-size:0.75rem; font-weight:normal;'>⚠️ 啟動低基期防護(分母=0.5)</span>"
+            eg_color = "#ff4d4d" if real_cg and real_cg > 0 else ("#00cc66" if real_cg and real_cg < 0 else "#fff")
+        
+            # 2. 前瞻 PEG
+            orig_peg_str = f"{orig_peg:.2f}" if orig_peg is not None else ("分母為負" if real_cg is not None and real_cg <= 0 else "N/A")
+            peg_str_disp = f"{orig_peg_str}<br><span style='color:#FFD700; font-size:0.85rem;'>(AI推估: {ai_peg:.2f}{time_str})</span>" if ai_peg is not None else orig_peg_str
+        
+            # 3. 前瞻 P/E
+            orig_fpe_str = f"{sys_forward_pe:.1f}x" if sys_forward_pe is not None else "N/A"
+            fpe_str = f"{orig_fpe_str}<br><span style='color:#FFD700; font-size:0.85rem;'>(AI推估: {ai_fpe:.1f}x{time_str})</span>" if ai_fpe is not None else orig_fpe_str
+        
+            pe_str = build_cmp_str(pe_ratio, ai_pe, 'x', ai_label, show_ai_missing=has_ai_fin_fetch, period=ai_period_val)
+            # ✅ 顯示字串只吃 validate_and_correct_financial_metrics() 校正後的 display_* 變數。
+            rg_str = build_cmp_str(display_rev_growth, display_ai_yoy, 'pct', ai_label, show_ai_missing=has_ai_fin_fetch, period=ai_period_val)
+            gm_om_str = build_cmp_dual_str(display_gross_margin, display_operating_margin, display_ai_gross_margin, display_ai_operating_margin, 'pct', 'pct', ai_label, show_ai_missing=has_ai_fin_fetch, period=ai_period_val)
+            roe_str = build_cmp_str(roe, ai_roe, 'pct', ai_label, show_ai_missing=has_ai_fin_fetch, period=ai_period_val)
+            de_str = build_cmp_str(display_debt_to_equity, display_ai_debt_to_equity, 'pct', ai_label, show_ai_missing=has_ai_fin_fetch, period=ai_period_val)
+            pb_str = build_cmp_str(pb_ratio, ai_pb, 'x', ai_label, show_ai_missing=has_ai_fin_fetch, period=ai_period_val)
+        
+            rg_color = "#ff4d4d" if eff_rg and eff_rg > 0 else ("#00cc66" if eff_rg and eff_rg < 0 else "#fff")
+            roe_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='大於15%視為資金運用效率極佳 (已透過恆等式校正)'>⭐ 優質</span>" if eff_roe is not None and eff_roe >= 0.15 else ""
+        
+            if eff_de is None: de_eval = ""
+            elif eff_de < 0.5: de_eval = " <span style='color:#00cc66; font-size:0.8rem; margin-left:5px;' title='小於50%財務極度穩健'>⭐ 優質</span>"
+            elif eff_de > 1.0: de_eval = " <span style='color:#ff4d4d; font-size:0.8rem; margin-left:5px;' title='大於100%視為高槓桿風險'>⚠️ 高槓桿</span>"
+            else: de_eval = " <span style='color:#FFD700; font-size:0.8rem; margin-left:5px;' title='50%~100%為資本密集產業常見合理區間'>🆗 合理</span>"
+
+            if eff_pe is None: pe_color, pe_text = "gray", "數據不足"
+            elif eff_pe > 25: pe_color, pe_text = "#ff4d4d", "高成長溢價"
+            elif eff_pe < 15: pe_color, pe_text = "#00cc66", "相對便宜"
+            else: pe_color, pe_text = "#FFD700", "合理區間"
+
+            if eff_pb is None: pb_color, pb_text = "gray", "數據不足"
+            elif eff_pb > 3: pb_color, pb_text = "#ff4d4d", "偏高溢價"
+            elif eff_pb < 1.5: pb_color, pb_text = "#00cc66", "具資產保護"
+            else: pb_color, pb_text = "#FFD700", "合理區間"
+
+            if eff_forward_pe is None: fpe_color, fpe_text = "gray", "數據不足"
+            else:
+                if eff_forward_pe > 25: fpe_color, fpe_text = "#ff4d4d", "高成長期望"
+                elif eff_forward_pe < 15: fpe_color, fpe_text = "#00cc66", "相對便宜"
+                else: fpe_color, fpe_text = "#FFD700", "合理區間"
+
+            if eff_peg == -999: peg_color, peg_text = "gray", "分母為負，無意義"
+            elif eff_peg is None: peg_color, peg_text = "gray", "衰退或無數據"
+            else: 
+                if eff_forward_pe is not None and target_pe_cap is not None and eff_forward_pe > target_pe_cap:
+                    peg_color, peg_text = "#ff8c00", "估值過熱(超越Cap)" 
+                elif eff_peg > 2: peg_color, peg_text = "#ff4d4d", "透支未來成長"
+                elif eff_peg <= 1: peg_color, peg_text = "#00cc66", "低估 (成長性支撐)"
+                else: peg_color, peg_text = "#FFD700", "合理區間"
+            if sys_target_price_est or ai_target_price_est:
+                cap_warning_html = ""
+                if dynamic_cap_pack.get("valuation_mode") == "turnaround_event" or dynamic_cap_pack.get("available") is False and dynamic_cap_pack.get("valuation_mode") in {"turnaround_event", "event_chip"}:
+                    cap_warning_html += "<br><span style='color:#FFD700; font-weight:bold;'>⚠️ EPS 尚未穩定轉正或產業/題材尚待確認，系統已停用 P/E 公式估值；請改看轉機事件、P/B、營收與單季 EPS 是否連續改善。</span>"
+                if dynamic_cap_pack.get("hit_hard_ceiling"):
+                    cap_msg = f"🚨 觸發產業 hard ceiling 封頂防護 ({hard_pe_cap:.0f}x)"
+                    cap_warning_html = f"<br><span style='color:#ff4d4d; font-weight:bold;'>{cap_msg}，模型輸入偏樂觀，不可直接作為買進乘數！</span>"
+                elif is_capped or ai_is_capped:
+                    cap_msg = f"⚠️ PEG 公式倍率已受公式合理倍率限制 ({formula_pe_cap:.1f}x)"
+                    cap_warning_html = f"<br><span style='color:#FFD700; font-weight:bold;'>{cap_msg}；這不是產業 hard ceiling 封頂。</span>"
+                if (extreme_target_price and curr_p > extreme_target_price) or (ai_extreme_target_price and curr_p > ai_extreme_target_price):
+                    cap_warning_html += "<br><span style='color:#ff4d4d; font-weight:bold;'>現價已高於樂觀情境價，追高風險極大！</span>"
+                sys_tp_str = f"{sys_target_price_est:.1f}元" if sys_target_price_est else "N/A"
+                ai_tp_est_html = f"<span style='color:#FFD700; font-size:0.95rem;'>(AI推估: {ai_target_price_est:.1f}元{time_str})</span>" if ai_target_price_est else ""            
+                sys_ext_str = f"{extreme_target_price:.1f}元" if extreme_target_price else "N/A"
+                ai_ext_str = f"<span style='color:#FFD700; font-size:0.95rem;'>(AI推估: {ai_extreme_target_price:.1f}元{time_str})</span>" if ai_extreme_target_price else ""   
+                manual_tp_str = f"{manual_target_price:.1f}元" if manual_target_price else "N/A"
+                ai_manual_str = f"<span style='color:#FFD700; font-size:0.95rem;'>(AI推估: {ai_manual_target_price:.1f}元{time_str})</span>" if ai_manual_target_price else ""
+                if manual_cap_hit_hard:
+                    cap_warning_html += f"<br><span style='color:#ff4d4d; font-weight:bold;'>手動情境倍率 {manual_cap_input:.1f}x 已超過產業 hard ceiling，情境價以 {hard_pe_cap:.1f}x 截斷。</span>"
+                # 17-C-9c-hotfix45：估值顯示口徑重整。
+                # 1) 公式合理估值保留「系統 Forward EPS × formula cap」。
+                # 2) AI估值保留「AI/法人 Forward EPS × formula cap」。
+                # 3) 年度 FY1/FY2/FY3 估值另外列示，不再混入公式合理估值。
+                # 4) 手動年度情境價以 FY1 EPS × 使用者手動 Cap 計算，用於壓力測試/反推現價倍率；樂觀年度情境價以 FY1 EPS × soft ceiling 計算。
+                def _valuation_num(v):
+                    try:
+                        if v is None:
+                            return None
+                        v = float(v)
+                        if pd.isna(v) or v <= 0:
+                            return None
+                        return v
+                    except Exception:
+                        return None
+
+                def _valuation_price(eps, cap):
+                    e = _valuation_num(eps)
+                    c = _valuation_num(cap)
+                    return e * c if e is not None and c is not None else None
+
+                def _fmt_price(v):
+                    v = _valuation_num(v)
+                    return f"{v:.1f}元" if v is not None else "N/A"
+
+                def _fmt_eps(v):
+                    v = _valuation_num(v)
+                    return f"{v:.2f}" if v is not None else "N/A"
+
+                def _fmt_cap(v):
+                    v = _valuation_num(v)
+                    return f"{v:.1f}x" if v is not None else "N/A"
+
+                fy1_eps_for_annual = ai_forward_eps_fy1 if ai_forward_eps_fy1 is not None else cap_adopted_forward_eps
+                fy1_year_text = _fy_year_display_safe(ai_forward_eps_fy1_year)
+                fy2_year_text = _fy_year_display_safe(ai_forward_eps_fy2_year)
+                fy3_year_text = _fy_year_display_safe(ai_forward_eps_fy3_year)
+
+                fy1_formula_target_price = _valuation_price(ai_forward_eps_fy1, formula_pe_cap)
+                fy2_formula_target_price = _valuation_price(ai_forward_eps_fy2, formula_pe_cap)
+                fy3_formula_target_price = _valuation_price(ai_forward_eps_fy3, formula_pe_cap)
+                fy1_manual_target_price = _valuation_price(fy1_eps_for_annual, manual_cap_for_calc)
+                fy1_optimistic_target_price = _valuation_price(fy1_eps_for_annual, extreme_pe_cap_for_calc)
+
+                sys_tp_str = _fmt_price(sys_target_price_est)
+                ai_tp_txt = _fmt_price(ai_target_price_est)
+                fy1_formula_txt = _fmt_price(fy1_formula_target_price)
+                fy2_formula_txt = _fmt_price(fy2_formula_target_price)
+                fy3_formula_txt = _fmt_price(fy3_formula_target_price)
+                fy1_manual_txt = _fmt_price(fy1_manual_target_price)
+                fy1_optimistic_txt = _fmt_price(fy1_optimistic_target_price)
+
+                if fy1_optimistic_target_price is not None and curr_p is not None and curr_p > fy1_optimistic_target_price:
+                    cap_warning_html += "<br><span style='color:#ff4d4d; font-weight:bold;'>現價已高於 FY1 樂觀年度情境價，追高風險極大！</span>"
+
+                tp_est_str = (
+                    f"公式合理估值(系統EPS×formula cap): {sys_tp_str}；"
+                    f"AI估值(AI EPS×formula cap): {ai_tp_txt}；"
+                    f"FY1年度估值(FY1 EPS×formula cap): {fy1_formula_txt}；"
+                    f"FY2第二年度估值(FY2 EPS×formula cap): {fy2_formula_txt}；"
+                    f"FY3第三年度估值(FY3 EPS×formula cap，高風險): {fy3_formula_txt}；"
+                    f"手動年度情境價(FY1 EPS×使用者手動Cap，壓力測試): {fy1_manual_txt}；"
+                    f"樂觀年度情境價(FY1 EPS×soft ceiling): {fy1_optimistic_txt}；"
+                    f"公式倍率: {_fmt_cap(formula_pe_cap)}；使用者手動倍率: {_fmt_cap(manual_cap_for_calc)}；樂觀倍率: {_fmt_cap(extreme_pe_cap_for_calc)}"
+                )
+
+                eps_period_note = raw_ai_period or "系統/推估，請確認 EPS 年期"
+                debug_eps = eff_f_eps if eff_f_eps else (ai_f_eps_calc if ai_f_eps_calc else 0)
+
+                _rows = [
+                    ("🎯 1. 公式合理估值", "系統 EPS × formula cap，非買賣目標", eff_f_eps, formula_pe_cap, sys_target_price_est, "#ffffff"),
+                    ("🤖 2. AI估值", "AI / 法人 EPS × formula cap，需看來源可信度", ai_f_eps_calc, formula_pe_cap, ai_target_price_est, "#FCD34D"),
+                    ("📅 3. FY1年度估值", f"FY1 EPS × formula cap｜{fy1_year_text}", ai_forward_eps_fy1, formula_pe_cap, fy1_formula_target_price, "#93C5FD"),
+                    ("📆 4. FY2第二年度估值", f"FY2 EPS × formula cap｜{fy2_year_text}｜僅供市場先行定價判斷", ai_forward_eps_fy2, formula_pe_cap, fy2_formula_target_price, "#A7F3D0"),
+                    ("🚧 5. FY3第三年度估值", f"FY3 EPS × formula cap｜{fy3_year_text}｜高風險遠期情境", ai_forward_eps_fy3, formula_pe_cap, fy3_formula_target_price, "#FCA5A5"),
+                    ("🛠️ 6. 手動年度情境價", "FY1 EPS × 使用者手動 Cap（壓力測試 / 反推現價倍率）", fy1_eps_for_annual, manual_cap_for_calc, fy1_manual_target_price, "#00BFFF"),
+                    ("🚀 7. 樂觀年度情境價", "FY1 EPS × soft ceiling，高風險情境", fy1_eps_for_annual, extreme_pe_cap_for_calc, fy1_optimistic_target_price, "#ff4d4d"),
+                ]
+
+                _valuation_rows_html = ""
+                for _title, _desc, _eps, _cap, _price, _color in _rows:
+                    _valuation_rows_html += (
+                        f"<div style='border-bottom:1px solid #333; padding:6px 0; line-height:1.45;'>"
+                        f"<div style='display:flex; justify-content:space-between; gap:10px;'>"
+                        f"<span style='color:{_color}; font-weight:bold;'>{_title}</span>"
+                        f"<span style='color:{_color}; font-weight:bold; font-size:1.05rem;'>{_fmt_price(_price)}</span>"
+                        f"</div>"
+                        f"<div style='color:#aaa; font-size:0.78rem;'>{_desc}｜EPS: {_fmt_eps(_eps)}｜倍率: {_fmt_cap(_cap)}</div>"
+                        f"</div>"
+                    )
+
+                target_price_html = f"""
+                <div style='background:#1e1e1e; padding:16px 18px; border-radius:10px; border-left:6px solid {peg_color}; margin-top:4px; margin-bottom:20px;'>
+                    <div style='display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:12px;'>
+                        <div>
+                            <div style='font-weight:bold; color:#F3F4F6; font-size:1.25rem;'>📈 前瞻 PEG (Forward PEG)｜詳細估值分層</div>
+                            <div style='color:#AAB2C0; font-size:0.88rem; margin-top:4px;'>系統 / AI / FY1 / FY2 / FY3 獨立列示，避免與本益比、股價淨值比小卡混在同一列。</div>
+                        </div>
+                        <div style='text-align:right; min-width:170px;'>
+                            <div style='background:{peg_color}; color:#000; padding:4px 10px; border-radius:999px; font-size:0.85rem; font-weight:bold; display:inline-block;'>{peg_text}</div>
+                            <div style='font-size:2.0rem; font-weight:bold; color:#fff; margin-top:6px; line-height:1.1;'>{peg_str_disp}</div>
+                        </div>
+                    </div>
+                    <div style='border-top:1px solid #333; padding-top:8px; color:#aaa; font-size:0.85rem;'>
+                    {_valuation_rows_html}
+                    <div style='background:#111827; color:#E5E7EB; padding:7px 9px; border-radius:6px; margin-top:7px; line-height:1.55;'>
+                        <b>使用規則</b><br>
+                        公式合理估值保留系統 EPS 口徑；AI估值獨立顯示；FY1 是年度主估值參考；FY2 只用於市場先行定價判斷；FY3 為高風險遠期情境，不可直接當買點。
+                    </div>
+                    <div style='background:#2c2c2c; padding:4px 8px; border-radius:4px; margin-top:4px;'>
+                        <small style='color:#00bfff;'>🐛 [底層運算除錯] 系統EPS: {_fmt_eps(eff_f_eps)}｜AI EPS: {_fmt_eps(ai_f_eps_calc)}｜FY1 EPS: {_fmt_eps(ai_forward_eps_fy1)}｜FY2 EPS: {_fmt_eps(ai_forward_eps_fy2)}｜FY3 EPS: {_fmt_eps(ai_forward_eps_fy3)}｜EPS 年期/來源: {eps_period_note}｜公式倍率: {_fmt_cap(formula_pe_cap)}｜使用者手動倍率: {_fmt_cap(manual_cap_for_calc)}｜樂觀倍率: {_fmt_cap(extreme_pe_cap_for_calc)}</small>
+                    </div>
+                    {implied_html}{cap_warning_html}
+                    </div>
+                </div>
+                """
+
+
+            # ==========================================
+            # 🧭 法人目標價可信度 + 公式估值 / 可操作估值分離
+            # ==========================================
+            valuation_separation = build_valuation_separation_report(
+                current_price=curr_p,
+                system_formula_fair_value=sys_target_price_est,
+                ai_formula_fair_value=ai_target_price_est,
+                system_formula_extreme_value=extreme_target_price,
+                ai_formula_extreme_value=ai_extreme_target_price,
+                broker_target_avg=ai_me_val,
+                broker_target_low=ai_lo_val,
+                analyst_count=ai_analyst_count,
+                system_forward_eps=sys_forward_eps_system,
+                ai_forward_eps=ai_forward_eps_ai,
+                consensus_forward_eps=ai_forward_eps_consensus,
+                target_pe_cap=target_pe_cap,
+                divergence_warnings=divergence_warnings,
+                industry_profile=industry_profile,
+                dynamic_cap_pack=dynamic_cap_pack,
+                pb_ratio=eff_pb,
+            )
+            target_confidence = valuation_separation.get('target_confidence', classify_target_price_confidence(ai_analyst_count))
+            # ==========================================
+            # 📆 第 17-C-9c-hotfix44：Forward EPS 年期分層估值
+            # ==========================================
+            forward_eps_tier_pack = build_forward_eps_tiered_valuation_report(
+                current_price=curr_p,
+                broker_target_avg=ai_me_val,
+                broker_target_high=ai_hi_val,
+                broker_target_low=ai_lo_val,
+                ttm_eps=eff_t_eps,
+                fy1_eps=cap_adopted_forward_eps,
+                fy2_eps=ai_forward_eps_fy2,
+                fy3_eps=ai_forward_eps_fy3,
+                fy1_year=ai_forward_eps_fy1_year,
+                fy2_year=ai_forward_eps_fy2_year,
+                fy3_year=ai_forward_eps_fy3_year,
+                formula_cap=formula_pe_cap,
+                operable_cap=operable_pe_cap,
+                soft_ceiling=soft_pe_cap,
+                hard_ceiling=hard_pe_cap,
+                eps_source_note=ai_forward_eps_fy_source_note,
+                eps_basis=ai_forward_eps_fy_basis,
+            )
+            if not isinstance(forward_eps_tier_pack, dict):
+                forward_eps_tier_pack = {"summary": {}, "report": None}
+            _ft_summary_safe = forward_eps_tier_pack.get("summary", {}) if isinstance(forward_eps_tier_pack, dict) else {}
+            if not isinstance(_ft_summary_safe, dict):
+                _ft_summary_safe = {}
+            # ==========================================
+            # 🧪 第 17-C-9c-hotfix44：產業模型單次快照稽核表
+            # ==========================================
+            snapshot_audit = build_industry_model_snapshot_audit(
+                stock_id=curr_id,
+                stock_name=c_name,
+                current_price=curr_p,
+                adopted_forward_eps=cap_adopted_forward_eps,
+                market_implied_pe=(curr_p / cap_adopted_forward_eps) if curr_p is not None and cap_adopted_forward_eps is not None and cap_adopted_forward_eps > 0 else None,
+                broker_avg_implied_pe=(ai_me_val / cap_adopted_forward_eps) if ai_me_val is not None and cap_adopted_forward_eps is not None and cap_adopted_forward_eps > 0 else None,
+                broker_high_implied_pe=(ai_hi_val / cap_adopted_forward_eps) if ai_hi_val is not None and cap_adopted_forward_eps is not None and cap_adopted_forward_eps > 0 else None,
+                formula_cap=formula_pe_cap,
+                operable_cap_mid=dynamic_cap_pack.get("final_cap") if isinstance(dynamic_cap_pack, dict) else None,
+                soft_ceiling=dynamic_cap_pack.get("optimistic_cap") if isinstance(dynamic_cap_pack, dict) else None,
+                hard_ceiling=dynamic_cap_pack.get("hard_ceiling_cap") if isinstance(dynamic_cap_pack, dict) else None,
+                industry_profile=industry_profile,
+                dynamic_cap_pack=dynamic_cap_pack,
+                revenue_yoy=display_rev_growth,
+                revenue_mom=(latest_mom_val / 100.0) if latest_mom_val is not None else ai_mom,
+                gross_margin=display_gross_margin,
+                operating_margin=display_operating_margin,
+                roe=eff_roe,
+                analyst_count=ai_analyst_count,
+                target_confidence=target_confidence,
+                divergence_warnings=divergence_warnings,
+                dq_warnings=dq_warnings,
+            )
+            val_html = f"""
+            <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom:20px;'>
+                <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pe_color};'>
+                    <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                        <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>📊 歷史本益比 (Trailing P/E)</div>
+                        <div style='background:{pe_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{pe_text}</div>
+                    </div>
+                    <div style='font-size:1.6rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{pe_str}</div>
+                </div>
+                <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {fpe_color};'>
+                    <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                        <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🚀 前瞻本益比 (Forward P/E)</div>
+                        <div style='background:{fpe_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{fpe_text}</div>
+                    </div>
+                    <div style='font-size:1.6rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{fpe_str}</div>
+                    <div style='color:#ffd700; font-size:0.85rem; font-weight:bold;'>基準：{eps_source_text}</div>
+                </div>
+                <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {pb_color};'>
+                    <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                        <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 股價淨值比 (P/B Ratio)</div>
+                        <div style='background:{pb_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{pb_text}</div>
+                    </div>
+                    <div style='font-size:1.6rem; font-weight:bold; color:#fff; margin-bottom:10px;'>{pb_str}</div>
+                </div>
+            </div>
+            """
+            st.markdown(clean_html(val_html), unsafe_allow_html=True)
+
+            # Forward PEG 改為下方獨立大區塊；上方估值卡只保留 Trailing P/E、Forward P/E、P/B。
+            if target_price_html:
+                st.markdown(clean_html(target_price_html), unsafe_allow_html=True)
+
+            with st.expander("🧭 法人目標價可信度 + 公式估值 / 可操作估值分離", expanded=True):
+                tc = target_confidence
+                st.markdown(
+                    f"<div style='background:#111827;color:#F3F4F6;border-left:5px solid {tc.get('color', '#FFD700')};padding:12px 14px;border-radius:8px;margin-bottom:10px;line-height:1.7;'>"
+                    f"<div style='color:#F3F4F6;'><b>法人目標價可信度：</b><span style='color:{tc.get('color', '#FFD700')};font-weight:bold;'>{tc.get('label', '低可信')}</span>｜<span style='color:#D1D5DB;'>{tc.get('message', '')}</span></div>"
+                    f"<div style='margin-top:4px;color:#F3F4F6;'><b>可操作估值提示：</b><span style='color:#E5E7EB;'>{valuation_separation.get('action_hint', '觀望 / 資料不足')}</span></div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+                st.caption("公式合理估值與公式極限價只顯示模型輸出；可操作估值區間會額外考慮保守 EPS、法人樣本數、系統/AI 分歧警告與產業估值模型。")
+                st.dataframe(valuation_separation.get('report'), use_container_width=True, hide_index=True)
+                with st.expander("📆 17-C-9c-hotfix44 Forward EPS 年期分層估值", expanded=True):
+                    ft_summary = locals().get("_ft_summary_safe", {})
+                    if not isinstance(ft_summary, dict):
+                        ft_summary = {}
+                    _ft_market_view = ft_summary.get("market_view", "資料不足，無法判斷市場 EPS 年期")
+                    _ft_definition = ft_summary.get("fy_definition", "FY1/FY2/FY3 為預估年度 EPS 序列")
+                    _ft_ttm_eps = _nullize_text(ft_summary.get("ttm_eps"))
+                    _ft_fy1_eps = _nullize_text(ft_summary.get("fy1_eps"))
+                    _ft_fy2_eps = _nullize_text(ft_summary.get("fy2_eps"))
+                    _ft_fy3_eps = _nullize_text(ft_summary.get("fy3_eps"))
+                    _ft_fy1_label = _nullize_text(ft_summary.get("fy1_label"))
+                    _ft_fy2_label = _nullize_text(ft_summary.get("fy2_label"))
+                    _ft_fy3_label = _nullize_text(ft_summary.get("fy3_label"))
+                    _ft_pe_ttm = _nullize_text(ft_summary.get("market_pe_ttm"))
+                    _ft_pe_fy1 = _nullize_text(ft_summary.get("market_pe_fy1"))
+                    _ft_pe_fy2 = _nullize_text(ft_summary.get("market_pe_fy2"))
+                    _ft_pe_fy3 = _nullize_text(ft_summary.get("market_pe_fy3"))
+                    _ft_basis = _nullize_text(ft_summary.get("eps_basis"))
+                    _ft_source = _nullize_text(ft_summary.get("eps_source_note"))
+                    st.markdown(
+                        "<div style='background:#111827;color:#F3F4F6;border-left:6px solid #60A5FA;padding:12px 14px;border-radius:8px;margin-bottom:10px;line-height:1.7;'>"
+                        f"<div style='font-weight:bold;color:#93C5FD;'>市場 EPS 年期判讀：{_ft_market_view}</div>"
+                        f"<div><b>FY 定義：</b>{_ft_definition}</div>"
+                        f"<div>TTM EPS：{_ft_ttm_eps}｜近四季已實現 EPS，用於目前實際獲利估值</div>"
+                        f"<div>FY1 EPS：{_ft_fy1_eps}｜{_ft_fy1_label}</div>"
+                        f"<div>FY2 EPS：{_ft_fy2_eps}｜{_ft_fy2_label}</div>"
+                        f"<div>FY3 EPS：{_ft_fy3_eps}｜{_ft_fy3_label}</div>"
+                        f"<div>現價隱含 P/E（TTM/FY1/FY2/FY3）：{_ft_pe_ttm}x / {_ft_pe_fy1}x / {_ft_pe_fy2}x / {_ft_pe_fy3}x</div>"
+                        f"<div>EPS 年期基準 / 來源：{_ft_basis}｜{_ft_source}</div>"
+                        "<div style='color:#FCD34D;'>提醒：TTM 用於目前實際獲利風控；FY2 可用於市場先行判斷；FY3 只作高風險樂觀情境，不可直接當買點。</div>"
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
+                    _ft_report = forward_eps_tier_pack.get("report") if isinstance(forward_eps_tier_pack, dict) else None
+                    if _ft_report is not None:
+                        st.dataframe(_ft_report, use_container_width=True, hide_index=True)
+                    else:
+                        st.caption("Forward EPS 年期分層估值資料不足。")
+                with st.expander("🏭 產業估值模型明細", expanded=False):
+                    st.dataframe(build_industry_valuation_model_report(industry_profile), use_container_width=True, hide_index=True)
+
+                with st.expander("🧪 17-C-9c-hotfix44 產業模型單次快照稽核表", expanded=True):
+                    audit_summary = snapshot_audit.get("summary", {}) if isinstance(snapshot_audit, dict) else {}
+                    audit_color_map = {
+                        "green": "#10B981",
+                        "yellow": "#F59E0B",
+                        "orange": "#F97316",
+                        "red": "#EF4444",
+                        "gray": "#9CA3AF",
+                    }
+                    audit_color = audit_color_map.get(audit_summary.get("severity", "gray"), "#9CA3AF")
+                    st.markdown(
+                        f"<div style='background:#111827;color:#F3F4F6;border-left:6px solid {audit_color};padding:12px 14px;border-radius:8px;margin-bottom:10px;line-height:1.7;'>"
+                        f"<div style='font-size:1.1rem;font-weight:bold;color:{audit_color};'>稽核結果：{audit_summary.get('audit_label', '—')}｜分數 {audit_summary.get('audit_score', '—')}</div>"
+                        f"<div><b>建議動作：</b>{audit_summary.get('action', '—')}</div>"
+                        f"<div><b>產業模型建置：</b>{audit_summary.get('model_built_at', '—')}｜版本 {industry_profile.get('model_build_version', '—')}</div>"
+                        f"<div><b>目前分類：</b>{audit_summary.get('primary_taxon', '—')}｜hybrid：{audit_summary.get('hybrid_taxons', '—')}</div>"
+                        f"<div><b>混合後倍率：</b>{audit_summary.get('mixed_caps', '—')}</div>"
+                        f"<div style='color:#FCD34D;margin-top:4px;'><b>歷史限制：</b>{audit_summary.get('history_note', '')}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.caption("此表只做本次快照稽核，不會自動更新產業分類、hybrid 權重或產業倍率；若要判斷連續幾次，需等雲端歷史資料庫功能。")
+                    st.dataframe(snapshot_audit.get("report"), use_container_width=True, hide_index=True)
+                if isinstance(dynamic_cap_pack, dict) and dynamic_cap_pack.get("report") is not None:
+                    with st.expander("⚙️ Dynamic Cap 2.0 倍率拆解", expanded=True):
+                        if dynamic_cap_pack.get("valuation_mode") == "pb_cycle":
+                            st.warning("本分類採 P/B 週期模型：P/E Cap 僅作輔助，不直接作買進倍率。")
+                        else:
+                            st.caption("17-C-9c-hotfix44：已修正估值 EPS 口徑，並保留循環復甦判斷、分歧折扣校準、公式/可操作/樂觀倍率分離，最後才套用產業 hard ceiling。")
+                        st.dataframe(dynamic_cap_pack.get("report"), use_container_width=True, hide_index=True)
+                        dc_warnings = dynamic_cap_pack.get("warnings") or []
+                        if dc_warnings:
+                            st.warning("Dynamic Cap 模型提醒：" + "；".join(str(x) for x in dc_warnings))
+                with st.expander("法人目標價可信度明細", expanded=False):
+                    st.dataframe(build_target_price_confidence_report(ai_analyst_count, ai_hi_val, ai_me_val, ai_lo_val, ai_target_rationale), use_container_width=True, hide_index=True)
+
+            # ==========================================
+            # 🚦 最終操作燈號：可買 / 觀望 / 不建議 / 資料異常
+            # ==========================================
+            final_signal = build_final_operation_signal(
+                current_price=curr_p,
+                valuation_separation=valuation_separation,
+                divergence_warnings=divergence_warnings,
+                target_confidence=target_confidence,
+                industry_profile=industry_profile,
+                pe=pe_ratio,
+                forward_pe=eff_forward_pe,
+                peg=orig_peg,
+                pb=pb_ratio,
+                roe=eff_roe,
+                debt_to_equity=display_debt_to_equity,
+                revenue_yoy=display_rev_growth,
+                gross_margin=display_gross_margin,
+                operating_margin=display_operating_margin,
+                has_ai_fin_fetch=has_ai_fin_fetch,
+            )
+            with st.expander("🚦 最終操作燈號", expanded=True):
+                st.markdown(
+                    f"<div style='background:#1e1e1e;border-left:7px solid {final_signal.get('color', '#FFD700')};padding:14px;border-radius:10px;margin-bottom:10px;'>"
+                    f"<div style='font-size:1.35rem;font-weight:bold;color:{final_signal.get('color', '#FFD700')};'>"
+                    f"{final_signal.get('signal', '觀望')}</div>"
+                    f"<div style='color:#ddd;margin-top:6px;'><b>操作含義：</b>{final_signal.get('advice', '')}</div>"
+                    f"<div style='color:#aaa;margin-top:6px;font-size:0.9rem;'>"
+                    f"資料可信度：{final_signal.get('data_confidence')}｜估值可信度：{final_signal.get('valuation_confidence')}｜操作可信度：{final_signal.get('operation_confidence')}"
+                    f"</div></div>",
+                    unsafe_allow_html=True,
+                )
+                st.caption("燈號會綜合資料分歧、可操作估值區間、法人樣本數、產業估值模型與基本面防呆；資料異常時優先停用買賣判斷。")
+                st.dataframe(final_signal.get("report"), use_container_width=True, hide_index=True)
+        
+            mom_color = "#ff4d4d" if latest_mom_val is not None and latest_mom_val > 0 else ("#00cc66" if latest_mom_val is not None and latest_mom_val < 0 else "#fff")
+            mom_str_disp = f"<br><span style='font-size:1rem; color:{mom_color};'>MoM: {latest_mom_str}</span>" if latest_mom_str != "N/A" else ""
+
+            fund_html = f"""
+            <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 20px;'>
+                <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>歷史本益比 (P/E)</div><div style='font-size:1.3rem; font-weight:bold; color:#fff;'>{pe_str}</div></div>
+                <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>EPS (TTM / Forward)</div><div style='font-size:1.3rem; font-weight:bold; color:#FFD700;'>{f_eps_display}</div></div>
+                <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>營收成長率<br><span style='font-size:0.75rem; color:#888;'>({latest_rev_display_label})</span></div><div style='font-size:1.3rem; font-weight:bold; color:{rg_color};'>{rg_str}{mom_str_disp}</div></div>
+                <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>預估獲利成長 (YoY)</div><div style='font-size:1.3rem; font-weight:bold; color:{eg_color};'>{eg_str_disp}</div></div>
+                <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>毛利率 / 營益率</div><div style='font-size:1.3rem; font-weight:bold; color:#fff;'>{gm_om_str}</div></div>
+                <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>ROE (恆等式校正)</div><div style='font-size:1.3rem; font-weight:bold; color:#00bfff;'>{roe_str}{roe_eval}</div></div>
+                <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; text-align:center;'><div style='color:#aaa; font-size:0.9rem; margin-bottom:5px;'>負債權益比 (D/E)</div><div style='font-size:1.3rem; font-weight:bold; color:#fff;'>{de_str}{de_eval}</div></div>
+            </div>
+            """
+            st.markdown(clean_html(fund_html), unsafe_allow_html=True)
+            st.markdown("---")
+        
+            # 🚀 極端風險 (Anomaly) 警示燈號
+            st.markdown("#### 🚨 系統異常風險偵測 (Anomaly Detection)", unsafe_allow_html=True)
+            anomaly_html = ""
+
+            if eff_pb is not None and eff_pb > 10:
+                anomaly_html += f"<div style='background:linear-gradient(90deg, #8b0000 0%, #ff4d4d 100%); color:white; padding:12px; border-radius:8px; margin-bottom:10px; font-weight:bold;'>🔥【極度溢價警示】 股價淨值比 (P/B) 高達 {eff_pb:.1f} 倍，已脫離台股歷史常態評價，隨時有均值回歸的暴跌風險！</div>"
+
+            if df_rev_bk is not None and len(df_rev_bk) >= 2:
+                last_mom = df_rev_bk['MoM'].iloc[-1]
+                prev_mom = df_rev_bk['MoM'].iloc[-2]
+                recent_high_120 = hist['High'].tail(120).max() if len(hist) >= 120 else hist['High'].max()
+                price_near_high = curr_p >= (recent_high_120 * 0.9)
+                if last_mom < 0 and prev_mom < 0 and price_near_high:
+                     anomaly_html += f"<div style='background:linear-gradient(90deg, #b8860b 0%, #ff8c00 100%); color:white; padding:12px; border-radius:8px; margin-bottom:10px; font-weight:bold;'>🚸【量價背離風險】 近兩月營收連續衰退 (最新 MoM: {last_mom:.2f}%)，但股價仍高掛在近半年高檔區，請嚴防主力拉高出貨！</div>"
+
+            if anomaly_html == "":
+                anomaly_html = "<div style='background:#1e1e1e; color:#00cc66; padding:12px; border-radius:8px; border:1px solid #333;'>✅ 目前未偵測到極端高估 (P/B>10) 或營收背離風險，數據處於相對常態範圍。</div>"
+
+            st.markdown(clean_html(anomaly_html), unsafe_allow_html=True)
+            st.markdown("---")
+
+            st.markdown("#### 🛡️ 防禦力與財務健康檢測 (長線/存股必看)", unsafe_allow_html=True)
+            div_yield = s_float(info.get('dividendYield')) or s_float(info.get('trailingAnnualDividendYield'))
+        
+            if ai_dy is not None:
+                div_yield = ai_dy
+            elif div_yield is not None and div_yield > 1.0: 
+                div_yield = div_yield / 100.0
+
+            fcf = s_float(info.get('freeCashflow'))
+            if fcf is None and fm_health.get('cfo_l'): fcf = fm_health.get('cfo_l')
+            if ai_fcf is not None: fcf = ai_fcf
+            
+            current_ratio = s_float(info.get('currentRatio'))
+            if ai_cr is not None: current_ratio = ai_cr
+
+            dy_str = to_pct(div_yield)
+            if div_yield is None: dy_color, dy_eval = "gray", "無資料"
+            elif div_yield >= 0.05: dy_color, dy_eval = "#ff4d4d", "高息護體(>5%)"
+            elif div_yield >= 0.03: dy_color, dy_eval = "#FFD700", "穩健配息"
+            else: dy_color, dy_eval = "#00cc66", "殖利率偏低"
+
+            if fcf is None: fcf_str, fcf_color, fcf_eval = "無資料", "gray", "無資料"
+            elif fcf > 0: fcf_str, fcf_color, fcf_eval = f"{fcf/100000000:,.0f} 億", "#ff4d4d", "現金流健康"
+            else: fcf_str, fcf_color, fcf_eval = f"{fcf/100000000:,.0f} 億", "#00cc66", "⚠️ 留意燒錢風險"
+
+            if current_ratio is None: cr_str, cr_color, cr_eval = "無資料", "gray", "無資料"
+            elif current_ratio >= 1.5: cr_str, cr_color, cr_eval = f"{current_ratio:.2f}", "#ff4d4d", "短期無債務風險"
+            elif current_ratio >= 1.0: cr_str, cr_color, cr_eval = f"{current_ratio:.2f}", "#FFD700", "流動性及格"
+            else: cr_str, cr_color, cr_eval = f"{current_ratio:.2f}", "#00cc66", "⚠️ 流動性吃緊"
+        
+            f_score_val = fm_health.get('f_score')
+            if f_score_val is None: 
+                fs_str, fs_color, fs_eval = "無資料", "gray", "資料不足"
+            elif f_score_val >= 7: 
+                fs_str, fs_color, fs_eval = f"{f_score_val} 分", "#ff4d4d", "⭐ 體質極優"
+            elif f_score_val >= 5: 
+                fs_str, fs_color, fs_eval = f"{f_score_val} 分", "#FFD700", "🆗 體質及格"
+            else: 
+                fs_str, fs_color, fs_eval = f"{f_score_val} 分", "#00cc66", "🚨 孱弱/高風險"
+
+            dfens_html = f"""
+            <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom:20px;'>
+                <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {dy_color};'>
+                    <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                        <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>💰 預估殖利率</div><div style='background:{dy_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{dy_eval}</div>
+                    </div>
+                    <div style='font-size:1.6rem; font-weight:bold; color:#fff;'>{dy_str}</div>
+                </div>
+                <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {fcf_color};'>
+                    <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                        <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>💵 自由/營業現金流</div><div style='background:{fcf_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{fcf_eval}</div>
+                    </div>
+                    <div style='font-size:1.6rem; font-weight:bold; color:#fff;'>{fcf_str}</div>
+                </div>
+                <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {cr_color};'>
+                    <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                        <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>⚖️ 流動比率</div><div style='background:{cr_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{cr_eval}</div>
+                    </div>
+                    <div style='font-size:1.6rem; font-weight:bold; color:#fff;'>{cr_str}</div>
+                </div>
+                <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {fs_color};'>
+                    <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                        <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🩺 F-Score 健康跑分</div><div style='background:{fs_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{fs_eval}</div>
+                    </div>
+                    <div style='font-size:1.6rem; font-weight:bold; color:#fff;'>{fs_str}</div>
+                </div>
+            </div>
+            """
+            st.markdown(clean_html(dfens_html), unsafe_allow_html=True)
+            st.markdown("---")
+
+            # ✅ hotfix：建立「法人目標價面板快照」，後面的打包提示詞只讀這個快照，
+            # 避免提示詞重新抓其他來源造成與面板顯示不同步。
+            target_panel_for_prompt = {
+                "high": ai_hi_val,
+                "mean": ai_me_val,
+                "low": ai_lo_val,
+                "analyst_count": ai_analyst_count,
+                "confidence": locals().get("target_confidence", classify_target_price_confidence(ai_analyst_count)),
+                "source": "法人目標價面板顯示值：AI/法人聯網 target_price_high-target_price_avg-target_price_low" if (ai_hi_val is not None and ai_me_val is not None and ai_lo_val is not None) else ("法人目標價面板顯示值：AI/法人聯網平均目標價" if ai_me_val is not None else "無可用法人目標價"),
+                "rationale": ai_target_rationale,
+            }
+
+            analyst_count_display = ai_analyst_count if ai_analyst_count not in (None, "", "null") else "無"
+            target_confidence = locals().get("target_confidence", classify_target_price_confidence(ai_analyst_count))
+            conf_color = target_confidence.get("color", "#FFD700")
+            conf_label = target_confidence.get("label", "低可信")
+            st.markdown(f"#### 🎯 法人預估目標價 (分析師統計：{analyst_count_display} 位｜可信度：<span style='color:{conf_color};'>{conf_label}</span>)", unsafe_allow_html=True)
+            st.caption(target_confidence.get("message", "分析師樣本數不足時，不宜視為強共識。"))
+        
+            if ai_hi_val is not None and ai_me_val is not None and ai_lo_val is not None:
+                v1, v2, v3 = st.columns(3)
+                v1.markdown(f"<div style='background:#ffebee;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>最高價</small><br><b>{ai_hi_val:.1f}</b></div>", unsafe_allow_html=True)
+                upside = ((ai_me_val / curr_p) - 1) * 100 if curr_p else 0
+                v2.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>平均價</small><br><b>{ai_me_val:.1f}</b><br><small>空間: {upside:+.1f}%</small></div>", unsafe_allow_html=True)
+                v3.markdown(f"<div style='background:#e8f5e9;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>最低價</small><br><b>{ai_lo_val:.1f}</b></div>", unsafe_allow_html=True)
+                if ai_target_rationale:
+                    st.caption(f"📌 法人目標價核心理由：{ai_target_rationale}")
+                st.markdown("---")
+            elif ai_me_val is not None:
+                 upside_ai = ((ai_me_val / curr_p) - 1) * 100 if curr_p else 0
+                 st.markdown(f"<div style='background:#fff3e0;padding:12px;border-radius:8px;text-align:center;color:#000;'><small>🤖 AI 聯網捕捉平均目標價 ({ai_label} {ai_period_val})</small><br><b>{ai_me_val:.1f}</b><br><small>潛在空間: {upside_ai:+.1f}%</small></div>", unsafe_allow_html=True)
+                 if ai_target_rationale:
+                    st.caption(f"📌 法人目標價核心理由：{ai_target_rationale}")
+                 st.markdown("---")
+            else:
+                 st.markdown("<span style='color:gray;'>AI 目前尚未捕捉到法人目標價資料。</span>", unsafe_allow_html=True)
+                 st.markdown("---")
+
+            # 🚀 主力籌碼追蹤雷達
+            st.markdown("#### 📡 主力籌碼追蹤雷達 (聰明錢動向與背離陷阱)", unsafe_allow_html=True)
+            inst_df = get_inst_data(curr_id, st.session_state.finmind_key)
+        
+            if not inst_df.empty:
+                f_streak = get_streak(inst_df['Foreign'])
+                t_streak = get_streak(inst_df['Trust'])
+                f_10d = inst_df['Foreign'].tail(10).sum()
+                t_10d = inst_df['Trust'].tail(10).sum()
+            
+                f_status = f"連買 {f_streak} 天 🔥" if f_streak > 0 else (f"連賣 {-f_streak} 天 ⚠️" if f_streak < 0 else "無連續動向")
+                t_status = f"連買 {t_streak} 天 🔥" if t_streak > 0 else (f"連賣 {-t_streak} 天 ⚠️" if t_streak < 0 else "無連續動向")
+            
+                f_color = "#ff4d4d" if f_10d > 0 else "#00cc66"
+                t_color = "#ff4d4d" if t_10d > 0 else "#00cc66"
+            
+                trap_warning = ""
+                if (eff_eg is not None and eff_eg > 0) and ((f_10d + t_10d) < -1000):
+                    trap_warning = "<div style='background:linear-gradient(90deg, #8b0000 0%, #ff4d4d 100%); color:white; padding:12px; border-radius:8px; margin-top:10px; font-weight:bold;'>🚨 【高危陷阱警示】基本面看似亮眼，但外資/投信近 10 日聯手倒貨超過千張！請提防主力趁利多逢高出貨！</div>"
+                elif (f_streak >= 3 or t_streak >= 3) and ((f_10d + t_10d) > 1000):
+                    trap_warning = "<div style='background:linear-gradient(90deg, #006400 0%, #00cc66 100%); color:white; padding:12px; border-radius:8px; margin-top:10px; font-weight:bold;'>🚀 【聰明錢上車】三大法人近期連買且大幅建倉，籌碼動能強勁，極具波段上攻潛力！</div>"
+                else:
+                    trap_warning = "<div style='background:#1e1e1e; color:#aaa; padding:12px; border-radius:8px; border:1px solid #333; margin-top:10px;'>目前三大法人買賣超動向無極端異常訊號。</div>"
+
+                radar_html = f"""
+                <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom:10px;'>
+                    <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {f_color};'>
+                        <div style='color:#aaa; font-size:0.9rem;'>外資近 10 日淨買賣</div>
+                        <div style='font-size:1.6rem; font-weight:bold; color:{f_color};'>{f_10d:,.0f} 張</div>
+                        <div style='font-size:1rem; font-weight:bold; color:#fff; margin-top:5px;'>動向: {f_status}</div>
+                    </div>
+                    <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {t_color};'>
+                        <div style='color:#aaa; font-size:0.9rem;'>投信近 10 日淨買賣</div>
+                        <div style='font-size:1.6rem; font-weight:bold; color:{t_color};'>{t_10d:,.0f} 張</div>
+                        <div style='font-size:1rem; font-weight:bold; color:#fff; margin-top:5px;'>動向: {t_status}</div>
+                    </div>
+                </div>
+                {trap_warning}
+                """
+                st.markdown(clean_html(radar_html), unsafe_allow_html=True)
+            else:
+                if not st.session_state.finmind_key:
+                    st.warning("⚠️ 系統無法獲取主力籌碼雷達。請至左側上傳 `key.txt` 匯入 FinMind 金鑰以解除限制。")
+                else:
+                    st.warning("⚠️ 此檔股票近期無三大法人買賣超數據，無法啟動籌碼雷達。")
+            st.markdown("---")
+
+            # 🚀 籌碼面與股權結構分析
+            st.markdown("#### 🐳 內部人與控盤主力推估", unsafe_allow_html=True)
+            insider_pct = s_float(info.get('heldPercentInsiders'))
+            inst_pct = s_float(info.get('heldPercentInstitutions'))
+            shares_out = s_float(info.get('sharesOutstanding'))
+            if ai_shares is not None: shares_out = ai_shares
+            share_capital = shares_out * 10 if shares_out is not None else None
+
+            if share_capital is not None:
+                if share_capital >= 10_000_000_000:
+                    cap_type, driver, cap_color, driver_desc = "大型權值股", "🌍 外資主導", "#4169E1", f"股本約 {share_capital/100000000:.0f} 億。籌碼龐大，走勢受外資資金影響大。"
+                elif share_capital <= 3_000_000_000:
+                    cap_type, driver, cap_color, driver_desc = "中小型飆股", "🔥 投信/內資主力", "#ff8c00", f"股本約 {share_capital/100000000:.0f} 億。籌碼輕薄，易受投信作帳帶動。"
+                else:
+                    cap_type, driver, cap_color, driver_desc = "中型中堅股", "🤝 土洋共議", "#9370DB", f"股本約 {share_capital/100000000:.0f} 億。出現土洋合作易有波段行情。"
+            else:
+                cap_type, driver, cap_color, driver_desc = "無資料", "未知", "gray", "無法獲取股本資料"
+
+            inst_str = to_pct(inst_pct)
+            inst_color, inst_eval = ("#ff4d4d", "高度集中 (留意結帳)") if inst_pct is not None and inst_pct > 0.40 else ("#FFD700", "穩定認可") if inst_pct is not None and inst_pct > 0.15 else ("#00bfff", "內資/散戶主導") if inst_pct is not None else ("gray", "數據不足")
+
+            insider_str = to_pct(insider_pct)
+            in_color, in_eval = ("#ff4d4d", "籌碼極度安定") if insider_pct is not None and insider_pct > 0.40 else ("#FFD700", "相對穩健") if insider_pct is not None and insider_pct > 0.20 else ("#00cc66", "籌碼較渙散 (警戒)") if insider_pct is not None else ("gray", "數據不足")
+
+            chip_html = f"""
+            <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top:10px;'>
+                <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {inst_color};'>
+                    <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                        <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏦 外資/機構總持股率</div>
+                        <div style='background:{inst_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{inst_eval}</div>
+                    </div>
+                    <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{inst_str}</div>
+                </div>
+                <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {in_color};'>
+                    <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                        <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🏢 內部人與大股東持股</div>
+                        <div style='background:{in_color}; color:#000; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{in_eval}</div>
+                    </div>
+                    <div style='font-size:1.8rem; font-weight:bold; color:#fff; margin-bottom:5px;'>{insider_str}</div>
+                </div>
+                <div style='background:#1e1e1e; padding:15px; border-radius:8px; border-left: 5px solid {cap_color};'>
+                    <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+                        <div style='font-size:1.1rem; font-weight:bold; color:#fff;'>🎯 控盤主力推估</div>
+                        <div style='background:{cap_color}; color:#fff; padding:2px 8px; border-radius:10px; font-size:0.8rem; font-weight:bold;'>{cap_type}</div>
+                    </div>
+                    <div style='font-size:1.3rem; font-weight:bold; color:{cap_color}; margin-bottom:10px;'>{driver}</div>
+                    <div style='color:#aaa; font-size:0.85rem; line-height:1.5;'>{driver_desc}</div>
+                </div>
+            </div>
+            """
+            st.markdown(clean_html(chip_html), unsafe_allow_html=True)
+            st.markdown("---")
+            
+            def _prompt_df(df, max_rows=20):
+                """將 Streamlit 表格壓成可貼給外部 AI 的純文字，避免 2.0 面板資訊沒被打包。"""
+                try:
+                    if df is None or getattr(df, "empty", True):
+                        return "NULL"
+                    rows = []
+                    for i, row in df.head(max_rows).iterrows():
+                        parts = []
+                        for col in df.columns:
+                            val = row.get(col, "")
+                            val = _nullize_text(val)
+                            if val != "NULL":
+                                parts.append(f"{col}={val}")
+                        if parts:
+                            rows.append(f"- " + "；".join(parts))
+                    return "\n".join(rows) if rows else "NULL"
+                except Exception as e:
+                    try:
+                        log_exception("PromptPack", "_prompt_df", e)
+                    except Exception:
+                        pass
+                    return "NULL"
+
+            def _prompt_warnings(warnings):
+                try:
+                    if not warnings:
+                        return "NULL"
+                    rows = []
+                    for w in warnings[:12]:
+                        rows.append(
+                            "- "
+                            f"規則={_nullize_text(w.get('規則'))}；"
+                            f"嚴重度={_nullize_text(w.get('嚴重度'))}；"
+                            f"警告={_nullize_text(w.get('警告文字'))}；"
+                            f"系統值={_nullize_text(w.get('系統值'))}；"
+                            f"AI值={_nullize_text(w.get('AI值'))}；"
+                            f"差距={_nullize_text(w.get('差距'))}；"
+                            f"建議={_nullize_text(w.get('建議處理'))}"
+                        )
+                    return "\n".join(rows)
+                except Exception as e:
+                    try:
+                        log_exception("PromptPack", "_prompt_warnings", e)
+                    except Exception:
+                        pass
+                    return "NULL"
+
+            # 面板核心數值（系統/AI/推估）
+            ctx_tp_est = _nullize_text(tp_est_str)
+            panel_pe = _nullize_text(pe_str)
+            panel_fpe = _nullize_text(fpe_str)
+            panel_pb = _nullize_text(pb_str)
+            panel_peg = _nullize_text(peg_str_disp)
+            panel_eps = _nullize_text(f_eps_display)
+            # ✅ AI prompt / 戰情面板也沿用已校正後的 Markdown 字串，避免 prompt 吃到舊值。
+            panel_rg = _nullize_text(rg_str)
+            panel_eg = _nullize_text(eg_str_disp)
+            panel_gmom = _nullize_text(gm_om_str)
+            panel_roe = _nullize_text(roe_str)
+            panel_de = _nullize_text(de_str)
+
+            # 🚀 hotfix-final：法人目標價提示詞「直接讀面板同源變數」，不只依賴 snapshot。
+            # 前幾版若 snapshot 在某些 rerun/分支未帶到值，提示詞會變成「無可用法人目標價」；
+            # 這裡改成：snapshot → AI/法人聯網欄位 → yfinance/info 欄位，並同步分析師人數。
+            _target_panel = locals().get("target_panel_for_prompt", {})
+            if not isinstance(_target_panel, dict):
+                _target_panel = {}
+
+            def _prompt_first_float(*vals):
+                for v in vals:
+                    fv = s_float(v)
+                    if fv is not None and fv > 0:
+                        return fv
+                return None
+
+            _tp_hi = _prompt_first_float(
+                _target_panel.get("high"),
+                locals().get("ai_hi_val"),
+                ai_fin.get("target_price_high") if isinstance(ai_fin, dict) else None,
+                info.get("targetHighPrice") if isinstance(info, dict) else None,
+            )
+            _tp_me = _prompt_first_float(
+                _target_panel.get("mean"),
+                locals().get("ai_me_val"),
+                ai_fin.get("target_price_avg") if isinstance(ai_fin, dict) else None,
+                ai_fin.get("target_price") if isinstance(ai_fin, dict) else None,
+                info.get("targetMeanPrice") if isinstance(info, dict) else None,
+            )
+            _tp_lo = _prompt_first_float(
+                _target_panel.get("low"),
+                locals().get("ai_lo_val"),
+                ai_fin.get("target_price_low") if isinstance(ai_fin, dict) else None,
+                info.get("targetLowPrice") if isinstance(info, dict) else None,
+            )
+
+            prompt_hi_str = f"{_tp_hi:.1f}" if _tp_hi is not None else "N/A"
+            prompt_me_str = f"{_tp_me:.1f}" if _tp_me is not None else "N/A"
+            prompt_lo_str = f"{_tp_lo:.1f}" if _tp_lo is not None else "N/A"
+
+            prompt_analyst_count = _first_valid_analyst_count(
+                _target_panel.get("analyst_count"),
+                locals().get("ai_analyst_count"),
+                ai_fin.get("target_price_analyst_count") if isinstance(ai_fin, dict) else None,
+                ai_fin.get("analyst_count") if isinstance(ai_fin, dict) else None,
+                ai_fin.get("target_analyst_count") if isinstance(ai_fin, dict) else None,
+                info.get("numberOfAnalystOpinions") if isinstance(info, dict) else None,
+            )
+
+            if _tp_hi is not None or _tp_me is not None or _tp_lo is not None:
+                if (locals().get("ai_hi_val") is not None or locals().get("ai_me_val") is not None or locals().get("ai_lo_val") is not None):
+                    prompt_target_source = "法人目標價面板同源：AI/法人聯網 target_price_high-target_price_avg-target_price_low"
+                else:
+                    prompt_target_source = "系統/info 法人目標價備援：targetHighPrice-targetMeanPrice-targetLowPrice"
+            else:
+                prompt_target_source = "無可用法人目標價"
+
+            prompt_target_confidence = classify_target_price_confidence(prompt_analyst_count)
+            target_confidence = prompt_target_confidence
+            prompt_target_rationale = (
+                _target_panel.get("rationale")
+                or (ai_fin.get("target_price_rationale") if isinstance(ai_fin, dict) else "")
+                or ""
+            )
+
+            ai_source_trace_df_for_prompt = build_ai_source_trace_report(temp_ai_fin) if isinstance(temp_ai_fin, dict) else pd.DataFrame()
+            ai_validation_warnings_for_prompt = temp_ai_fin.get("_ai_validation_warnings", []) if isinstance(temp_ai_fin, dict) else []
+            ai_validation_status_for_prompt = temp_ai_fin.get("_ai_validation_status", "") if isinstance(temp_ai_fin, dict) else ""
+            final_signal_report_for_prompt = final_signal.get("report") if isinstance(final_signal, dict) else None
+            valuation_report_for_prompt = valuation_separation.get("report") if isinstance(valuation_separation, dict) else None
+            target_confidence_report_for_prompt = build_target_price_confidence_report(prompt_analyst_count, _tp_hi, _tp_me, _tp_lo, prompt_target_rationale)
+            industry_report_for_prompt = build_industry_valuation_model_report(industry_profile)
+            dynamic_cap_report_for_prompt = dynamic_cap_pack.get("report") if isinstance(dynamic_cap_pack, dict) else None
+
+            def _prompt_quality_summary(df):
+                """第 17-B-6：資料品質只打包摘要，不塞完整表格。"""
+                try:
+                    if df is None or getattr(df, "empty", True):
+                        return "NULL"
+                    cols = list(df.columns)
+                    field_col = next((c for c in cols if "欄位" in str(c) or "項目" in str(c)), cols[0])
+                    adopted_col = next((c for c in cols if "採用" in str(c) and ("值" in str(c) or "來源" in str(c))), None)
+                    status_col = next((c for c in cols if "品質" in str(c) or "狀態" in str(c)), None)
+                    note_col = next((c for c in cols if "備註" in str(c) or "警告" in str(c) or "說明" in str(c)), None)
+                    rows = []
+                    important_fields = ["P/E", "Forward", "PEG", "P/B", "EPS", "營收", "YoY", "MoM", "毛利", "營益", "ROE", "D/E", "目標價"]
+                    for _, row in df.iterrows():
+                        field = _nullize_text(row.get(field_col, ""))
+                        row_text = " ".join([_nullize_text(row.get(c, "")) for c in cols])
+                        is_important = any(k.lower() in row_text.lower() for k in important_fields)
+                        is_abnormal = any(k in row_text for k in ["異常", "分歧", "校正", "過期", "警告"])
+                        adopted_text = _nullize_text(row.get(adopted_col, "")) if adopted_col else "NULL"
+                        status_text = _nullize_text(row.get(status_col, "")) if status_col else ""
+                        # 打包提示詞只帶「有值、可用、或有真正分歧/異常」的資料；
+                        # 單純缺資料的 NULL 欄位不塞進提示詞，避免外部 AI 被雜訊干擾。
+                        if adopted_col and adopted_text == "NULL" and not is_abnormal:
+                            continue
+                        if any(k in status_text for k in ["❌", "缺資料", "無可用資料"]):
+                            continue
+                        if is_important or is_abnormal:
+                            parts = [f"欄位={field}"]
+                            if adopted_col:
+                                parts.append(f"採用={adopted_text}")
+                            if status_col and status_text != "NULL":
+                                parts.append(f"狀態={status_text}")
+                            if note_col:
+                                note = _nullize_text(row.get(note_col, ''))
+                                if note != "NULL":
+                                    parts.append(f"備註={note}")
+                            rows.append("- " + "；".join(parts))
+                        if len(rows) >= 14:
+                            break
+                    return "\n".join(rows) if rows else _prompt_df(df, max_rows=8)
+                except Exception as e:
+                    try:
+                        log_exception("PromptPack", "_prompt_quality_summary", e)
+                    except Exception:
+                        pass
+                    return "NULL"
+
+            def _prompt_ai_source_summary(df):
+                """第 17-B-6：AI 來源只打包被採用、分歧、異常、估值關鍵欄位。"""
+                try:
+                    if df is None or getattr(df, "empty", True):
+                        return "NULL"
+                    keywords = ["eps", "forward", "gross", "margin", "roe", "debt", "d/e", "revenue", "yoy", "target", "price", "毛利", "營益", "目標", "負債", "營收", "分歧", "校正", "採用"]
+                    keep = []
+                    for _, row in df.iterrows():
+                        row_text = " ".join([_nullize_text(row.get(c, "")) for c in df.columns])
+                        if any(k.lower() in row_text.lower() for k in keywords):
+                            parts = []
+                            for col in df.columns:
+                                val = _nullize_text(row.get(col, ""))
+                                if val != "NULL":
+                                    parts.append(f"{col}={val}")
+                            if parts:
+                                keep.append("- " + "；".join(parts))
+                        if len(keep) >= 10:
+                            break
+                    return "\n".join(keep) if keep else "NULL"
+                except Exception as e:
+                    try:
+                        log_exception("PromptPack", "_prompt_ai_source_summary", e)
+                    except Exception:
+                        pass
+                    return "NULL"
+
+            def _prompt_dynamic_cap_core(pack, mode="research"):
+                """Dynamic Cap 提示詞摘要：避免 raw dict/debug log，統一格式化倍率、折扣與採用輸入。"""
+                try:
+                    if not isinstance(pack, dict):
+                        return "NULL"
+
+                    def _sf2(v):
+                        try:
+                            return s_float(v)
+                        except Exception:
+                            return None
+
+                    def _has(v):
+                        return _sf2(v) is not None or (_nullize_text(v) not in ("NULL", "[]", "{}"))
+
+                    def _fmt_num(v, digits=2):
+                        x = _sf2(v)
+                        return "NULL" if x is None else f"{x:.{digits}f}"
+
+                    def _fmt_x(v, digits=1):
+                        x = _sf2(v)
+                        return "NULL" if x is None else f"{x:.{digits}f}x"
+
+                    def _fmt_pct(v, digits=1):
+                        x = _sf2(v)
+                        if x is None:
+                            return "NULL"
+                        # Dynamic Cap 內部多數用 0.662 = 66.2%，但也容忍 66.2 這類輸入。
+                        if abs(x) <= 3:
+                            x *= 100
+                        return f"{x:.{digits}f}%"
+
+                    def _fmt_money(v):
+                        x = _sf2(v)
+                        if x is None:
+                            return "NULL"
+                        ax = abs(x)
+                        if ax >= 1_000_000_000_000:
+                            return f"約 {x/1_000_000_000_000:.2f} 兆"
+                        if ax >= 100_000_000:
+                            return f"約 {x/100_000_000:.1f} 億"
+                        return f"{x:,.0f}"
+
+                    def _fmt_factor(raw):
+                        """把 {'factor':0.9,'label':'中','reason':'...'} 轉成可讀文字。"""
+                        if isinstance(raw, dict):
+                            factor = _fmt_num(raw.get("factor"), 2)
+                            label = _nullize_text(raw.get("label"))
+                            reason = _nullize_text(raw.get("reason"))
+                            avg_lots = _sf2(raw.get("avg_lots"))
+                            parts = []
+                            if factor != "NULL":
+                                parts.append(f"×{factor}")
+                            if label != "NULL":
+                                parts.append(label)
+                            if avg_lots is not None:
+                                parts.append(f"近20日均量約 {avg_lots:,.0f} 張")
+                            if reason != "NULL":
+                                parts.append(f"原因: {reason}")
+                            return "；".join(parts) if parts else "NULL"
+                        x = _sf2(raw)
+                        return "NULL" if x is None else f"×{x:.2f}"
+
+                    def _fmt_list(v):
+                        if isinstance(v, (list, tuple, set)):
+                            vals = [_nullize_text(x) for x in v if _nullize_text(x) != "NULL"]
+                            return "；".join(vals) if vals else "無"
+                        t = _nullize_text(v)
+                        if t in ("NULL", "[]"):
+                            return "無"
+                        return t
+
+                    def _get_input(inp, key, fallback=None):
+                        if isinstance(inp, dict) and key in inp and _nullize_text(inp.get(key)) != "NULL":
+                            return inp.get(key)
+                        return fallback
+
+                    cap_inputs = pack.get("cap_inputs") if isinstance(pack.get("cap_inputs"), dict) else {}
+                    warnings = _fmt_list(pack.get("warnings"))
+                    notes = _fmt_list(pack.get("cap_adoption_notes"))
+
+                    valuation_mode = _nullize_text(pack.get("valuation_mode"))
+                    model_version = _nullize_text(pack.get("model_version"))
+                    base_multiple = _fmt_x(pack.get("base_multiple"), 1)
+                    op_low = _fmt_x(pack.get("operable_cap_low"), 1)
+                    op_high = _fmt_x(pack.get("operable_cap_high"), 1)
+                    final_cap = _fmt_x(pack.get("final_cap"), 1)
+                    formula_cap = _fmt_x(pack.get("formula_cap"), 1)
+                    optimistic_cap = _fmt_x(pack.get("optimistic_cap"), 1)
+                    hard_cap = _fmt_x(pack.get("hard_ceiling_cap"), 1)
+
+                    # 與 EPS/PEG 面板保持同一口徑：cap_inputs 優先，缺值時才讀畫面變數。
+                    try:
+                        _fallback_ttm = eff_t_eps
+                    except Exception:
+                        _fallback_ttm = None
+                    try:
+                        _fallback_sys_f = sys_forward_eps_system
+                    except Exception:
+                        _fallback_sys_f = None
+                    try:
+                        _fallback_ai_f = ai_f_eps_calc
+                    except Exception:
+                        _fallback_ai_f = None
+                    try:
+                        _fallback_adopted = cap_adopted_forward_eps
+                    except Exception:
+                        _fallback_adopted = None
+                    try:
+                        _fallback_fy1 = ai_forward_eps_fy1
+                    except Exception:
+                        _fallback_fy1 = None
+                    try:
+                        _fallback_fy2 = ai_forward_eps_fy2
+                    except Exception:
+                        _fallback_fy2 = None
+                    try:
+                        _fallback_fy3 = ai_forward_eps_fy3
+                    except Exception:
+                        _fallback_fy3 = None
+                    try:
+                        _fallback_fy1_year = ai_forward_eps_fy1_year
+                    except Exception:
+                        _fallback_fy1_year = None
+                    try:
+                        _fallback_fy2_year = ai_forward_eps_fy2_year
+                    except Exception:
+                        _fallback_fy2_year = None
+                    try:
+                        _fallback_fy3_year = ai_forward_eps_fy3_year
+                    except Exception:
+                        _fallback_fy3_year = None
+                    try:
+                        _fallback_fy_note = ai_forward_eps_fy_source_note
+                    except Exception:
+                        _fallback_fy_note = None
+
+                    ttm_eps = _get_input(cap_inputs, "ttm_eps", _fallback_ttm)
+                    sys_feps = _get_input(cap_inputs, "system_forward_eps", _fallback_sys_f)
+                    ai_feps = _get_input(cap_inputs, "ai_forward_eps", _fallback_ai_f)
+                    adopted_eps = _get_input(cap_inputs, "adopted_valuation_forward_eps", _fallback_adopted)
+                    fy1_eps = _get_input(cap_inputs, "adopted_fy1_eps", _fallback_fy1)
+                    fy2_eps = _get_input(cap_inputs, "adopted_fy2_eps", _fallback_fy2)
+                    fy3_eps = _get_input(cap_inputs, "adopted_fy3_eps", _fallback_fy3)
+                    fy1_year = _get_input(cap_inputs, "fy1_year", _fallback_fy1_year)
+                    fy2_year = _get_input(cap_inputs, "fy2_year", _fallback_fy2_year)
+                    fy3_year = _get_input(cap_inputs, "fy3_year", _fallback_fy3_year)
+                    fy_note = _get_input(cap_inputs, "fy_eps_source_note", _fallback_fy_note)
+
+                    gm = _get_input(cap_inputs, "gross_margin")
+                    om = _get_input(cap_inputs, "operating_margin")
+                    roe = _get_input(cap_inputs, "roe")
+                    de = _get_input(cap_inputs, "debt_to_equity")
+                    rev_yoy = _get_input(cap_inputs, "revenue_yoy")
+                    fcf = _get_input(cap_inputs, "free_cash_flow")
+
+                    # 共同核心摘要，買進版與研究版都需要，但避免 raw dict。
+                    lines = []
+                    if valuation_mode != "NULL":
+                        lines.append(f"- 使用模型: {valuation_mode}")
+                    if model_version != "NULL":
+                        lines.append(f"- 模型版本: {model_version}")
+                    if base_multiple != "NULL":
+                        lines.append(f"- 產業基準倍率: {base_multiple}")
+                    if op_low != "NULL" or op_high != "NULL":
+                        lines.append(f"- 可操作倍率區間: {op_low} ～ {op_high}")
+                    if final_cap != "NULL":
+                        lines.append(f"- 中性可操作倍率: {final_cap}")
+                    if formula_cap != "NULL":
+                        lines.append(f"- 公式合理倍率: {formula_cap}（模型理論估值，不等於買點）")
+                    if optimistic_cap != "NULL":
+                        lines.append(f"- 樂觀情境倍率: {optimistic_cap}（高風險情境，不等於買點）")
+                    if hard_cap != "NULL":
+                        lines.append(f"- hard ceiling: {hard_cap}（強制估值上限，不可因股價上漲直接調高）")
+
+                    discount_parts = []
+                    for label, key in [
+                        ("資料可信度", "data_confidence_factor"),
+                        ("估值風險", "valuation_risk_factor"),
+                        ("流動性", "liquidity_factor"),
+                    ]:
+                        txt = _fmt_factor(pack.get(key))
+                        if txt != "NULL":
+                            discount_parts.append(f"{label} {txt}")
+                    if discount_parts:
+                        lines.append("- 折扣摘要: " + "；".join(discount_parts))
+
+                    eps_parts = []
+                    if _fmt_num(adopted_eps, 2) != "NULL":
+                        eps_parts.append(f"Dynamic Cap 採用估值 EPS={_fmt_num(adopted_eps, 2)}")
+                    if _fmt_num(ttm_eps, 2) != "NULL":
+                        eps_parts.append(f"TTM EPS={_fmt_num(ttm_eps, 2)}")
+                    if _fmt_num(sys_feps, 2) != "NULL":
+                        eps_parts.append(f"系統 Forward EPS={_fmt_num(sys_feps, 2)}")
+                    if _fmt_num(ai_feps, 2) != "NULL":
+                        eps_parts.append(f"AI/法人 Forward EPS={_fmt_num(ai_feps, 2)}")
+                    if eps_parts:
+                        lines.append("- EPS 採用摘要: " + "；".join(eps_parts))
+                    if any(_fmt_num(v, 2) != "NULL" for v in [fy1_eps, fy2_eps, fy3_eps]):
+                        lines.append(f"- FY1 / FY2 / FY3 EPS: {_fmt_num(fy1_eps, 2)} / {_fmt_num(fy2_eps, 2)} / {_fmt_num(fy3_eps, 2)}")
+                    if any(_nullize_text(v) != "NULL" for v in [fy1_year, fy2_year, fy3_year]):
+                        lines.append(f"- FY 年度: {_nullize_text(fy1_year)} / {_nullize_text(fy2_year)} / {_nullize_text(fy3_year)}")
+                    if _nullize_text(fy_note) != "NULL":
+                        lines.append(f"- EPS 來源說明: {_nullize_text(fy_note)}")
+                    if notes != "無":
+                        lines.append(f"- AI校對採用紀錄: {notes}")
+                    if warnings != "無":
+                        lines.append(f"- 模型警告: {warnings}")
+                    lines.append("- 使用限制: 公式合理倍率與樂觀倍率不是買點；操作應優先看系統可操作倍率區間、Forward PEG 估值分層與最終燈號；使用者手動倍率僅供壓力測試/反推現價倍率。")
+
+                    if str(mode).lower() in {"decision", "buy", "compact"}:
+                        return "\n".join(lines) if lines else "NULL"
+
+                    # 研究完整版：補充模型採用輸入，但仍不輸出 raw dict。
+                    research_lines = list(lines)
+                    factor_parts = []
+                    if _fmt_pct(gm) != "NULL":
+                        factor_parts.append(f"毛利率 {_fmt_pct(gm)}")
+                    if _fmt_pct(om) != "NULL":
+                        factor_parts.append(f"營益率 {_fmt_pct(om)}")
+                    if _fmt_pct(roe) != "NULL":
+                        factor_parts.append(f"ROE {_fmt_pct(roe)}")
+                    if _fmt_num(de, 2) != "NULL":
+                        factor_parts.append(f"D/E {_fmt_num(de, 2)}")
+                    if factor_parts:
+                        research_lines.append("\n【9-1. Dynamic Cap 採用品質/風險因子】")
+                        research_lines.append("- " + "；".join(factor_parts))
+                    growth_parts = []
+                    if _fmt_pct(rev_yoy) != "NULL":
+                        growth_parts.append(f"營收 YoY {_fmt_pct(rev_yoy)}")
+                    if _fmt_money(fcf) != "NULL":
+                        growth_parts.append(f"FCF {_fmt_money(fcf)}")
+                    if growth_parts:
+                        research_lines.append("\n【9-2. Dynamic Cap 採用成長/現金流因子】")
+                        research_lines.append("- " + "；".join(growth_parts))
+                    research_lines.append("\n【9-3. EPS 採用規則】")
+                    research_lines.append("- TTM EPS 看目前實際獲利；FY1 作主估值；FY2 判斷市場是否先行定價；FY3 僅作高風險樂觀情境；最新單季 EPS 不進年度估值。")
+                    return "\n".join(research_lines) if research_lines else "NULL"
+                except Exception as e:
+                    try:
+                        log_exception("PromptPack", "_prompt_dynamic_cap_core", e)
+                    except Exception:
+                        pass
+                    return "NULL"
+
+
+            def _prompt_forward_eps_tier_core(pack):
+                """第 17-C-9c-hotfix44：Forward EPS 年期分層估值摘要，供外部 AI 判斷市場是看 FY1/FY2/FY3。"""
+                try:
+                    if not isinstance(pack, dict):
+                        return "NULL"
+                    s = pack.get("summary", {}) or {}
+                    lines = [
+                        f"- FY 定義: {_nullize_text(s.get('fy_definition'))}",
+                        f"- TTM EPS: {_nullize_text(s.get('ttm_eps'))}｜近四季已實現 EPS，用於目前實際獲利估值",
+                        f"- FY1 EPS: {_nullize_text(s.get('fy1_eps'))}｜{_nullize_text(s.get('fy1_label'))}",
+                        f"- FY2 EPS: {_nullize_text(s.get('fy2_eps'))}｜{_nullize_text(s.get('fy2_label'))}",
+                        f"- FY3 EPS: {_nullize_text(s.get('fy3_eps'))}｜{_nullize_text(s.get('fy3_label'))}",
+                        f"- EPS 年份/期間: 近四季 / {_nullize_text(s.get('fy1_year'))} / {_nullize_text(s.get('fy2_year'))} / {_nullize_text(s.get('fy3_year'))}",
+                        f"- EPS 年期基準: {_nullize_text(s.get('eps_basis'))}",
+                        f"- EPS 來源備註: {_nullize_text(s.get('eps_source_note'))}",
+                        f"- 現價隱含 P/E（TTM/FY1/FY2/FY3）: {_nullize_text(s.get('market_pe_ttm'))}x / {_nullize_text(s.get('market_pe_fy1'))}x / {_nullize_text(s.get('market_pe_fy2'))}x / {_nullize_text(s.get('market_pe_fy3'))}x",
+                        f"- 市場 EPS 年期判讀: {_nullize_text(s.get('market_view'))}",
+                        "- 請 AI 判斷：目前股價/法人目標價偏高，是因為 Dynamic Cap 倍率太低，還是因為市場已經在看 FY2/FY3 EPS？也請同時對照 TTM EPS，看目前實際獲利是否能支撐股價。",
+                        "- 重要限制：FY1/FY2/FY3 是預估年度 EPS 序列，不是查詢日後1/2/3年；FY2 只能用來解釋市場先行，不等於可操作買點；FY3 只作高風險樂觀情境，不可直接作為買進目標。",
+                    ]
+                    return "\\n".join(lines)
+                except Exception as e:
+                    try:
+                        log_exception("PromptPack", "_prompt_forward_eps_tier_core", e)
+                    except Exception:
+                        pass
+                    return "NULL"
+
+
+            def _prompt_peg_valuation_layers(
+                system_eps=locals().get('eff_f_eps'),
+                ai_eps=locals().get('ai_f_eps_calc'),
+                fy1_eps=locals().get('ai_forward_eps_fy1'),
+                fy2_eps=locals().get('ai_forward_eps_fy2'),
+                fy3_eps=locals().get('ai_forward_eps_fy3'),
+                fy1_year=locals().get('ai_forward_eps_fy1_year'),
+                fy2_year=locals().get('ai_forward_eps_fy2_year'),
+                fy3_year=locals().get('ai_forward_eps_fy3_year'),
+                fy1_eps_for_annual=locals().get('fy1_eps_for_annual'),
+                formula_cap=locals().get('formula_pe_cap'),
+                manual_cap=locals().get('manual_cap_for_calc'),
+                optimistic_cap=locals().get('extreme_pe_cap_for_calc'),
+                system_price=locals().get('sys_target_price_est'),
+                ai_price=locals().get('ai_target_price_est'),
+                fy1_price=locals().get('fy1_formula_target_price'),
+                fy2_price=locals().get('fy2_formula_target_price'),
+                fy3_price=locals().get('fy3_formula_target_price'),
+                manual_price=locals().get('fy1_manual_target_price'),
+                optimistic_price=locals().get('fy1_optimistic_target_price'),
+            ):
+                """前瞻 PEG 大區塊的新版 7 層估值，同步打包到買進決策版與研究完整版。"""
+                try:
+                    def _p(v):
+                        x = s_float(v)
+                        return "NULL" if x is None else f"{x:.1f}元"
+                    def _e(v):
+                        x = s_float(v)
+                        return "NULL" if x is None else f"{x:.2f}"
+                    def _c(v):
+                        x = s_float(v)
+                        return "NULL" if x is None else f"{x:.1f}x"
+                    def _y(v):
+                        t = _nullize_text(v)
+                        return "年期未明" if t == "NULL" else t
+
+                    rows = [
+                        ("1. 公式合理估值", "系統 EPS × formula cap，非買賣目標", system_eps, formula_cap, system_price, "保留系統抓取 EPS 口徑，作為原始系統估值。"),
+                        ("2. AI估值", "AI / 法人 EPS × formula cap，需看來源可信度", ai_eps, formula_cap, ai_price, "用 AI 取得或校正後 EPS 獨立估值，不覆蓋系統估值。"),
+                        ("3. FY1年度估值", f"FY1 EPS × formula cap｜{_y(fy1_year)}", fy1_eps, formula_cap, fy1_price, "一年預估 EPS 的年度主估值參考。"),
+                        ("4. FY2第二年度估值", f"FY2 EPS × formula cap｜{_y(fy2_year)}", fy2_eps, formula_cap, fy2_price, "只用於判斷市場是否提前反映第二年獲利，不直接當買點。"),
+                        ("5. FY3第三年度估值", f"FY3 EPS × formula cap｜{_y(fy3_year)}", fy3_eps, formula_cap, fy3_price, "高風險遠期情境，需多家法人共識或人工確認，不可直接當買進目標。"),
+                        ("6. 手動年度情境價", "FY1 EPS × 使用者手動 Cap（壓力測試 / 反推現價倍率）", fy1_eps_for_annual, manual_cap, manual_price, "用 FY1 EPS 搭配使用者手動倍率，供壓力測試/反推現價倍率；不代表系統建議買點。"),
+                        ("7. 樂觀年度情境價", "FY1 EPS × soft ceiling，高風險情境", fy1_eps_for_annual, optimistic_cap, optimistic_price, "樂觀情境價不是買點；若現價高於此值，追高風險極高。"),
+                    ]
+                    lines = []
+                    for title, formula, eps, cap, price, note in rows:
+                        lines.append(f"- {title}: {_p(price)}｜{formula}｜EPS={_e(eps)}｜倍率={_c(cap)}｜判讀={note}")
+                    lines.append("- 使用規則: 公式合理估值保留系統 EPS；AI估值獨立顯示；FY1 是年度主估值參考；FY2 只解釋市場先行定價；FY3 是高風險遠期情境；手動/樂觀年度情境以 FY1 EPS 計算。")
+                    return "\n".join(lines)
+                except Exception as e:
+                    try:
+                        log_exception("PromptPack", "_prompt_peg_valuation_layers", e)
+                    except Exception:
+                        pass
+                    return _nullize_text(tp_est_str)
+
+            def _prompt_snapshot_audit_summary(
+                audit,
+                industry_profile=None,
+                dynamic_cap_pack=None,
+                market_implied_pe_val=locals().get('market_implied_pe'),
+                target_avg_implied_pe_val=locals().get('target_avg_implied_pe'),
+                target_high_implied_pe_val=locals().get('target_high_implied_pe'),
+            ):
+                """買進決策版：只放產業模型稽核摘要，避免模型維護資訊干擾交易判斷。"""
+                try:
+                    if not isinstance(audit, dict):
+                        return "- 本次無產業模型稽核資料。"
+                    s = audit.get("summary", {}) or {}
+                    p = industry_profile or {}
+                    dcp = dynamic_cap_pack or {}
+
+                    def _clean(v, default="無"):
+                        if v is None:
+                            return default
+                        try:
+                            if pd.isna(v):
+                                return default
+                        except Exception:
+                            pass
+                        if isinstance(v, (list, tuple, set)):
+                            vals = [str(x).strip() for x in v if str(x).strip() and str(x).strip().upper() not in {"NULL", "NONE", "N/A"}]
+                            return "、".join(vals) if vals else default
+                        t = str(v).strip()
+                        return default if t == "" or t.upper() in {"NULL", "NONE", "N/A", "—", "[]"} else t
+
+                    def _x(v):
+                        n = s_float(v)
+                        return "無" if n is None else f"{n:.1f}x"
+
+                    def _line(label, value):
+                        value = _clean(value)
+                        return None if value == "無" else f"- {label}: {value}"
+
+                    positives = _clean(s.get('positives'))
+                    negatives = _clean(s.get('negatives'))
+                    lines = []
+                    for item in [
+                        _line("稽核結果", s.get('audit_label')),
+                        _line("稽核分數", s.get('audit_score')),
+                        _line("系統建議動作", s.get('action')),
+                        _line("目前 primary_taxon", s.get('primary_taxon')),
+                    ]:
+                        if item:
+                            lines.append(item)
+
+                    hard = dcp.get('hard_ceiling_cap') if isinstance(dcp, dict) else None
+                    if s_float(hard) is not None:
+                        lines.append(f"- 系統 hard ceiling: {_x(hard)}")
+
+                    implied_parts = []
+                    if s_float(market_implied_pe_val) is not None:
+                        implied_parts.append(f"現價 {_x(market_implied_pe_val)}")
+                    if s_float(target_avg_implied_pe_val) is not None:
+                        implied_parts.append(f"法人均價 {_x(target_avg_implied_pe_val)}")
+                    if s_float(target_high_implied_pe_val) is not None:
+                        implied_parts.append(f"法人高標 {_x(target_high_implied_pe_val)}")
+                    if implied_parts:
+                        lines.append("- 現價 / 法人均價 / 法人高標隱含 Forward P/E: " + " / ".join(implied_parts))
+
+                    lines.append(f"- 正面支持因素: {positives}")
+                    lines.append(f"- 風險/反對因素: {negatives}")
+                    lines.append("- 重要限制: 本區僅供模型是否失準之輔助判斷，不可因現價或法人目標價接近/高於 hard ceiling 就直接調高模型，也不可直接作為買進依據。")
+                    return "\n".join(lines)
+                except Exception as e:
+                    try:
+                        log_exception("PromptPack", "_prompt_snapshot_audit_summary", e)
+                    except Exception:
+                        pass
+                    return "- 產業模型稽核摘要產生失敗。"
+
+            def _prompt_snapshot_audit_core(
+                audit,
+                industry_profile=None,
+                dynamic_cap_pack=None,
+                market_implied_pe_val=locals().get('market_implied_pe'),
+                target_avg_implied_pe_val=locals().get('target_avg_implied_pe'),
+                target_high_implied_pe_val=locals().get('target_high_implied_pe'),
+            ):
+                """研究完整版：完整打包單次快照稽核與是否需更新模型的判斷要求。"""
+                try:
+                    if not isinstance(audit, dict):
+                        return "- 本次無產業模型稽核資料。"
+                    s = audit.get("summary", {}) or {}
+                    p = industry_profile or {}
+                    dcp = dynamic_cap_pack or {}
+
+                    def _clean(v, default="無"):
+                        if v is None:
+                            return default
+                        try:
+                            if pd.isna(v):
+                                return default
+                        except Exception:
+                            pass
+                        if isinstance(v, (list, tuple, set)):
+                            vals = [str(x).strip() for x in v if str(x).strip() and str(x).strip().upper() not in {"NULL", "NONE", "N/A"}]
+                            return "、".join(vals) if vals else default
+                        t = str(v).strip()
+                        return default if t == "" or t.upper() in {"NULL", "NONE", "N/A", "—", "[]"} else t
+
+                    def _x(v):
+                        n = s_float(v)
+                        return "無" if n is None else f"{n:.1f}x"
+
+                    built_at = _clean(s.get('model_built_at'))
+                    version = _clean(p.get('model_build_version'))
+                    if built_at != "無" and version != "無":
+                        build_text = f"{built_at} / {version}"
+                    elif built_at != "無":
+                        build_text = built_at
+                    elif version != "無":
+                        build_text = version
+                    else:
+                        build_text = "無"
+
+                    lines = []
+                    for label, value in [
+                        ("稽核結果", s.get('audit_label')),
+                        ("稽核分數", s.get('audit_score')),
+                        ("系統建議動作", s.get('action')),
+                        ("產業模型建置時間 / 版本", build_text),
+                        ("目前 primary_taxon", s.get('primary_taxon')),
+                        ("目前 hybrid_taxons", s.get('hybrid_taxons')),
+                        ("混合後 base / floor / soft / hard", s.get('mixed_caps')),
+                    ]:
+                        v = _clean(value)
+                        if v != "無":
+                            lines.append(f"- {label}: {v}")
+
+                    if s_float(market_implied_pe_val) is not None:
+                        lines.append(f"- 現價隱含 Forward P/E: {_x(market_implied_pe_val)}")
+                    if s_float(target_avg_implied_pe_val) is not None:
+                        lines.append(f"- 法人均價隱含 Forward P/E: {_x(target_avg_implied_pe_val)}")
+                    if s_float(target_high_implied_pe_val) is not None:
+                        lines.append(f"- 法人高標隱含 Forward P/E: {_x(target_high_implied_pe_val)}")
+                    hard = dcp.get('hard_ceiling_cap') if isinstance(dcp, dict) else None
+                    if s_float(hard) is not None:
+                        lines.append(f"- 系統 hard ceiling: {_x(hard)}")
+
+                    lines.append(f"- 正面支持因素: {_clean(s.get('positives'))}")
+                    lines.append(f"- 風險/反對因素: {_clean(s.get('negatives'))}")
+                    history_note = _clean(s.get('history_note'))
+                    if history_note != "無":
+                        lines.append(f"- 歷史紀錄狀態: {history_note}")
+                    else:
+                        lines.append("- 歷史紀錄狀態: 目前未啟用歷史紀錄，本表僅為本次快照稽核，不能判斷連續幾次或長期重估。")
+
+                    lines.extend([
+                        "",
+                        "請 AI 判斷這次差異屬於下列哪一類：",
+                        "1. 市場短線過熱",
+                        "2. 法人目標價過度樂觀",
+                        "3. EPS / 營收 / 毛利率尚未落地",
+                        "4. hybrid 權重可能偏低",
+                        "5. primary_taxon 可能已不符合公司營運型態",
+                        "6. 整個產業 base / soft / hard ceiling 可能需要重新校準",
+                        "",
+                        "請 AI 僅能從下列 5 種回答模型更新建議：",
+                        "- 不建議更新模型",
+                        "- 暫時觀察",
+                        "- 建議檢查 hybrid 權重",
+                        "- 建議檢查 primary_taxon",
+                        "- 建議檢查整個產業倍率",
+                        "",
+                        "重要限制：",
+                        "- 單次快照不能當成長期重估證據。",
+                        "- 不可因現價高於 hard ceiling 就直接調高模型。",
+                        "- 若要正式更新模型，必須說明要改 primary_taxon、hybrid_taxons 或 base/soft/hard。",
+                        "- 更新依據必須來自 EPS、營收、毛利率、法人共識或產業結構變化，而不是單純股價上漲。",
+                    ])
+                    return "\n".join(lines)
+                except Exception as e:
+                    try:
+                        log_exception("PromptPack", "_prompt_snapshot_audit_core", e)
+                    except Exception:
+                        pass
+                    return "- 產業模型稽核內容產生失敗。"
+
+            def _prompt_eps_adoption_sync_summary(
+                sys_latest_quarter_eps_val=locals().get('sys_latest_quarter_eps'),
+                ai_latest_quarter_eps_val=locals().get('ai_latest_quarter_eps'),
+                raw_ai_period_val=locals().get('raw_ai_period'),
+                sys_ttm_eps_val=locals().get('sys_ttm_eps'),
+                ai_ttm_eps_val=locals().get('ai_ttm_eps'),
+                eff_t_eps_val=locals().get('eff_t_eps'),
+                sys_fiscal_year_eps_val=locals().get('sys_fiscal_year_eps'),
+                ai_fiscal_year_eps_val=locals().get('ai_fiscal_year_eps'),
+                sys_forward_eps_system_val=locals().get('sys_forward_eps_system'),
+                eff_f_eps_val=locals().get('eff_f_eps'),
+                ai_forward_eps_ai_val=locals().get('ai_forward_eps_ai'),
+                ai_forward_eps_consensus_val=locals().get('ai_forward_eps_consensus'),
+                ai_forward_eps_fy1_val=locals().get('ai_forward_eps_fy1'),
+                ai_forward_eps_fy2_val=locals().get('ai_forward_eps_fy2'),
+                ai_forward_eps_fy3_val=locals().get('ai_forward_eps_fy3'),
+                ai_forward_eps_fy1_year_val=locals().get('ai_forward_eps_fy1_year'),
+                ai_forward_eps_fy2_year_val=locals().get('ai_forward_eps_fy2_year'),
+                ai_forward_eps_fy3_year_val=locals().get('ai_forward_eps_fy3_year'),
+                ai_f_eps_calc_val=locals().get('ai_f_eps_calc'),
+                fy1_eps_for_annual_val=locals().get('fy1_eps_for_annual'),
+                cap_adopted_forward_eps_val=locals().get('cap_adopted_forward_eps'),
+                ai_forward_eps_fy_source_note_val=locals().get('ai_forward_eps_fy_source_note'),
+                ai_forward_eps_fy_basis_val=locals().get('ai_forward_eps_fy_basis'),
+                formula_pe_cap_val=locals().get('formula_pe_cap'),
+                manual_cap_for_calc_val=locals().get('manual_cap_for_calc'),
+                extreme_pe_cap_for_calc_val=locals().get('extreme_pe_cap_for_calc'),
+                sys_target_price_est_val=locals().get('sys_target_price_est'),
+                ai_target_price_est_val=locals().get('ai_target_price_est'),
+                fy1_formula_target_price_val=locals().get('fy1_formula_target_price'),
+                fy2_formula_target_price_val=locals().get('fy2_formula_target_price'),
+                fy3_formula_target_price_val=locals().get('fy3_formula_target_price'),
+                fy1_manual_target_price_val=locals().get('fy1_manual_target_price'),
+                fy1_optimistic_target_price_val=locals().get('fy1_optimistic_target_price'),
+            ):
+                """第 17-C-9c-hotfix45-2：打包提示詞專用 EPS/估值同步摘要，避免仍顯示 dynamic_cap_pack 舊 cap_inputs。"""
+                try:
+                    def _n(v):
+                        return _nullize_text(v)
+                    def _num(v, digits=2):
+                        x = s_float(v)
+                        return "NULL" if x is None else f"{x:.{digits}f}"
+                    def _cap(v):
+                        x = s_float(v)
+                        return "NULL" if x is None else f"{x:.1f}x"
+                    def _price(v):
+                        x = s_float(v)
+                        return "NULL" if x is None else f"{x:.1f}元"
+                    def _year(v):
+                        t = _nullize_text(v)
+                        return "年期未明" if t == "NULL" else t
+
+                    _fy1_annual = fy1_eps_for_annual_val
+                    if _fy1_annual is None:
+                        _fy1_annual = ai_forward_eps_fy1_val if ai_forward_eps_fy1_val is not None else cap_adopted_forward_eps_val
+
+                    lines = []
+
+                    def _has(*vals):
+                        return any(s_float(v) is not None for v in vals)
+
+                    if _has(sys_latest_quarter_eps_val, ai_latest_quarter_eps_val):
+                        adopted = ai_latest_quarter_eps_val if s_float(ai_latest_quarter_eps_val) is not None else sys_latest_quarter_eps_val
+                        lines.append(f"- 最新單季 EPS: 系統={_n(sys_latest_quarter_eps_val)} / AI={_n(ai_latest_quarter_eps_val)} / 採用={_n(adopted)} / 期間={_n(raw_ai_period_val)}")
+                    if _has(sys_ttm_eps_val, ai_ttm_eps_val, eff_t_eps_val):
+                        lines.append(f"- TTM EPS: 系統={_n(sys_ttm_eps_val)} / AI={_n(ai_ttm_eps_val)} / 採用={_n(eff_t_eps_val)}")
+                    if _has(sys_fiscal_year_eps_val, ai_fiscal_year_eps_val):
+                        adopted = ai_fiscal_year_eps_val if s_float(ai_fiscal_year_eps_val) is not None else sys_fiscal_year_eps_val
+                        lines.append(f"- 完整年度 EPS: 系統={_n(sys_fiscal_year_eps_val)} / AI={_n(ai_fiscal_year_eps_val)} / 採用={_n(adopted)}")
+                    if _has(sys_forward_eps_system_val, eff_f_eps_val):
+                        lines.append(f"- Forward EPS－系統估值採用值: {_num(eff_f_eps_val)}（用於『公式合理估值』；系統原始={_num(sys_forward_eps_system_val)}）")
+                    if _has(ai_forward_eps_ai_val):
+                        lines.append(f"- Forward EPS－AI一般欄位: {_num(ai_forward_eps_ai_val)}")
+                    if _has(ai_forward_eps_consensus_val):
+                        lines.append(f"- Forward EPS－法人共識: {_num(ai_forward_eps_consensus_val)}")
+                    if _has(ai_forward_eps_fy1_val):
+                        lines.append(f"- FY1 EPS: {_num(ai_forward_eps_fy1_val)}｜年度={_year(ai_forward_eps_fy1_year_val)}｜用於『FY1年度估值』與年度情境主基準")
+                    if _has(ai_forward_eps_fy2_val):
+                        lines.append(f"- FY2 EPS: {_num(ai_forward_eps_fy2_val)}｜年度={_year(ai_forward_eps_fy2_year_val)}｜用於『FY2第二年度估值』，只判斷市場先行定價")
+                    if _has(ai_forward_eps_fy3_val):
+                        lines.append(f"- FY3 EPS: {_num(ai_forward_eps_fy3_val)}｜年度={_year(ai_forward_eps_fy3_year_val)}｜用於高風險遠期情境，不可直接當買點")
+                    if _has(ai_f_eps_calc_val):
+                        lines.append(f"- AI估值採用 EPS: {_num(ai_f_eps_calc_val)}（AI/法人 EPS × formula cap）")
+                    if _has(_fy1_annual):
+                        lines.append(f"- 手動/樂觀年度情境採用 EPS: {_num(_fy1_annual)}（優先 FY1 EPS；FY1 無資料才退回採用 Forward EPS）")
+
+                    source_parts = []
+                    if _n(raw_ai_period_val) != "NULL":
+                        source_parts.append(f"來源日期={_n(raw_ai_period_val)}")
+                    if _n(ai_forward_eps_fy_source_note_val) != "NULL":
+                        source_parts.append(f"FY來源說明={_n(ai_forward_eps_fy_source_note_val)}")
+                    if _n(ai_forward_eps_fy_basis_val) != "NULL":
+                        source_parts.append(f"FY基準={_n(ai_forward_eps_fy_basis_val)}")
+                    if source_parts:
+                        lines.append("- EPS 年期/來源: " + "｜".join(source_parts))
+
+                    cap_parts = []
+                    if _cap(formula_pe_cap_val) != "NULL":
+                        cap_parts.append(f"formula cap={_cap(formula_pe_cap_val)}")
+                    if _cap(manual_cap_for_calc_val) != "NULL":
+                        cap_parts.append(f"使用者手動 Cap={_cap(manual_cap_for_calc_val)}")
+                    if _cap(extreme_pe_cap_for_calc_val) != "NULL":
+                        cap_parts.append(f"soft ceiling={_cap(extreme_pe_cap_for_calc_val)}")
+                    if cap_parts:
+                        lines.append("- 估值倍率: " + "；".join(cap_parts))
+
+                    price_parts = []
+                    for label, val in [
+                        ("系統公式", sys_target_price_est_val), ("AI估值", ai_target_price_est_val),
+                        ("FY1", fy1_formula_target_price_val), ("FY2", fy2_formula_target_price_val),
+                        ("FY3", fy3_formula_target_price_val), ("手動年度", fy1_manual_target_price_val),
+                        ("樂觀年度", fy1_optimistic_target_price_val),
+                    ]:
+                        if _price(val) != "NULL":
+                            price_parts.append(f"{label}={_price(val)}")
+                    if price_parts:
+                        lines.append("- 新版估值結果: " + "；".join(price_parts))
+                    lines.append("- 重要規則: 公式合理估值保留系統 EPS 口徑；AI估值獨立顯示；FY1 是年度主估值參考；FY2 僅判斷市場是否先行定價；FY3 為高風險遠期情境；手動/樂觀年度情境以 FY1 EPS 為主。")
+                    return "\n".join(lines) if lines else "無可用 EPS 面板資料，提示詞不納入 EPS 估值判斷。"
+                except Exception as e:
+                    try:
+                        log_exception("PromptPack", "_prompt_eps_adoption_sync_summary", e)
+                    except Exception:
+                        pass
+                    return "NULL"
+
+            eps_adopted_for_prompt = _prompt_eps_adoption_sync_summary()
+
+
+            def _prompt_target_price_panel_summary():
+                """法人目標價提示詞與畫面面板同源；沒有值的 AI 欄位不輸出 NULL。"""
+                try:
+                    lines = []
+                    if _nullize_text(prompt_hi_str) != "NULL" or _nullize_text(prompt_me_str) != "NULL" or _nullize_text(prompt_lo_str) != "NULL":
+                        lines.append(f"- 最高 / 平均 / 最低目標價: {_nullize_text(prompt_hi_str)} / {_nullize_text(prompt_me_str)} / {_nullize_text(prompt_lo_str)}")
+                    if _nullize_text(prompt_analyst_count) != "NULL":
+                        lines.append(f"- 分析師人數: {_nullize_text(prompt_analyst_count)}")
+                    if isinstance(target_confidence, dict):
+                        lines.append(f"- 目標價可信度: {_nullize_text(target_confidence.get('label'))}｜{_nullize_text(target_confidence.get('message'))}")
+                    if _nullize_text(prompt_target_source) != "NULL":
+                        lines.append(f"- 目標價資料來源: {_nullize_text(prompt_target_source)}")
+                    if _nullize_text(ai_tp_str) != "NULL":
+                        lines.append(f"- AI 最新目標價補充: {_nullize_text(ai_tp_str)}")
+                    if _nullize_text(prompt_target_rationale) != "NULL":
+                        lines.append(f"- 核心理由: {_nullize_text(prompt_target_rationale)}")
+                    lines.append("- 同步規則: 以法人目標價面板顯示值為準；若面板無系統值，才回填 AI 目標價；沒有資料的 AI 欄位不輸出 NULL。")
+                    return "\n".join(lines) if lines else "無可用法人目標價面板資料，本次不納入法人目標價判斷。"
+                except Exception as e:
+                    try:
+                        log_exception("PromptPack", "_prompt_target_price_panel_summary", e)
+                    except Exception:
+                        pass
+                    return "無可用法人目標價面板資料，本次不納入法人目標價判斷。"
+
+
+            def _prompt_etf_panel_summary():
+                """把主要 ETF / AI ETF 補查摘要同步進提示詞，避免 ETF 面板完全未打包。"""
+                try:
+                    rows = []
+                    system_rows = locals().get('etf_holders', []) or []
+                    if system_rows:
+                        for r in system_rows[:8]:
+                            if not isinstance(r, dict):
+                                continue
+                            weight = r.get('weight')
+                            try:
+                                weight_text = f"{float(weight):.2f}%" if weight is not None and str(weight).strip() != "" else "N/A"
+                            except Exception:
+                                weight_text = str(weight) if weight else "N/A"
+                            rows.append(f"- 快速ETF｜{_nullize_text(r.get('etf_code'))} {_nullize_text(r.get('etf_name'))}｜持股={weight_text}｜日期={_nullize_text(r.get('data_date'))}｜來源={_nullize_text(r.get('source') or r.get('data_type'))}")
+                    ai_etf_data_for_prompt = None
+                    try:
+                        ai_etf_data_for_prompt = st.session_state.get('ai_etf_holders', {}).get(curr_id) if isinstance(st.session_state.get('ai_etf_holders'), dict) else None
+                    except Exception:
+                        ai_etf_data_for_prompt = None
+                    if isinstance(ai_etf_data_for_prompt, dict):
+                        if ai_etf_data_for_prompt.get('error'):
+                            rows.append(f"- AI ETF 補查失敗｜{_nullize_text(ai_etf_data_for_prompt.get('error'))}")
+                        else:
+                            ai_rows = ai_etf_data_for_prompt.get('etf_holders_ai') or []
+                            for r in ai_rows[:8]:
+                                if not isinstance(r, dict):
+                                    continue
+                                weight = r.get('weight')
+                                try:
+                                    weight_text = f"{float(weight):.2f}%" if weight is not None and str(weight).strip() != "" else "N/A"
+                                except Exception:
+                                    weight_text = str(weight) if weight else "N/A"
+                                rows.append(f"- AI ETF｜{_nullize_text(r.get('etf_code'))} {_nullize_text(r.get('etf_name'))}｜持股={weight_text}｜日期={_nullize_text(r.get('data_date'))}｜來源={_nullize_text(r.get('source') or r.get('data_type'))}")
+                            if ai_etf_data_for_prompt.get('summary'):
+                                rows.append(f"- AI ETF 摘要｜{_nullize_text(ai_etf_data_for_prompt.get('summary'))}")
+                    if not rows:
+                        return "NULL｜快速 ETF 查無或尚未執行 AI ETF 補查；此區不保證完整，正式持股仍以 ETF 官方/PCF 為準。"
+                    rows.append("- 限制｜ETF 快速查詢可能只含主要/前十大；AI ETF 補查為交叉檢查，正式持股仍以投信公告、PCF 或 ETF 官方持股明細為準。")
+                    return "\n".join(rows)
+                except Exception as e:
+                    try:
+                        log_exception("PromptPack", "_prompt_etf_panel_summary", e)
+                    except Exception:
+                        pass
+                    return "NULL"
+
+            def _prompt_defense_panel_summary():
+                """同步防禦力與財務健康卡片。"""
+                try:
+                    return "\n".join([
+                        f"- 殖利率: {_nullize_text(dy_str)}",
+                        f"- FCF: {_nullize_text(fcf_str)}",
+                        f"- 流動比率: {_nullize_text(cr_str)}",
+                        f"- F-Score: {_nullize_text(fs_str)}",
+                        f"- 備註: 以上數值用於長線/存股防禦力，仍需搭配資料品質與現金流來源確認。",
+                    ])
+                except Exception:
+                    return "NULL"
+
+            def _prompt_chip_panel_summary():
+                """同步主力籌碼雷達與股權結構面板。"""
+                try:
+                    lines = []
+                    if 'f_10d' in locals() or 't_10d' in locals():
+                        lines.append(f"- 外資近10日淨買賣: {_nullize_text(locals().get('f_10d'))} 張｜動向: {_nullize_text(locals().get('f_status'))}")
+                        lines.append(f"- 投信近10日淨買賣: {_nullize_text(locals().get('t_10d'))} 張｜動向: {_nullize_text(locals().get('t_status'))}")
+                        total_10d = None
+                        try:
+                            total_10d = (locals().get('f_10d') or 0) + (locals().get('t_10d') or 0)
+                        except Exception:
+                            total_10d = None
+                        lines.append(f"- 外資+投信近10日合計: {_nullize_text(total_10d)} 張")
+                        if isinstance(locals().get('trap_warning'), str) and locals().get('trap_warning'):
+                            tw = re.sub(r"<[^>]+>", " ", locals().get('trap_warning'))
+                            tw = re.sub(r"\s+", " ", tw).strip()
+                            lines.append(f"- 籌碼警示: {_nullize_text(tw)}")
+                    else:
+                        lines.append("- 外資/投信近10日資料: NULL（未取得 FinMind 籌碼資料或無近期資料）")
+                    lines.extend([
+                        f"- 機構持股率: {_nullize_text(locals().get('inst_str'))}｜判讀: {_nullize_text(locals().get('inst_eval'))}",
+                        f"- 內部人/大股東持股: {_nullize_text(locals().get('insider_str'))}｜判讀: {_nullize_text(locals().get('in_eval'))}",
+                        f"- 股本/控盤類型: {_nullize_text((locals().get('share_capital') or 0) / 100000000 if locals().get('share_capital') is not None else None)} 億｜{_nullize_text(locals().get('cap_type'))}｜{_nullize_text(locals().get('driver'))}",
+                        f"- 控盤說明: {_nullize_text(locals().get('driver_desc'))}",
+                    ])
+                    return "\n".join(lines)
+                except Exception as e:
+                    try:
+                        log_exception("PromptPack", "_prompt_chip_panel_summary", e)
+                    except Exception:
+                        pass
+                    return "NULL"
+
+            def _prompt_panel_sync_audit():
+                """提示詞與畫面面板同步自檢。"""
+                try:
+                    checks = [
+                        ("月營收公告月份", latest_rev_display_label not in (None, "", "公告月份：未知")),
+                        ("EPS拆欄/FY1/FY2/FY3", eps_adopted_for_prompt not in (None, "", "NULL")),
+                        ("Forward PEG 7層估值", _prompt_peg_valuation_layers() not in (None, "", "NULL")),
+                        ("法人目標價/分析師人數", locals().get("prompt_analyst_count") is not None),
+                        ("Dynamic Cap/可操作區間", isinstance(dynamic_cap_pack, dict) and bool(dynamic_cap_pack)),
+                        ("最終操作燈號", isinstance(final_signal, dict) and bool(final_signal.get('signal'))),
+                        ("ETF摘要", True),
+                        ("籌碼/股權結構", True),
+                    ]
+                    lines = []
+                    for name, ok in checks:
+                        lines.append(f"- {name}: {'已同步' if ok else '可能缺值/需人工確認'}")
+                    lines.append("- 技術線圖/KD/均線: 目前位於提示詞區塊之後才計算，未完整打包；若外部 AI 需做短線進出，請人工搭配技術線圖判斷。")
+                    lines.append("- 產業同業PK/估值河流圖: 屬互動視覺輔助，研究完整版以產業模型、Dynamic Cap、估值區間摘要為主，未塞完整圖表資料。")
+                    return "\n".join(lines)
+                except Exception:
+                    return "NULL"
+
+
+
+
+            def _prompt_model_gap_trigger_conditions():
+                """研究完整版專用：市場價/法人價/系統估值落差過大時，啟動模型落差診斷。"""
+                return """本區只放在研究完整版；用途是讓外部 AI 在市場價、法人價、系統估值差距過大時，先做模型落差診斷，再給研究結論。
+
+若符合下列任一條件，請啟動模型落差診斷：
+- 現價高於系統可操作區間高標 20% 以上。
+- 現價高於 FY1 公式估值 30% 以上。
+- 法人平均目標價與系統可操作區間中值差距超過 30%。
+- 法人最高目標價與最低目標價差距超過平均目標價 60%。
+- 現價用 FY1 EPS 看高於 hard ceiling，但用 FY2 / FY3 EPS 看可解釋。
+
+請 AI 逐項判斷落差可能來源：
+1. 市場是否已提前反映 FY2 / FY3 EPS。
+2. primary_taxon 是否可能已不符合市場定價邏輯。
+3. hybrid 權重是否可能不足。
+4. 是否只是市場題材或短線過熱。
+5. 法人目標價是否分歧過大，導致平均目標價可信度下降。
+
+請 AI 最後只能從下列 5 種模型診斷結論選一種：
+- 模型暫不需調整，市場短線過熱。
+- 模型暫不需調整，但市場正在提前反映 FY2/FY3。
+- 建議檢查 hybrid 權重。
+- 建議檢查 primary_taxon。
+- 建議檢查整個產業倍率。
+
+重要限制：
+- 不可因股價高於模型價就直接調高模型。
+- 不可因單一法人高標就調高模型。
+- FY2 只能解釋市場先行定價，不等於買點。
+- FY3 只作高風險遠期情境，不可作一般買進依據。
+- 若建議調整模型，必須說明是 primary_taxon、hybrid 權重，還是 base / soft / hard ceiling 的問題。"""
+
+            def _prompt_buy_decision_gap_risk_conditions():
+                """買進決策版專用：市場價/法人價/系統估值落差過大時，只提醒買進安全邊際，不做模型庫回饋。"""
+                return """本區只放在買進決策版；用途是讓外部 AI 在判斷是否買進前，先檢查市場價、法人目標價、系統可操作估值與 FY1/FY2/FY3 估值是否落差過大。
+
+若符合下列任一條件，請啟動買進風險檢查：
+- 現價高於系統可操作區間高標 20% 以上。
+- 現價高於 FY1 公式估值 30% 以上。
+- 現價只能用 FY2 / FY3 EPS 才能解釋。
+- 法人平均目標價與系統可操作區間中值差距超過 30%。
+- 法人最高目標價與最低目標價差距超過平均目標價 60%。
+
+請 AI 判斷此落差對「買進安全邊際」的影響：
+1. 現價是否已提前反映 FY2 / FY3 EPS。
+2. 法人高標是否過度樂觀或高低標分歧過大。
+3. 現價是否高於系統可操作區間，導致追價風險偏高。
+4. 若只能用 FY2 / FY3 解釋現價，請說明 EPS / 營收 / 毛利率是否已經落地。
+5. 若差距過大，請明確標示：不宜追價 / 只能觀察 / 需等 EPS 或營收落地後再評估。
+
+重要限制：
+- 本區不是模型庫修正建議，只用於買進風險判斷。
+- FY2 只能解釋市場先行定價，不等於買點。
+- FY3 只作高風險遠期情境，不可作一般買進依據。
+- 法人高標不可直接視為合理買進價。
+- 公式合理價、樂觀情境價、使用者手動壓力測試價都不是系統建議買點。"""
+
+            def _prompt_model_library_feedback_request():
+                """研究完整版專用：請外部 AI 把個案分析回饋成模型庫修正候選，不放入買進決策版。"""
+                try:
+                    primary_taxon = _nullize_text(industry_profile.get('primary_taxon') if isinstance(industry_profile, dict) else 'NULL')
+                    model_label = _nullize_text(industry_profile.get('model_label') if isinstance(industry_profile, dict) else 'NULL')
+                    hybrid_taxons = _nullize_text(industry_profile.get('hybrid_taxons_text') if isinstance(industry_profile, dict) else 'NULL')
+                    mixed_caps = _nullize_text(industry_profile.get('hybrid_mixed_caps_text') if isinstance(industry_profile, dict) else 'NULL')
+                    source = _nullize_text(industry_profile.get('classification_source') if isinstance(industry_profile, dict) else 'NULL')
+                    confidence = _nullize_text(industry_profile.get('classification_confidence') if isinstance(industry_profile, dict) else 'NULL')
+                    hard_cap = _nullize_text(industry_profile.get('hard_ceiling_pe') if isinstance(industry_profile, dict) else 'NULL')
+                    soft_cap = _nullize_text(industry_profile.get('soft_ceiling_pe') if isinstance(industry_profile, dict) else 'NULL')
+
+                    lines = [
+                        "本區只放在研究完整版；目的不是產生買賣建議，而是把本次個案分析整理成模型庫修正候選清單。",
+                        f"- 目前 primary_taxon: {primary_taxon}",
+                        f"- 目前匹配模型: {model_label}",
+                        f"- 目前 hybrid_taxons / 權重: {hybrid_taxons}",
+                        f"- 混合後估值區間: {mixed_caps}",
+                        f"- 分類來源 / 可信度: {source} / {confidence}",
+                        f"- 主模型 soft / hard ceiling: {soft_cap} / {hard_cap}",
+                        "- 可參考落差來源: 現價、法人目標價、系統可操作估值、FY1/FY2/FY3 估值、Dynamic Cap、產業模型單次快照稽核。",
+                        "",
+                        "請 AI 僅能從下列模型庫回饋類型選擇，可複選：",
+                        "- primary_taxon_review：主分類可能需要人工檢查。",
+                        "- hybrid_weight_review：hybrid 權重可能需要人工檢查。",
+                        "- industry_cap_review：整個產業 base / soft / hard ceiling 可能需要檢查。",
+                        "- eps_timing_review：市場可能已提前反映 FY2/FY3 EPS。",
+                        "- target_confidence_review：法人目標價可信度或高低標分歧規則需檢查。",
+                        "- no_model_change：目前不建議調整模型庫。",
+                        "",
+                        "請 AI 輸出以下欄位：",
+                        "- 模型庫回饋類型。",
+                        "- 是否建議立即修改模型庫: 是 / 否 / 觀察。",
+                        "- 建議檢查的檔案: stock_mapping.py / industry_taxonomy.py / dynamic_cap_model.py / 目標價可信度規則。",
+                        "- 具體建議。",
+                        "- 支持證據。",
+                        "- 反對證據。",
+                        "- 需要追蹤的條件。",
+                        "- 信心等級: 高 / 中 / 低。",
+                        "",
+                        "重要限制：",
+                        "- 不可因單次股價上漲就建議調高模型。",
+                        "- 不可因單一法人高標就建議調高模型。",
+                        "- 若建議調整 primary_taxon，必須說明公司營收結構或獲利來源已明顯轉型。",
+                        "- 若建議調整 hybrid 權重，必須說明新成長曲線如何影響 FY1/FY2/FY3 EPS、毛利率或法人目標價。",
+                        "- 若建議調整產業倍率，必須說明是否多檔同產業股票都出現系統性偏差。",
+                        "- AI 回饋只進入模型庫修正候選清單，不可自動覆蓋 stock_mapping.py 或產業倍率。",
+                    ]
+                    return "\n".join(lines)
+                except Exception as e:
+                    try:
+                        log_exception("PromptPack", "_prompt_model_library_feedback_request", e)
+                    except Exception:
+                        pass
+                    return "NULL"
+            context_str = f"""
+【0. WAY AI 投資戰情室 2.1 精簡判讀總覽】
+- 股票: {c_name} ({curr_id})
+- 最新收盤價: {_nullize_text(curr_p)} 元
+- 系統版本: 2.1
+- 最終操作燈號: {_nullize_text(final_signal.get('signal') if isinstance(final_signal, dict) else 'NULL')}
+- 操作含義: {_nullize_text(final_signal.get('advice') if isinstance(final_signal, dict) else 'NULL')}
+- 資料可信度 / 估值可信度 / 操作可信度: {_nullize_text(final_signal.get('data_confidence') if isinstance(final_signal, dict) else 'NULL')} / {_nullize_text(final_signal.get('valuation_confidence') if isinstance(final_signal, dict) else 'NULL')} / {_nullize_text(final_signal.get('operation_confidence') if isinstance(final_signal, dict) else 'NULL')}
+
+【1. 月營收公告月份與財務動能】
+- 營收公告月份標籤: {_nullize_text(latest_rev_display_label)}
+- 最新單月營收 YoY / MoM: {panel_rg} / {_nullize_text(latest_mom_str)}
+- 月營收資料源: {_nullize_text(latest_rev_source)}
+- 月營收月份提示: {_nullize_text(latest_rev_notice)}
+
+【2. EPS 口徑摘要（不可混用）】
+{_prompt_df(eps_report_df, max_rows=8)}
+- 新版 EPS / 年期 / 估值同步摘要：
+{eps_adopted_for_prompt}
+
+【3. 盤面與基礎估值摘要】
+- Trailing P/E / Forward P/E / P/B / PEG: {panel_pe} / {panel_fpe} / {panel_pb} / {panel_peg}
+- EPS（TTM / Forward 顯示值）: {panel_eps}
+- 預估獲利成長 YoY: {panel_eg}
+- 毛利率 / 營益率: {panel_gmom}
+- ROE / D/E: {panel_roe} / {panel_de}
+- 殖利率 / FCF / 流動比率 / F-Score: {_nullize_text(dy_str)} / {_nullize_text(fcf_str)} / {_nullize_text(cr_str)} / {_nullize_text(fs_str)}
+
+【4. 系統 / AI 分歧警告（必須完整解讀）】
+{_prompt_warnings(divergence_warnings)}
+
+【5. 資料品質摘要（只列採用、缺值、異常、校正、關鍵欄位）】
+{_prompt_quality_summary(dq_report_df)}
+
+【6. 法人目標價與可信度】
+{_prompt_target_price_panel_summary()}
+
+【7. 前瞻 PEG 詳細估值分層（目前新版計算內容：系統 / AI / FY1 / FY2 / FY3）】
+{_prompt_peg_valuation_layers()}
+
+【8. TTM + Forward EPS 年期分層估值（17-C-9c-hotfix44，判斷目前EPS與FY1/FY2/FY3）】
+{_prompt_forward_eps_tier_core(forward_eps_tier_pack)}
+
+【9. 公式估值 / 手動情境 / 可操作估值分離】
+- 系統逆向推算估值摘要: {ctx_tp_est}
+- 可操作估值提示: {_nullize_text(valuation_separation.get('action_hint') if isinstance(valuation_separation, dict) else 'NULL')}
+- 可操作估值區間低/中/高: {_nullize_text(valuation_separation.get('operable_low') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('operable_mid') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('operable_high') if isinstance(valuation_separation, dict) else 'NULL')}
+- 手動年度情境價（FY1 EPS × 使用者手動 Cap，壓力測試 / 反推現價倍率）: {_nullize_text(fy1_manual_target_price if 'fy1_manual_target_price' in locals() else None)}
+- 樂觀年度情境價（FY1 EPS × soft ceiling）: {_nullize_text(fy1_optimistic_target_price if 'fy1_optimistic_target_price' in locals() else None)}
+- 警告數 / 重大警告數: {_nullize_text(valuation_separation.get('warning_count') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('danger_count') if isinstance(valuation_separation, dict) else 'NULL')}
+- 提醒: 手動年度情境價為使用者手動倍率壓力測試，不等於系統可操作買點；公式合理價、樂觀情境價與 hard ceiling 也不是買進目標；買賣以系統可操作區間與最終燈號為主。
+
+【10. 產業估值模型（只列本股模型）】
+- 匹配模型: {_nullize_text(industry_profile.get('model_label') if isinstance(industry_profile, dict) else 'NULL')}
+- 主分類 / stocklist 分類: {_nullize_text(industry_profile.get('parent_category') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('stocklist_category') if isinstance(industry_profile, dict) else 'NULL')}
+- 題材標籤: {_nullize_text(industry_profile.get('themes_text') if isinstance(industry_profile, dict) else 'NULL')}
+- 產業分類來源 / 可信度 / 折扣: {_nullize_text(industry_profile.get('classification_source') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('classification_confidence') if isinstance(industry_profile, dict) else 'NULL')} / ×{_nullize_text(industry_profile.get('classification_confidence_factor') if isinstance(industry_profile, dict) else 'NULL')}
+- 是否待人工確認: {_nullize_text(industry_profile.get('classification_needs_manual_review') if isinstance(industry_profile, dict) else 'NULL')}｜{_nullize_text(industry_profile.get('classification_warning') if isinstance(industry_profile, dict) else 'NULL')}
+- AI 建議分類: {_nullize_text(industry_profile.get('ai_suggested_taxon') if isinstance(industry_profile, dict) else 'NULL')}｜{_nullize_text(industry_profile.get('ai_suggested_themes') if isinstance(industry_profile, dict) else 'NULL')}
+- AI 分類依據: {_nullize_text(industry_profile.get('ai_classification_reason') if isinstance(industry_profile, dict) else 'NULL')}
+- 主要 / 次要估值方式: {_nullize_text(industry_profile.get('primary_valuation') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('secondary_valuation') if isinstance(industry_profile, dict) else 'NULL')}
+- P/E 適用性: {_nullize_text(industry_profile.get('pe_applicability_text') if isinstance(industry_profile, dict) else 'NULL')}
+- 是否循環股 / P/E 陷阱: {_nullize_text(industry_profile.get('cyclical') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('pe_trap_warning') if isinstance(industry_profile, dict) else 'NULL')}
+- Dynamic Cap floor / soft / hard: {_nullize_text(industry_profile.get('floor_pe') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('soft_ceiling_pe') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('hard_ceiling_pe') if isinstance(industry_profile, dict) else 'NULL')}
+- P/B 參考區間: {_nullize_text(industry_profile.get('pb_range') if isinstance(industry_profile, dict) else 'NULL')}
+- 事件模型切換: {_nullize_text(industry_profile.get('event_switch_note') if isinstance(industry_profile, dict) else 'NULL')}
+- 校準來源: {_nullize_text(industry_profile.get('calibration_source') if isinstance(industry_profile, dict) else 'NULL')}
+- 風險旗標: {_nullize_text(industry_profile.get('risk_flags') if isinstance(industry_profile, dict) else 'NULL')}
+
+【11. Dynamic Cap 2.0 摘要（核心拆解，不含完整表格）】
+{_prompt_dynamic_cap_core(dynamic_cap_pack, mode="research")}
+
+【12. 產業模型單次快照稽核與更新判斷】
+{_prompt_snapshot_audit_core(snapshot_audit, industry_profile, dynamic_cap_pack)}
+
+【13. 最終操作燈號明細】
+{_prompt_df(final_signal_report_for_prompt, max_rows=12)}
+
+【14. AI 來源與 JSON 驗證摘要】
+- AI 模型/資料期間: {_nullize_text(temp_ai_fin.get('model_used') if isinstance(temp_ai_fin, dict) else 'NULL')}｜{_nullize_text(raw_ai_period)}
+- AI JSON 驗證狀態: {_nullize_text(ai_validation_status_for_prompt)}
+- AI JSON 驗證警告: {_nullize_text('；'.join([str(x) for x in ai_validation_warnings_for_prompt[:8]]) if ai_validation_warnings_for_prompt else 'NULL')}
+- AI 產業分類建議: {_nullize_text(temp_ai_fin.get('industry_classification') if isinstance(temp_ai_fin, dict) else 'NULL')}
+- 重要 AI 來源追蹤（只列被採用、分歧、異常或估值關鍵欄位）:
+{_prompt_ai_source_summary(ai_source_trace_df_for_prompt)}
+
+【15. ETF 持有與曝險摘要】
+{_prompt_etf_panel_summary()}
+
+【16. 防禦力與籌碼面板同步摘要】
+- 防禦力/財務健康：
+{_prompt_defense_panel_summary()}
+- 籌碼/股權結構：
+{_prompt_chip_panel_summary()}
+
+【17. 提示詞與面板同步自檢】
+{_prompt_panel_sync_audit()}
+
+【18. 模型落差觸發條件與診斷要求（研究完整版專用）】
+{_prompt_model_gap_trigger_conditions()}
+
+【19. 模型庫回饋建議（研究完整版專用）】
+{_prompt_model_library_feedback_request()}
+"""
+
+
+            # 第 17-C-2：買進決策版資料包。只保留會影響「現在是否值得買進」的關鍵欄位。
+            # 原 context_str 保留為研究完整版資料包。
+            # 第 17-C-10：買進決策版再瘦身，移除同步自檢與模型庫更新要求；模型稽核只保留一行摘要。
+            def _prompt_has_real_content(text):
+                try:
+                    t = _nullize_text(text)
+                    if t in {"", "NULL"}:
+                        return False
+                    nullish_keywords = ["查無", "尚未執行", "未取得", "不保證完整", "NULL｜"]
+                    return not all(k in t for k in nullish_keywords[:1])
+                except Exception:
+                    return False
+
+            def _prompt_one_line(text, max_len=520):
+                try:
+                    t = re.sub(r"<[^>]+>", " ", str(text or ""))
+                    t = re.sub(r"\s*\n\s*-\s*", "；", t)
+                    t = re.sub(r"\s*\n\s*", "；", t)
+                    t = re.sub(r"\s+", " ", t).strip(" ；-")
+                    if not t:
+                        return "NULL"
+                    return t[:max_len] + ("..." if len(t) > max_len else "")
+                except Exception:
+                    return "NULL"
+
+            decision_snapshot_audit_one_line = _prompt_one_line(
+                _prompt_snapshot_audit_summary(snapshot_audit, industry_profile, dynamic_cap_pack),
+                max_len=520,
+            )
+            decision_etf_summary = _prompt_etf_panel_summary()
+            decision_chip_summary = _prompt_chip_panel_summary()
+            decision_optional_etf_chip_context = ""
+            if _prompt_has_real_content(decision_etf_summary) or _prompt_has_real_content(decision_chip_summary):
+                decision_optional_etf_chip_context = f"""
+【12. ETF / 籌碼】
+- ETF 持有與曝險：
+{decision_etf_summary}
+- 籌碼/股權結構：
+{decision_chip_summary}
+"""
+            decision_ai_key_source_summary = _prompt_ai_source_summary(ai_source_trace_df_for_prompt)
+
+            decision_context_str = f"""
+【0. 系統判讀總覽】
+- 股票: {c_name} ({curr_id})
+- 最新收盤價: {_nullize_text(curr_p)} 元
+- 系統版本: 2.1
+- 最終操作燈號: {_nullize_text(final_signal.get('signal') if isinstance(final_signal, dict) else 'NULL')}
+- 系統建議: {_nullize_text(final_signal.get('advice') if isinstance(final_signal, dict) else 'NULL')}
+- 資料 / 估值 / 操作可信度: {_nullize_text(final_signal.get('data_confidence') if isinstance(final_signal, dict) else 'NULL')} / {_nullize_text(final_signal.get('valuation_confidence') if isinstance(final_signal, dict) else 'NULL')} / {_nullize_text(final_signal.get('operation_confidence') if isinstance(final_signal, dict) else 'NULL')}
+
+【1. 月營收與動能】
+- 最新公告月份: {_nullize_text(latest_rev_display_label)}
+- 月營收 YoY / MoM: {panel_rg} / {_nullize_text(latest_mom_str)}
+- 資料源 / 提醒: {_nullize_text(latest_rev_source)} / {_nullize_text(latest_rev_notice)}
+
+【2. EPS 口徑與採用值】
+{eps_adopted_for_prompt}
+- 市場 / 法人隱含倍率：現價隱含 {_nullize_text(market_implied_pe if 'market_implied_pe' in locals() else None)}x；法人均價隱含 {_nullize_text(target_avg_implied_pe if 'target_avg_implied_pe' in locals() else None)}x；法人高標隱含 {_nullize_text(target_high_implied_pe if 'target_high_implied_pe' in locals() else None)}x；判讀：{_nullize_text(implied_status if 'implied_status' in locals() else None)}
+
+【3. TTM + Forward EPS 年期分層估值】
+{_prompt_forward_eps_tier_core(forward_eps_tier_pack)}
+
+【4. 核心財務與估值】
+- 現價: {_nullize_text(curr_p)}
+- Trailing P/E / Forward P/E / P/B / PEG: {panel_pe} / {panel_fpe} / {panel_pb} / {panel_peg}
+- 毛利率 / 營益率: {panel_gmom}
+- ROE / D/E: {panel_roe} / {panel_de}
+- 營收 YoY / 預估獲利成長 YoY: {panel_rg} / {panel_eg}
+- FCF / 流動比率 / 殖利率: {_nullize_text(fcf_str)} / {_nullize_text(cr_str)} / {_nullize_text(dy_str)}
+
+【5. 分歧與資料品質】
+- 系統 / AI 分歧警告:
+{_prompt_warnings(divergence_warnings)}
+- 資料品質摘要:
+{_prompt_quality_summary(dq_report_df)}
+
+【6. 法人目標價與可信度】
+{_prompt_target_price_panel_summary()}
+
+【7. 前瞻 PEG 詳細估值分層】
+{_prompt_peg_valuation_layers()}
+- 可操作估值區間低/中/高: {_nullize_text(valuation_separation.get('operable_low') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('operable_mid') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('operable_high') if isinstance(valuation_separation, dict) else 'NULL')}
+- 可操作估值提示: {_nullize_text(valuation_separation.get('action_hint') if isinstance(valuation_separation, dict) else 'NULL')}
+
+【8. 模型落差風險提示】
+{_prompt_buy_decision_gap_risk_conditions()}
+
+【9. 產業估值模型】
+- 產業模型建置時間 / 版本: {_nullize_text(industry_profile.get('model_built_at') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('model_build_version') if isinstance(industry_profile, dict) else 'NULL')}
+- 正式/匹配分類: {_nullize_text(industry_profile.get('model_label') if isinstance(industry_profile, dict) else 'NULL')}
+- 分類來源 / 可信度 / 折扣: {_nullize_text(industry_profile.get('classification_source') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('classification_confidence') if isinstance(industry_profile, dict) else 'NULL')} / ×{_nullize_text(industry_profile.get('classification_confidence_factor') if isinstance(industry_profile, dict) else 'NULL')}
+- 是否待人工確認: {_nullize_text(industry_profile.get('classification_needs_manual_review') if isinstance(industry_profile, dict) else 'NULL')}｜{_nullize_text(industry_profile.get('classification_warning') if isinstance(industry_profile, dict) else 'NULL')}
+- AI 建議分類 / 題材: {_nullize_text(industry_profile.get('ai_suggested_taxon') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('ai_suggested_themes') if isinstance(industry_profile, dict) else 'NULL')}
+- 題材標籤: {_nullize_text(industry_profile.get('themes_text') if isinstance(industry_profile, dict) else 'NULL')}
+- 主要估值方式: {_nullize_text(industry_profile.get('primary_valuation') if isinstance(industry_profile, dict) else 'NULL')}；是否循環股/P-E陷阱: {_nullize_text(industry_profile.get('cyclical') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('pe_trap_warning') if isinstance(industry_profile, dict) else 'NULL')}
+- 主分類原始 floor / soft / hard: {_nullize_text(industry_profile.get('hybrid_original_caps_text') if isinstance(industry_profile, dict) else 'NULL')}
+- 混合產業權重: {_nullize_text(industry_profile.get('hybrid_taxons_text') if isinstance(industry_profile, dict) else 'NULL')}
+- 混合後 base / floor / soft / hard: {_nullize_text(industry_profile.get('hybrid_mixed_caps_text') if isinstance(industry_profile, dict) else 'NULL')}
+
+【10. Dynamic Cap 2.0 決策摘要】
+{_prompt_dynamic_cap_core(dynamic_cap_pack, mode="decision")}
+
+【11. 產業模型稽核摘要】
+{decision_snapshot_audit_one_line}
+{decision_optional_etf_chip_context}
+【14. AI 關鍵來源摘要】
+{decision_ai_key_source_summary}
+"""
+
+
+
+            full_prompt_for_copy = f"""你是台股研究總監 + 交易策略專家。請用繁體中文、條列、可執行結論，並嚴格使用下方 WAY AI 投資戰情室 2.1 數據。
+
+重要原則：
+1) 請優先尊重系統 2.1 已產出的「月營收公告月份、EPS 拆欄、分歧警告、資料品質報告、法人目標價可信度、公式估值/可操作估值分離、產業估值模型、Dynamic Cap 2.0、最終操作燈號」。
+2) 公式合理估值與公式極限價只代表模型輸出，不可直接當作買進目標；真正操作請以「可操作估值區間」與最終燈號為主。
+3) 若系統 / AI 分歧警告存在，必須先說明分歧對估值可信度與操作可信度的影響，不可直接給樂觀目標價。
+4) EPS 必須分清楚最新單季 EPS、TTM EPS、完整年度 EPS、系統 Forward EPS、AI Forward EPS、法人共識 Forward EPS，不可混用。
+5) 月營收必須以公告月份為準，不可用查詢當月推定最新月營收。
+6) 若關鍵欄位為 NULL，需提出替代判斷法；若資料異常，請明確說「暫不適合做買賣判斷」。
+7) 若產業分類來源為 AI 建議或 keyword_fallback，請先檢查分類是否合理；AI 建議分類屬待確認，不可視為正式 stock_mapping.py 分類。
+8) 請閱讀「產業模型單次快照稽核與更新判斷」，判斷是否需人工檢查產業估值模型；但不可把單次快照直接當成必須更新模型。
+9) 請閱讀「Forward EPS 年期分層估值」，判斷市場/法人是否可能已經用 FY2 或 FY3 EPS 定價；若是，請說明這是先行定價還是過度樂觀。
+10) 研究完整版請額外輸出「模型庫回饋建議」：這不是買賣建議，而是協助日後修正 stock_mapping.py、industry_taxonomy.py、dynamic_cap_model.py 或法人目標價可信度規則；AI 回饋只能作為候選清單，不可直接覆蓋模型庫。
+
+任務要求：
+1) 先做「2.1 資料品質盤點」：逐項說明哪些欄位是系統/AI/推估/NULL，並指出最影響結論的 3 個資料風險。
+2) 解讀「分歧警告」：EPS / YoY / PEG / 合理價 / D/E 若有警告，請說明是否會讓估值降級。
+3) 解讀「產業估值模型」：說明這檔股票適合用哪些估值指標，不適合用哪些指標。
+4) 解讀「公式估值 vs 可操作估值」：請分開說明公式合理價、公式極限價、可操作估值區間，不可混成同一個目標價。
+5) 交易決策：
+   - 先引用系統最終燈號，再判斷是否同意。
+   - 給「可買 / 觀望 / 不建議 / 資料異常」之一。
+   - 買點：給 2~3 個分批區間與理由。
+   - 賣點：給 2~3 個減碼 / 停利 / 停損條件。
+   - 倉位建議：保守 / 中性 / 積極三種配置比例。
+6) 三情境目標價：牛市 / 基準 / 熊市，各列目標價區間、假設前提、觸發條件。
+7) 下月追蹤清單：列出 8 個要追蹤的指標與警戒閾值，必須包含月營收 YoY、MoM、毛利率、EPS、法人目標價或 EPS 預估調整。
+8) 模型庫回饋建議：請依【18. 模型庫回饋建議】輸出模型庫修正候選，並明確標示是否只是觀察，不得把模型回饋混成買賣結論。
+
+輸出格式（必須照做）：
+- [投資結論一句話]
+- [2.1 資料品質與分歧警告]
+- [產業估值模型解讀]
+- [公式估值 vs 可操作估值]
+- [公司優缺點]
+- [買點 / 賣點 / 停損停利]
+- [三情境目標價]
+- [風險與反證]
+- [下月追蹤清單]
+- [模型庫回饋建議｜研究用途，非買賣建議]
+
+以下是系統面板 2.1 精簡打包數據（只保留會影響外部 AI 判斷的採用值、分歧、估值層級、產業模型、Dynamic Cap 與燈號；無資料為 NULL）。若出現數據不合理，可上網查詢並說明不合理原因，但不可忽略系統已標示的分歧與資料品質警告：
+{context_str}
+"""
+
+            research_prompt_for_copy = full_prompt_for_copy
+            buy_decision_prompt_for_copy = f"""你是台股研究總監 + 交易策略專家。請用繁體中文、條列、可執行結論，協助我判斷這檔股票「現在是否值得買進」。
+
+請優先尊重 WAY AI 投資戰情室 2.1 的判讀，尤其是：月營收公告月份、EPS 拆欄、分歧警告、資料品質、法人目標價可信度、公式估值/可操作估值分離、產業估值模型、Dynamic Cap 2.0、最終操作燈號。
+
+重要規則：
+- 不可把公式合理估值或公式極限價直接當買進目標。
+- 買進判斷以可操作估值區間、資料可信度、估值可信度、操作可信度、最終燈號為主。
+- EPS 必須分清楚最新單季 EPS、TTM EPS、完整年度 EPS、系統 Forward EPS、AI Forward EPS、法人共識 Forward EPS。
+- 月營收必須以公告月份為準。
+- 若法人目標價分析師人數為 NULL 或少於 3 人，請降低目標價可信度。
+- 若資料品質不足或關鍵欄位異常，請明確說「暫不適合做買進判斷」。
+- 若同一欄位同時列出系統值與 AI 值，請說明採用哪一個，以及是否影響估值可信度。
+- 若觸發「模型落差風險提示」，請優先判斷落差是否會傷害買進安全邊際；但不要在買進決策版提出模型庫修正建議。
+
+請依序回答：
+1. [投資結論一句話]：可買 / 觀望 / 不建議 / 資料異常，並說明是否同意系統最終燈號。
+2. [買進前資料檢查]：檢查月營收公告月份、EPS 口徑、Forward EPS、法人目標價可信度、公式估值是否被樂觀 EPS 放大，並列出最影響買進判斷的 3 個資料風險。
+3. [產業與成長邏輯]：說明產業主線、未來 1～2 年成長動能，以及成長失速條件。
+4. [估值判斷]：分開說明公式合理價、公式極限價、可操作估值區間、法人目標價，並判斷現價低估 / 合理 / 偏高 / 高估。不可只用 PEG 判斷便宜。
+5. [模型落差風險]：若現價、法人目標價、系統可操作估值與 FY1/FY2/FY3 估值落差過大，請判斷是否只靠 FY2/FY3 才能解釋現價，以及這是否降低買進安全邊際。
+6. [買進策略]：現價可不可以買？給 2～3 個分批買點與理由；若不建議買，說明跌到哪裡或出現什麼條件才可重新評估。
+7. [賣出與風控]：給 2～3 個停利區與 2～3 個停損 / 減碼條件；高題材股需說明拉高是否先收一部分。
+8. [倉位建議]：保守 / 中性 / 積極三種配置比例；資料可信度不足時限制最高倉位。
+9. [三情境目標價]：牛市 / 基準 / 熊市，各列目標價區間、假設前提、觸發條件。
+10. [下月追蹤清單]：列 8 個指標與警戒值，必須包含月營收 YoY、MoM、毛利率、EPS、Forward EPS 或法人 EPS 預估、法人目標價可信度、營益率或 ROE、重要訂單 / 產業事件。
+11. [EPS 年期判斷]：請先用 TTM EPS 判斷目前實際獲利估值，再說明目前股價與法人目標價比較像用 FY1、FY2 還是 FY3 EPS 定價；FY1/FY2/FY3 是預估年度 EPS 序列，不是查詢日後1/2/3年。若用 FY2/FY3 才合理，請說明風險與是否能作為買進依據。
+12. [模型落差是否傷害買進安全邊際]：不要回答「產業模型是否需更新」。請只判斷現價、法人目標價、FY1/FY2/FY3 估值、Dynamic Cap 可操作區間之間的落差，是否已經降低現在買進的安全邊際。
+
+以下是 WAY AI 投資戰情室 2.1「買進決策版」系統資料。這不是完整研究資料包，只保留會直接影響買進判斷的採用值、系統值/AI值、分歧、估值層級、產業模型、Dynamic Cap 與燈號。若資料不合理，可上網查證，但不可忽略系統標示的資料品質與分歧警告：
+{decision_context_str}
+"""
+            
+            # 第 17-C-2：打包提示詞分成「買進決策版 / 研究完整版」
+            with st.expander("📋 點此複製【打包提示詞】至 Gemini Advanced 或 ChatGPT 發問", expanded=True):
+                prompt_mode = st.radio(
+                    "提示詞版本",
+                    ["買進決策版（精簡，建議平常使用）", "研究完整版（完整，適合深度分析）"],
+                    horizontal=True,
+                    key=f"prompt_pack_mode_{curr_id}",
+                )
+                selected_prompt_for_copy = buy_decision_prompt_for_copy if prompt_mode.startswith("買進決策版") else research_prompt_for_copy
+                st.caption("買進決策版已精簡為買進安全邊際判斷：保留採用值、分歧、估值層級、產業模型、Dynamic Cap、燈號與關鍵來源；研究完整版保留模型稽核、同步自檢與模型庫回饋。")
+
+                # 用 json.dumps 包裝提示詞，避免換行、引號或特殊符號造成 JavaScript 失效。
+                safe_prompt_js = json.dumps(selected_prompt_for_copy, ensure_ascii=False)
+                components.html(
+                    f"""
+                    <div style="margin: 10px 0 12px 0; font-family: sans-serif;">
+                        <button
+                            onclick="copyPromptToClipboard()"
+                            style="
+                                width: 100%;
+                                padding: 13px 14px;
+                                border-radius: 10px;
+                                border: 1px solid #4b5563;
+                                background: #2563eb;
+                                color: white;
+                                font-size: 16px;
+                                font-weight: 700;
+                                cursor: pointer;
+                            "
+                        >
+                            📋 一鍵複製目前版本提示詞
+                        </button>
+                        <div id="copyStatus" style="margin-top: 8px; color: #16a34a; font-size: 14px;"></div>
+                    </div>
+
+                    <script>
+                    async function copyPromptToClipboard() {{
+                        const text = {safe_prompt_js};
+                        const status = document.getElementById("copyStatus");
+
+                        try {{
+                            await navigator.clipboard.writeText(text);
+                            status.innerText = "✅ 已複製目前版本提示詞，可直接貼到 Gemini Advanced 或 ChatGPT。";
+                        }} catch (err) {{
+                            const textarea = document.createElement("textarea");
+                            textarea.value = text;
+                            textarea.style.position = "fixed";
+                            textarea.style.left = "-9999px";
+                            textarea.style.top = "0";
+                            document.body.appendChild(textarea);
+                            textarea.focus();
+                            textarea.select();
+
+                            try {{
+                                document.execCommand("copy");
+                                status.innerText = "✅ 已複製目前版本提示詞，可直接貼上使用。";
+                            }} catch (fallbackErr) {{
+                                status.style.color = "#dc2626";
+                                status.innerText = "⚠️ 手機瀏覽器限制自動複製，請改用下方文字框長按複製。";
+                            }}
+
+                            document.body.removeChild(textarea);
+                        }}
+                    }}
+                    </script>
+                    """,
+                    height=105,
+                )
+
+                st.text_area(
+                    "提示詞內容",
+                    value=selected_prompt_for_copy,
+                    height=330,
+                    label_visibility="collapsed",
+                    key=f"copy_prompt_textarea_{curr_id}_{'buy' if prompt_mode.startswith('買進決策版') else 'research'}_{abs(hash(selected_prompt_for_copy)) % 100000000}"
+                )
+            
+            st.markdown("---")
+
+            # ⚔️ 產業同業 PK
+            if st.session_state.show_pk:
+                st.markdown("#### ⚔️ 產業橫向對比 (同業估值與利潤率 PK)")
+                st.markdown("<small style='color:gray;'>*註：透過 AI 動態檢索業務相近的競爭對手，並抓取最新財報數據進行橫向比較。*</small>", unsafe_allow_html=True)
+                with st.spinner("AI 正在深度檢索產業鏈與競爭對手，並同步抓取最新財報數據..."):
+                    peers = get_peers_from_ai(c_name, curr_id, st.session_state.api_key)
+                    if peers:
+                        compare_list = [curr_id] + [p for p in peers if p != curr_id]
+                        compare_data = []
+                        for code in compare_list:
+                            _, p_info = get_stock_data(code, st.session_state.fugle_key, st.session_state.finmind_key)
+                            p_name = get_chinese_name(code) or code
+                            if p_info:
+                                pe_val = s_float(p_info.get("trailingPE"))
+                                pe_fmt = f"{pe_val:.2f}x" if pe_val is not None else "N/A"
+                                gm_fmt = to_pct(s_float(p_info.get('grossMargins')))
+                                om_fmt = to_pct(s_float(p_info.get('operatingMargins')))
+                                roe_fmt = to_pct(s_float(p_info.get('returnOnEquity')))
+                                prev_close_val = s_float(p_info.get("previousClose"))
+                                prev_close_fmt = f"{prev_close_val:.2f}" if prev_close_val is not None else "N/A"
+                                t_eps_p = s_float(p_info.get('trailingEps'))
+                                f_eps_p = s_float(p_info.get('forwardEps'))
+                                t_eps_p_str = f"{t_eps_p:.2f}" if t_eps_p is not None else "N/A"
+                                f_eps_p_str = f"{f_eps_p:.2f}" if f_eps_p is not None else "N/A"
+                                eps_display = f"{t_eps_p_str} / <span style='color:#00bfff;'>{f_eps_p_str}</span>"
+                                if prev_close_val is not None and f_eps_p is not None and f_eps_p > 0: fpe_fmt = f"<b style='color:#FFD700;'>{prev_close_val / f_eps_p:.1f}x</b>"
+                                else: fpe_fmt = "<span style='color:gray;'>N/A</span>"
+                                target_mean_p = s_float(p_info.get('targetMeanPrice'))
+                                if target_mean_p is not None and prev_close_val is not None and prev_close_val > 0:
+                                    upside = ((target_mean_p - prev_close_val) / prev_close_val) * 100
+                                    if upside >= 25: upside_fmt = f"<span style='color:#ff4d4d; font-weight:bold;'>+{upside:.1f}%</span>"
+                                    elif upside > 0: upside_fmt = f"<span style='color:#00cc66;'>+{upside:.1f}%</span>"
+                                    else: upside_fmt = f"<span style='color:#aaa;'>{upside:.1f}%</span>"
+                                    target_display = f"{target_mean_p:.1f} ({upside_fmt})"
+                                else: target_display = "<span style='color:gray;'>無資料</span>"
+                                compare_data.append({"代號": f"{p_name} ({code})", "股價": prev_close_fmt, "前瞻 P/E": fpe_fmt, "預估 EPS": eps_display, "目標價": target_display, "毛利率": gm_fmt, "營益率": om_fmt, "ROE": roe_fmt})
+                        if compare_data:
+                            table_html = "<table style='width:100%; text-align:center; border-collapse: collapse; margin-top: 10px; font-size: 1.05rem; color: #e0e0e0;'><tr style='background-color:#333; color:#fff; border-bottom: 2px solid #555;'><th style='padding:12px;'>公司名稱</th><th>最新收盤價</th><th>前瞻 P/E</th><th>預估 EPS (今/明)</th><th>目標價 (潛在空間)</th><th>毛利率</th><th>營益率</th><th>ROE</th></tr>"
+                            for d in compare_data:
+                                row_bg = "#2c3e50" if str(curr_id) in d['代號'] else "#1e1e1e" 
+                                table_html += f"<tr style='background-color:{row_bg}; border-bottom:1px solid #444;'><td style='padding:12px; color:#ffffff;'><b>{d['代號']}</b></td><td>{d['股價']}</td><td>{d['前瞻 P/E']}</td><td>{d['預估 EPS']}</td><td>{d['目標價']}</td><td>{d['毛利率']}</td><td>{d['營益率']}</td><td style='color:#00bfff;'><b>{d['ROE']}</b></td></tr>"
+                            table_html += "</table>"
+                            st.markdown(table_html, unsafe_allow_html=True)
+                    else: st.error("AI 暫時找不到明確的同業數據，或請檢查您的 API Key 額度。")
+                st.markdown("---")
+
+            # 🌊 雙河流圖 (Tabs) 
+            if df_per_bk is not None and not df_per_bk.empty:
+                st.markdown("### 🌊 估值位階雙河流圖 (P/E & P/B River)")
+                st.markdown("<small style='color:gray;'>*實戰密技：『成長股』看本益比判斷潛力；『景氣循環股』(航運/鋼鐵/面板) 獲利不穩定，必須看淨值比(P/B)河流圖抄底！*</small>", unsafe_allow_html=True)
+            
+                h_reset = hist.copy()
+                h_reset.index.name = 'Date'
+                h_reset = h_reset.reset_index()
+            
+                if h_reset['Date'].dt.tz is not None: h_reset['Date'] = h_reset['Date'].dt.tz_localize(None)
+                h_reset['Date_only'] = h_reset['Date'].dt.date
+            
+                d_per = df_per_bk.drop_duplicates(subset=['date'], keep='last').copy()
+                d_per['date_only'] = d_per['date'].dt.date
+                h_reset = h_reset.drop_duplicates(subset=['Date_only'], keep='last')
+
+                merged = pd.merge(h_reset, d_per, left_on='Date_only', right_on='date_only', how='inner').sort_values('Date_only')
+
+                if not merged.empty: 
+                    tab_pe, tab_pb = st.tabs(["🌊 本益比河流圖 (P/E River)", "⚓ 股價淨值比河流圖 (P/B River - 循環股剋星)"])
+                
+                    with tab_pe:
+                        merged_pe = merged[merged['PER'] > 0].copy()
+                        if len(merged_pe) > 60:
+                            merged_pe['EPS_calc'] = merged_pe['Close'] / merged_pe['PER']
+                            pe_quantiles = merged_pe['PER'].quantile([0.1, 0.25, 0.5, 0.75, 0.9]).values
+
+                            fig_river = go.Figure()
+                            b1 = merged_pe['EPS_calc'] * pe_quantiles[0]
+                            b2 = merged_pe['EPS_calc'] * pe_quantiles[1]
+                            b3 = merged_pe['EPS_calc'] * pe_quantiles[2]
+                            b4 = merged_pe['EPS_calc'] * pe_quantiles[3]
+                            b5 = merged_pe['EPS_calc'] * pe_quantiles[4]
+
+                            fig_river.add_trace(go.Scatter(x=merged_pe['Date'], y=b1, mode='lines', line=dict(color='#00cc66', width=1), name=f'悲觀區 ({pe_quantiles[0]:.1f}x)'))
+                            fig_river.add_trace(go.Scatter(x=merged_pe['Date'], y=b2, mode='lines', fill='tonexty', fillcolor='rgba(0, 204, 102, 0.2)', line=dict(color='#00cc66', width=1), name=f'低估區 ({pe_quantiles[1]:.1f}x)'))
+                            fig_river.add_trace(go.Scatter(x=merged_pe['Date'], y=b3, mode='lines', fill='tonexty', fillcolor='rgba(255, 215, 0, 0.2)', line=dict(color='#FFD700', width=1), name=f'合理區 ({pe_quantiles[2]:.1f}x)'))
+                            fig_river.add_trace(go.Scatter(x=merged_pe['Date'], y=b4, mode='lines', fill='tonexty', fillcolor='rgba(255, 140, 0, 0.2)', line=dict(color='#ff8c00', width=1), name=f'高估區 ({pe_quantiles[3]:.1f}x)'))
+                            fig_river.add_trace(go.Scatter(x=merged_pe['Date'], y=b5, mode='lines', fill='tonexty', fillcolor='rgba(255, 77, 77, 0.2)', line=dict(color='#ff4d4d', width=1), name=f'瘋狂區 ({pe_quantiles[4]:.1f}x)'))
+                            fig_river.add_trace(go.Scatter(x=merged_pe['Date'], y=merged_pe['Close'], mode='lines', line=dict(color='#0033cc', width=3), name='實際股價'))
+
+                            current_pe = merged_pe['PER'].iloc[-1]
+                            current_price = merged_pe['Close'].iloc[-1]
+                        
+                            if current_price <= b2.iloc[-1]: pe_status, status_color = "🔥 處於歷史低估區間！(潛在買點)", "#00cc66"
+                            elif current_price >= b5.iloc[-1]: pe_status, status_color = "🚨 突破歷史瘋狂區間！(極度高估)", "#ff4d4d"
+                            elif current_price >= b4.iloc[-1]: pe_status, status_color = "⚠️ 處於歷史高估區間！(留意風險)", "#ff8c00"
+                            else: pe_status, status_color = "⚖️ 處於歷史合理區間", "#FFD700"
+
+                            fig_river.update_layout(height=450, margin=dict(l=10, r=10, t=50, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), hovermode="x unified")
+                            fig_river.update_yaxes(title_text="股價 (元)", showgrid=True, gridcolor='#e0e0e0')
+
+                            st.markdown(f"<div style='background:#f8f9fa; border-left:4px solid {status_color}; padding:10px; border-radius:5px; margin-bottom:10px; color:#333;'>目前位階推估：<b><span style='color:{status_color};'>{pe_status}</span></b> (最新本益比約 {current_pe:.1f}x)</div>", unsafe_allow_html=True)
+                            st.plotly_chart(fig_river, use_container_width=True)
+                        else:
+                            st.info("⚠️ 缺乏足夠的有效本益比數據 (通常因為過去常處於虧損狀態)，建議切換查看「股價淨值比河流圖」。")
+
+                    with tab_pb:
+                        merged_pb = merged[merged['PBR'] > 0].copy()
+                        if len(merged_pb) > 60:
+                            merged_pb['BVPS_calc'] = merged_pb['Close'] / merged_pb['PBR']
+                            pb_quantiles = merged_pb['PBR'].quantile([0.1, 0.25, 0.5, 0.75, 0.9]).values
+
+                            fig_pb = go.Figure()
+                            pb1 = merged_pb['BVPS_calc'] * pb_quantiles[0]
+                            pb2 = merged_pb['BVPS_calc'] * pb_quantiles[1]
+                            pb3 = merged_pb['BVPS_calc'] * pb_quantiles[2]
+                            pb4 = merged_pb['BVPS_calc'] * pb_quantiles[3]
+                            pb5 = merged_pb['BVPS_calc'] * pb_quantiles[4]
+
+                            fig_pb.add_trace(go.Scatter(x=merged_pb['Date'], y=pb1, mode='lines', line=dict(color='#00cc66', width=1), name=f'悲觀區 ({pb_quantiles[0]:.2f}x)'))
+                            fig_pb.add_trace(go.Scatter(x=merged_pb['Date'], y=pb2, mode='lines', fill='tonexty', fillcolor='rgba(0, 204, 102, 0.2)', line=dict(color='#00cc66', width=1), name=f'低估區 ({pb_quantiles[1]:.2f}x)'))
+                            fig_pb.add_trace(go.Scatter(x=merged_pb['Date'], y=pb3, mode='lines', fill='tonexty', fillcolor='rgba(255, 215, 0, 0.2)', line=dict(color='#FFD700', width=1), name=f'合理區 ({pb_quantiles[2]:.2f}x)'))
+                            fig_pb.add_trace(go.Scatter(x=merged_pb['Date'], y=pb4, mode='lines', fill='tonexty', fillcolor='rgba(255, 140, 0, 0.2)', line=dict(color='#ff8c00', width=1), name=f'高估區 ({pb_quantiles[3]:.2f}x)'))
+                            fig_pb.add_trace(go.Scatter(x=merged_pb['Date'], y=pb5, mode='lines', fill='tonexty', fillcolor='rgba(255, 77, 77, 0.2)', line=dict(color='#ff4d4d', width=1), name=f'瘋狂區 ({pb_quantiles[4]:.2f}x)'))
+                            fig_pb.add_trace(go.Scatter(x=merged_pb['Date'], y=merged_pb['Close'], mode='lines', line=dict(color='#0033cc', width=3), name='實際股價'))
+
+                            current_pb = merged_pb['PBR'].iloc[-1]
+                            current_price_pb = merged_pb['Close'].iloc[-1]
+                        
+                            if current_price_pb <= pb2.iloc[-1]: pb_status, status_color_pb = "⚓ 跌入歷史低估淨值區！(循環股潛買點)", "#00cc66"
+                            elif current_price_pb >= pb5.iloc[-1]: pb_status, status_color_pb = "🚨 突破歷史瘋狂淨值區！(極度高估)", "#ff4d4d"
+                            elif current_price_pb >= pb4.iloc[-1]: pb_status, status_color_pb = "⚠️ 處於歷史高估淨值區！(留意風險)", "#ff8c00"
+                            else: pb_status, status_color_pb = "⚖️ 處於歷史合理淨值區", "#FFD700"
+
+                            fig_pb.update_layout(height=450, margin=dict(l=10, r=10, t=50, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), hovermode="x unified")
+                            fig_pb.update_yaxes(title_text="股價 (元)", showgrid=True, gridcolor='#e0e0e0')
+
+                            st.markdown(f"<div style='background:#f8f9fa; border-left:4px solid {status_color_pb}; padding:10px; border-radius:5px; margin-bottom:10px; color:#333;'>目前位階推估：<b><span style='color:{status_color_pb};'>{pb_status}</span></b> (最新淨值比約 {current_pb:.2f}x)</div>", unsafe_allow_html=True)
+                            st.plotly_chart(fig_pb, use_container_width=True)
+                        else:
+                            st.info("缺乏足夠的淨值比數據。")
+            st.markdown("---")
+
+            # ==========================================
+            # 🚀 專業技術線圖與 KD 指標
+            # ==========================================
+            st.markdown("### 🤖 專業技術線圖與量化型態分析")
+        
+            chart_tf = st.radio("切換 K 線週期：", ["60分線", "日線", "週線", "月線"], index=1, horizontal=True)
+        
+            if chart_tf == "日線":
+                chart_df = hist.copy()
+            else:
+                with st.spinner(f"載入 {chart_tf} 數據中..."):
+                    chart_df = get_chart_data(curr_id, chart_tf, st.session_state.fugle_key)
+            
+            if chart_df.empty: full_df = hist.copy() 
+            else: full_df = chart_df.copy()
+
+            for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                if col not in full_df.columns: full_df[col] = 0.0
+            
+            full_df['MA5'] = full_df['Close'].rolling(5).mean()
+            full_df['MA10'] = full_df['Close'].rolling(10).mean()
+            full_df['MA20'] = full_df['Close'].rolling(20).mean()
+            full_df['MA60'] = full_df['Close'].rolling(60).mean()
+            full_df['Vol_MA20'] = full_df['Volume'].rolling(20).mean()
+        
+            h9, l9 = full_df['High'].rolling(9).max(), full_df['Low'].rolling(9).min()
+            h9_l9_diff = h9 - l9
+            h9_l9_diff[h9_l9_diff == 0] = 1e-9 
+            rsv = (full_df['Close'] - l9) / h9_l9_diff * 100
+        
+            K, D = [50], [50]
+            for v in rsv.fillna(50):
+                K.append(K[-1]*(2/3) + v*(1/3))
+                D.append(D[-1]*(2/3) + K[-1]*(1/3))
+            full_df['K'], full_df['D'] = K[1:], D[1:]
+        
+            plot_df = full_df.tail(120).copy()
+        
+            if not inst_df.empty:
+                # 🛠️ 修復時區問題：強制移除 K 線圖日期的時區，才能跟 FinMind 的日期精準對齊
+                temp_dates = pd.to_datetime(plot_df.index)
+                if temp_dates.tz is not None:
+                    temp_dates = temp_dates.tz_localize(None)
+                temp_dates = temp_dates.normalize()
+            
+                inst_df_aligned = inst_df.copy()
+                inst_df_aligned.index = pd.to_datetime(inst_df_aligned.index).normalize()
+            
+                plot_df['Foreign'] = temp_dates.map(inst_df_aligned['Foreign']).fillna(0)
+                plot_df['Trust'] = temp_dates.map(inst_df_aligned['Trust']).fillna(0)
+                plot_df['Dealer'] = temp_dates.map(inst_df_aligned['Dealer']).fillna(0)
+            else:
+                plot_df['Foreign'] = 0; plot_df['Trust'] = 0; plot_df['Dealer'] = 0
+
+            def safe_val(series, fallback=0):
+                if len(series) == 0: return fallback
+                val = series.iloc[-1]
+                return val if not pd.isna(val) else fallback
+
+            last_close = safe_val(plot_df['Close'])
+            ma5_last = safe_val(plot_df['MA5'], last_close)
+            ma20_last = safe_val(plot_df['MA20'], last_close)
+            ma60_last = safe_val(plot_df['MA60'], ma20_last)
+            k_last = safe_val(plot_df['K'], 50)
+            d_last = safe_val(plot_df['D'], 50)
+        
+            recent_20 = plot_df.tail(20)
+            recent_high = recent_20['High'].max() if not recent_20.empty else last_close
+            recent_low = recent_20['Low'].min() if not recent_20.empty else last_close
+        
+            if not recent_20.empty and 'Volume' in recent_20.columns and recent_20['Volume'].sum() > 0:
+                max_vol_idx = recent_20['Volume'].idxmax()
+                max_vol_day = recent_20.loc[max_vol_idx]
+                is_high_vol = max_vol_day['Volume'] > (max_vol_day['Vol_MA20'] * 2)
+                is_at_high = max_vol_day['High'] >= (recent_high * 0.95)
+                is_dropping = last_close < max_vol_day['Low']
+                high_vol_warning = is_high_vol and is_at_high and is_dropping
+                vol_escape_price = max_vol_day['High']
+            else:
+                high_vol_warning = False
+                vol_escape_price = last_close
+        
+            support_price = max(recent_low, ma60_last) if last_close > ma60_last else recent_low
+            resist_price = recent_high if last_close > ma20_last else min(recent_high, ma20_last)
+
+            if last_close < ma60_last: trend_status, trend_color = "⚠️ 跌破長線支撐 (趨勢轉弱)", "#00cc66"
+            elif last_close > ma20_last and ma5_last > ma20_last: trend_status, trend_color = "📈 多頭強勢 (站上短中均線)", "#ff4d4d"
+            elif last_close < ma20_last and ma5_last < ma20_last: trend_status, trend_color = "📉 空頭弱勢 (跌破中線)", "#00cc66"
+            else: trend_status, trend_color = "↔️ 區間震盪 (方向未明)", "#ffd700"
+            
+            if high_vol_warning: adv_text, buy_rec, sell_rec = "🚨 【量價警訊】高檔爆出天量且跌破低點，切勿盲目接刀！", "強烈觀望", f"反彈至 {vol_escape_price:.2f} 逃命"
+            elif last_close < ma60_last: adv_text, buy_rec, sell_rec = "📉 【趨勢轉弱】跌破長期均線，應耐心等待底部確立。", "等待站回均線", f"{ma60_last:.2f} (長線壓力)"
+            elif k_last < 25 and k_last > d_last: adv_text, buy_rec, sell_rec = "📈 【技術反彈】KD 低檔黃金交叉，可嘗試逢低少量佈局。", f"現價~{support_price:.2f} 附近", f"{resist_price:.2f} (上檔壓力)"
+            elif k_last > 80 and k_last < d_last: adv_text, buy_rec, sell_rec = "⚠️ 【動能轉弱】KD 高檔死亡交叉，建議適度獲利了結保住利潤。", "暫時觀望", f"現價~{resist_price:.2f} 附近"
+            elif last_close > ma20_last: adv_text, buy_rec, sell_rec = "🔥 【多方格局】量價配合良好，拉回中線(20MA)有守可伺機介入。", f"{ma20_last:.2f} (中線支撐)", f"{resist_price:.2f} (近期前高)"
+            else: adv_text, buy_rec, sell_rec = "❄️ 【空方格局】短線均線反壓，反彈至均線壓力區可考慮減碼。", "等待技術面打底", f"{ma20_last:.2f} (中線壓力)"
+
+            st.markdown(f"""
+            <div style='background:#1e1e1e; padding:15px; border-radius:8px; border:1px solid #333; margin-bottom:20px;'>
+                <h4 style='margin-top:0; color:#fff;'>🎯 演算法量化交易策略</h4>
+                <div style='display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px;'>
+                    <div style='flex:1; min-width:120px;'><div style='color:#aaa; font-size:0.9rem;'>目前趨勢</div><div style='font-size:1.1rem; font-weight:bold; color:{trend_color};'>{trend_status}</div></div>
+                    <div style='flex:1; min-width:120px;'><div style='color:#aaa; font-size:0.9rem;'>下檔支撐</div><div style='font-size:1.1rem; font-weight:bold; color:#00bfff;'>{support_price:.2f}</div></div>
+                    <div style='flex:1; min-width:120px;'><div style='color:#aaa; font-size:0.9rem;'>上檔壓力</div><div style='font-size:1.1rem; font-weight:bold; color:#ab82ff;'>{resist_price:.2f}</div></div>
+                    <div style='flex:1; min-width:120px;'><div style='color:#aaa; font-size:0.9rem;'>建議買點</div><div style='font-size:1.1rem; font-weight:bold; color:#ff4d4d;'>{buy_rec}</div></div>
+                    <div style='flex:1; min-width:120px;'><div style='color:#aaa; font-size:0.9rem;'>建議賣點</div><div style='font-size:1.1rem; font-weight:bold; color:#00cc66;'>{sell_rec}</div></div>
+                </div>
+                <div style='margin-top:15px; padding-top:10px; border-top:1px dashed #444;'><span style='color:#aaa; font-size:0.9rem;'>💡 策略解析：</span><span style='color:#ffd700; font-weight:bold;'>{adv_text}</span></div>
+            </div>
+            """.replace('\n', ''), unsafe_allow_html=True)
+        
+            def get_ma_trend(ma_series):
+                if len(ma_series) < 2 or pd.isna(ma_series.iloc[-1]): return 0.0, "-", "#aaa"
+                last_val = ma_series.iloc[-1]
+                prev_val = ma_series.iloc[-2]
+                if pd.isna(prev_val): return last_val, "-", "#aaa"
+                if last_val > prev_val: return last_val, "▲", "#ff4d4d"
+                elif last_val < prev_val: return last_val, "▼", "#00cc66"
+                return last_val, "-", "#aaa"
+            
+            m5_v, m5_d, m5_c = get_ma_trend(plot_df['MA5'])
+            m10_v, m10_d, m10_c = get_ma_trend(plot_df['MA10'])
+            m20_v, m20_d, m20_c = get_ma_trend(plot_df['MA20'])
+            m60_v, m60_d, m60_c = get_ma_trend(plot_df['MA60'])
+
+            ma_html = f"""
+            <div style='display: flex; gap: 20px; font-size: 1.05rem; padding: 10px 15px; background: #1e1e1e; border-radius: 8px; border: 1px solid #333; margin-bottom: 10px; flex-wrap: wrap; align-items: center;'>
+                <div style='color: #fff;'><span style='color: #00bfff; font-size:1.2rem; vertical-align:middle;'>■</span> <b>MA5</b> {m5_v:.2f} <span style='color:{m5_c}; font-size:0.9rem;'>{m5_d}</span></div>
+                <div style='color: #fff;'><span style='color: #ab82ff; font-size:1.2rem; vertical-align:middle;'>■</span> <b>MA10</b> {m10_v:.2f} <span style='color:{m10_c}; font-size:0.9rem;'>{m10_d}</span></div>
+                <div style='color: #fff;'><span style='color: #ff8c00; font-size:1.2rem; vertical-align:middle;'>■</span> <b>MA20</b> {m20_v:.2f} <span style='color:{m20_c}; font-size:0.9rem;'>{m20_d}</span></div>
+                <div style='color: #fff;'><span style='color: #ffd700; font-size:1.2rem; vertical-align:middle;'>■</span> <b>MA60</b> {m60_v:.2f} <span style='color:{m60_c}; font-size:0.9rem;'>{m60_d}</span></div>
+            </div>
+            """
+            st.markdown(clean_html(ma_html), unsafe_allow_html=True)
+        
+            fig_k = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.5, 0.25, 0.25], vertical_spacing=0.05, specs=[[{"secondary_y": True}], [{"secondary_y": False}], [{"secondary_y": False}]])
+        
+            fig_k.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='K線', increasing_line_color='#ff4d4d', decreasing_line_color='#00cc66'), row=1, col=1, secondary_y=False)
+            fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA5'], mode='lines', name='5MA', line=dict(color='#00bfff', width=2.5)), row=1, col=1, secondary_y=False)
+            fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA10'], mode='lines', name='10MA', line=dict(color='#ab82ff', width=1.8)), row=1, col=1, secondary_y=False)
+            fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], mode='lines', name='20MA', line=dict(color='#ff8c00', width=1.8)), row=1, col=1, secondary_y=False)
+            fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], mode='lines', name='60MA', line=dict(color='#ffd700', width=1.8)), row=1, col=1, secondary_y=False)
+        
+            vol_colors = ['#ff4d4d' if c >= o else '#00cc66' for c, o in zip(plot_df['Close'], plot_df['Open'])]
+            fig_k.add_trace(go.Bar(x=plot_df.index, y=plot_df['Volume']/1000, marker_color=vol_colors, name='成交量(張)', opacity=0.5), row=1, col=1, secondary_y=True)
+        
+            f_colors = ['#ff4d4d' if v > 0 else '#00cc66' for v in plot_df['Foreign']]
+            t_colors = ['#ff4d4d' if v > 0 else '#00cc66' for v in plot_df['Trust']]
+            d_colors = ['#ff4d4d' if v > 0 else '#00cc66' for v in plot_df['Dealer']]
+            fig_k.add_trace(go.Bar(x=plot_df.index, y=plot_df['Foreign'], name='外資', marker_color=f_colors, opacity=0.8), row=2, col=1)
+            fig_k.add_trace(go.Bar(x=plot_df.index, y=plot_df['Trust'], name='投信', marker_color=t_colors, opacity=0.8), row=2, col=1)
+            fig_k.add_trace(go.Bar(x=plot_df.index, y=plot_df['Dealer'], name='自營商', marker_color=d_colors, opacity=0.8), row=2, col=1)
+
+            fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['K'], mode='lines', name='K9', line=dict(color='#00bfff', width=1.5)), row=3, col=1, secondary_y=False)
+            fig_k.add_trace(go.Scatter(x=plot_df.index, y=plot_df['D'], mode='lines', name='D9', line=dict(color='#ff8c00', width=1.5)), row=3, col=1, secondary_y=False)
+        
+            max_vol = plot_df['Volume'].max() / 1000 if not plot_df['Volume'].empty else 100
+            fig_k.update_yaxes(side="left", showgrid=False, showticklabels=False, range=[0, max_vol * 3.5], secondary_y=True, row=1, col=1)
+            fig_k.update_yaxes(side="right", mirror=True, showline=True, linecolor='#555', secondary_y=False, row=1, col=1)
+            fig_k.update_yaxes(title_text="買賣超(張)", side="right", mirror=True, showline=True, linecolor='#555', row=2, col=1)
+            fig_k.update_yaxes(range=[0, 100], dtick=20, side="right", mirror=True, showline=True, linecolor='#555', row=3, col=1)
+        
+            if not plot_df.empty and chart_tf == "日線":
+                idx_norm = plot_df.index.normalize()
+                dt_all = pd.date_range(start=idx_norm[0], end=idx_norm[-1])
+                dt_obs = [d.strftime("%Y-%m-%d") for d in idx_norm]
+                dt_breaks = [d.strftime("%Y-%m-%d") for d in dt_all if d.strftime("%Y-%m-%d") not in dt_obs]
+            else:
+                dt_breaks = []
+
+            if chart_tf == "60分線":
+                x_fmt = "%m/%d %H:%M"
+                rb = [dict(bounds=["sat", "mon"]), dict(bounds=[13.5, 9], pattern="hour")]
+            elif chart_tf == "月線":
+                x_fmt = "%Y/%m"
+                rb = [] 
+            elif chart_tf == "週線":
+                x_fmt = "%Y/%m/%d"
+                rb = [] 
+            else: 
+                x_fmt = "%m/%d"
+                rb = [dict(bounds=["sat", "mon"])] 
+                if dt_breaks:
+                    rb.append(dict(values=dt_breaks)) 
+
+            fig_k.update_xaxes(rangebreaks=rb, tickformat=x_fmt, showgrid=True, gridcolor='#333', mirror=True, showline=True, linecolor='#555')
+            fig_k.update_layout(height=750, xaxis_rangeslider_visible=False, margin=dict(l=10,r=10,t=10,b=10), template="plotly_dark", hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
+            st.plotly_chart(fig_k, use_container_width=True)
+        else:
+            st.error(f"找不到代號 {curr_id} 的資料，請確認代號是否正確或重新整理。")
