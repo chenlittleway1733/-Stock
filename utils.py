@@ -1881,7 +1881,7 @@ def build_forward_eps_tiered_valuation_report(
 ):
     """建立 TTM / FY1 / FY2 / FY3 EPS 分層估值與法人目標價反推表。
 
-    第 17-C-9c 定義：
+    第 17-C-9c-hotfix44 定義：
     - TTM EPS：近四季已實現 EPS，用於目前實際獲利估值與風控。
     - FY1/FY2/FY3 EPS：法人預估「年度 EPS 序列」，不是從查詢日起算 1/2/3 年後 EPS。
     - FY1：一年預估 EPS。
