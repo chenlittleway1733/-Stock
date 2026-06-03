@@ -1881,12 +1881,12 @@ def build_forward_eps_tiered_valuation_report(
 ):
     """建立 TTM / FY1 / FY2 / FY3 EPS 分層估值與法人目標價反推表。
 
-    第 17-C-9a 定義：
+    第 17-C-9c 定義：
     - TTM EPS：近四季已實現 EPS，用於目前實際獲利估值與風控。
     - FY1/FY2/FY3 EPS：法人預估「年度 EPS 序列」，不是從查詢日起算 1/2/3 年後 EPS。
-    - FY1：第一個市場/法人主要預估年度 EPS。
-    - FY2：第二個法人預估年度 EPS。
-    - FY3：第三個法人預估年度 EPS 或長期情境 EPS；僅供高風險情境。
+    - FY1：一年預估 EPS。
+    - FY2：第二年預估 EPS。
+    - FY3：第三年預估 EPS 或長期情境 EPS；僅供高風險情境。
     """
     def sf(v):
         try:
@@ -1905,17 +1905,31 @@ def build_forward_eps_tiered_valuation_report(
         "hard": sf(hard_ceiling),
     }
 
-    fy_definition = "FY1/FY2/FY3 EPS 是法人預估年度 EPS 序列，不是查詢日後 1/2/3 年的滾動 EPS；請以 EPS 對應年度欄位解讀。"
+    fy_definition = "FY1/FY2/FY3 EPS 是預估年度 EPS 序列；FY1=一年預估EPS、FY2=第二年預估EPS、FY3=第三年預估EPS，實際年度請以 EPS 對應年度欄位解讀。"
+
+    def year_label(y):
+        if y is None or str(y).strip() in ["", "未標示", "None", "nan"]:
+            return "年期未明"
+        s = str(y).strip()
+        if s.endswith("E"):
+            return s
+        if re.match(r"^\d{4}$", s):
+            return f"{s}E"
+        return s
+
+    fy1_label = f"{year_label(fy1_year)}，一年預估 EPS" if fy1_year is not None else "年期未明，一年預估 EPS，請人工確認"
+    fy2_label = f"{year_label(fy2_year)}，第二年預估 EPS" if fy2_year is not None else "年期未明，第二年預估 EPS，請人工確認"
+    fy3_label = f"{year_label(fy3_year)}，第三年預估 EPS / 長期情境 EPS" if fy3_year is not None else "年期未明，第三年預估 EPS / 長期情境 EPS，請人工確認"
 
     rows = []
     tiers = [
-        ("TTM 目前實際獲利估值", "TTM EPS", ttm_eps, "近四季", caps["formula"], "看目前已實現獲利與風控；不反映未來成長。"),
-        ("FY1 保守 Forward 估值", "FY1 EPS", fy1_eps, fy1_year, caps["formula"], "第一個法人主要預估年度 EPS；主要作防守與合理估值參考。"),
-        ("FY2 市場先行估值", "FY2 EPS", fy2_eps, fy2_year, caps["formula"], "第二個法人預估年度 EPS；可解釋市場先行 6～18 個月，但需折扣看待。"),
-        ("FY3 高風險樂觀情境", "FY3 EPS", fy3_eps, fy3_year, caps["soft"], "第三個法人預估年度或長期情境 EPS；不可直接視為買進目標。"),
+        ("TTM 目前實際獲利估值", "TTM EPS", "近四季已實現 EPS", ttm_eps, "近四季", caps["formula"], "看目前已實現獲利與風控；不反映未來成長。"),
+        ("FY1 一年預估估值", "FY1 EPS", fy1_label, fy1_eps, year_label(fy1_year), caps["formula"], "一年預估 EPS；主要作防守與合理估值參考。"),
+        ("FY2 第二年預估估值", "FY2 EPS", fy2_label, fy2_eps, year_label(fy2_year), caps["formula"], "第二年預估 EPS；可解釋市場先行 6～18 個月，但需折扣看待。"),
+        ("FY3 第三年預估 / 高風險情境", "FY3 EPS", fy3_label, fy3_eps, year_label(fy3_year), caps["soft"], "第三年預估 EPS 或長期情境 EPS；不可直接視為買進目標。"),
     ]
 
-    for tier_name, eps_label, eps, year, cap, note in tiers:
+    for tier_name, eps_label, display_name, eps, year, cap, note in tiers:
         e = sf(eps)
         c = sf(cap)
         price = e * c if e is not None and e > 0 and c is not None else None
@@ -1926,6 +1940,7 @@ def build_forward_eps_tiered_valuation_report(
         rows.append({
             "估值層": tier_name,
             "EPS口徑": eps_label,
+            "顯示名稱": display_name,
             "EPS對應年度/期間": year if year is not None else "未標示",
             "EPS數值": e,
             "採用倍率": c,
@@ -1972,6 +1987,9 @@ def build_forward_eps_tiered_valuation_report(
         "fy1_year": fy1_year,
         "fy2_year": fy2_year,
         "fy3_year": fy3_year,
+        "fy1_label": fy1_label,
+        "fy2_label": fy2_label,
+        "fy3_label": fy3_label,
         "eps_basis": eps_basis or "未標示",
         "eps_source_note": eps_source_note or "—",
         "market_view": market_view,

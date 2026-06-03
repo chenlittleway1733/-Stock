@@ -472,7 +472,7 @@ def render_main_page(sidebar_state=None):
             ai_fiscal_year_eps = pick_first_number(ai_fin.get('fiscal_year_eps')) if has_ai_fin_fetch else None
             ai_forward_eps_ai = pick_first_number(ai_fin.get('forward_eps_ai'), ai_fin.get('forward_eps')) if has_ai_fin_fetch else None
             ai_forward_eps_consensus = pick_first_number(ai_fin.get('forward_eps_consensus')) if has_ai_fin_fetch else None
-            # 第 17-C-9a：Forward EPS 年期分層，避免市場/法人看 FY2/FY3 時被 FY1 低估。
+            # 第 17-C-9c：Forward EPS 年期分層，避免市場/法人看 FY2/FY3 時被 FY1 低估。
             ai_forward_eps_fy1 = pick_first_number(ai_fin.get('forward_eps_fy1'), ai_forward_eps_consensus, ai_forward_eps_ai) if has_ai_fin_fetch else None
             ai_forward_eps_fy2 = pick_first_number(ai_fin.get('forward_eps_fy2')) if has_ai_fin_fetch else None
             ai_forward_eps_fy3 = pick_first_number(ai_fin.get('forward_eps_fy3')) if has_ai_fin_fetch else None
@@ -668,7 +668,7 @@ def render_main_page(sidebar_state=None):
             cap_ttm_eps = _adopt_for_cap(eff_t_eps, ai_t_eps, 'TTM EPS', ['ttm_eps', 'trailing_eps'], 'lower_better_when_diverged', 0.30)
             cap_ai_forward_eps = ai_forward_eps_consensus if ai_forward_eps_consensus is not None else ai_forward_eps_ai
             cap_system_forward_eps = sys_forward_eps_system
-            # 17-C-9a：估值用 Forward EPS 口徑統一。
+            # 17-C-9c：估值用 Forward EPS 口徑統一。
             # 優先順序：法人共識 Forward EPS > 系統 Forward EPS > AI Forward EPS。
             # 最新單季 EPS 只用於短期獲利動能，不得直接帶入年度估值。
             cap_adopted_forward_eps = ai_forward_eps_fy1 if ai_forward_eps_fy1 is not None else (ai_forward_eps_consensus if ai_forward_eps_consensus is not None else (cap_system_forward_eps if cap_system_forward_eps is not None else cap_ai_forward_eps))
@@ -775,9 +775,9 @@ def render_main_page(sidebar_state=None):
                     _cap_low = dynamic_cap_pack.get("operable_cap_low")
                     _cap_high = dynamic_cap_pack.get("operable_cap_high")
                     if _cap_low is not None and _cap_high is not None:
-                        cap_reason = f"Dynamic Cap 2.0 可操作倍率：{float(_cap_low):.1f}～{float(_cap_high):.1f}x；中性建議 {suggested_cap:.1f}x。已採 17-C-9a：AI 校對後採用值 + 分歧折扣校準 + 循環復甦區間 + 產業 hard ceiling。"
+                        cap_reason = f"Dynamic Cap 2.0 可操作倍率：{float(_cap_low):.1f}～{float(_cap_high):.1f}x；中性建議 {suggested_cap:.1f}x。已採 17-C-9c：AI 校對後採用值 + 分歧折扣校準 + 循環復甦區間 + 產業 hard ceiling。"
                     else:
-                        cap_reason = f"Dynamic Cap 2.0 最終建議倍率：{suggested_cap:.1f}x。已採 17-C-9a：AI 校對後採用值 + 分歧折扣校準 + 循環復甦區間 + 產業 hard ceiling。"
+                        cap_reason = f"Dynamic Cap 2.0 最終建議倍率：{suggested_cap:.1f}x。已採 17-C-9c：AI 校對後採用值 + 分歧折扣校準 + 循環復甦區間 + 產業 hard ceiling。"
                 else:
                     suggested_cap = float(industry_profile.get('cap_hint') or 30.0)
                     cap_reason = f"此產業主要估值模式為 {dynamic_cap_pack.get('valuation_mode', industry_profile.get('primary_valuation', 'N/A'))}，P/E Cap 僅作輔助；後續請優先看 P/B / 週期 / 題材落地。"
@@ -788,7 +788,7 @@ def render_main_page(sidebar_state=None):
                     value=float(suggested_cap),
                     step=5.0,
                     key=f"dynamic_cap_input_{curr_id}_{cap_refresh_token}",
-                    help="第 17-C-9a：重構產業基準倍率，加入市場/法人隱含倍率、負 EPS 防呆與題材落地檢查。"
+                    help="第 17-C-9c：重構產業基準倍率，加入市場/法人隱含倍率、負 EPS 防呆與題材落地檢查。"
                 )
                 if dynamic_cap_pack.get("available"):
                     # 使用者仍可手動覆寫 Cap；若覆寫，估值公式採手動值，拆解表仍保留系統建議值。
@@ -865,9 +865,9 @@ def render_main_page(sidebar_state=None):
                 {"field": "完整年度 EPS", "system_source": "未穩定提供，需 AI/年報補齊", "system_value": sys_fiscal_year_eps, "ai_source": _ai_src("fiscal_year_eps"), "ai_source_url": _ai_url("fiscal_year_eps"), "ai_value": ai_fiscal_year_eps, "adopted_value": ai_fiscal_year_eps, "adopted_source": "AI補齊" if ai_fiscal_year_eps is not None else "無可用資料", "period": ai_period_text, "fmt": "num", "notes": "年度基準，不與 TTM 混用"},
                 {"field": "Forward EPS－系統", "system_source": "yfinance forwardEps；必要時由 TTM EPS×成長率推估", "system_value": sys_forward_eps_system, "ai_source": "不使用AI", "ai_source_url": "", "ai_value": None, "adopted_value": sys_forward_eps_system, "adopted_source": "系統/推估" if sys_forward_eps_system is not None else "無可用資料", "period": "系統/推估", "fmt": "num"},
                 {"field": "Forward EPS－AI/共識", "system_source": "不使用系統", "system_value": None, "ai_source": _ai_src("forward_eps_consensus") if ai_forward_eps_consensus is not None else _ai_src("forward_eps_ai"), "ai_source_url": _ai_url("forward_eps_consensus") if ai_forward_eps_consensus is not None else _ai_url("forward_eps_ai"), "ai_value": ai_f_eps_calc, "adopted_value": ai_f_eps_calc, "adopted_source": "法人共識/FY1" if ai_forward_eps_fy1 is not None or ai_forward_eps_consensus is not None else ("AI補齊" if ai_forward_eps_ai is not None else "無可用資料"), "period": ai_period_text, "fmt": "num", "notes": "與系統 Forward EPS 分開比較"},
-                {"field": "Forward EPS－FY1", "system_source": "不使用系統", "system_value": None, "ai_source": _ai_src("forward_eps_fy1"), "ai_source_url": _ai_url("forward_eps_fy1"), "ai_value": ai_forward_eps_fy1, "adopted_value": ai_forward_eps_fy1, "adopted_source": "AI/法人FY1" if ai_forward_eps_fy1 is not None else "無可用資料", "period": _nullize_text(ai_forward_eps_fy1_year), "fmt": "num", "notes": "第17-C-9a：FY1 保守估值用"},
-                {"field": "Forward EPS－FY2", "system_source": "不使用系統", "system_value": None, "ai_source": _ai_src("forward_eps_fy2"), "ai_source_url": _ai_url("forward_eps_fy2"), "ai_value": ai_forward_eps_fy2, "adopted_value": ai_forward_eps_fy2, "adopted_source": "AI/法人FY2" if ai_forward_eps_fy2 is not None else "無可用資料", "period": _nullize_text(ai_forward_eps_fy2_year), "fmt": "num", "notes": "第17-C-9a：市場先行估值用，不直接當買點"},
-                {"field": "Forward EPS－FY3", "system_source": "不使用系統", "system_value": None, "ai_source": _ai_src("forward_eps_fy3"), "ai_source_url": _ai_url("forward_eps_fy3"), "ai_value": ai_forward_eps_fy3, "adopted_value": ai_forward_eps_fy3, "adopted_source": "AI/法人FY3" if ai_forward_eps_fy3 is not None else "無可用資料", "period": _nullize_text(ai_forward_eps_fy3_year), "fmt": "num", "notes": "第17-C-9a：高風險樂觀情境，不作買點"},
+                {"field": "Forward EPS－FY1", "system_source": "不使用系統", "system_value": None, "ai_source": _ai_src("forward_eps_fy1"), "ai_source_url": _ai_url("forward_eps_fy1"), "ai_value": ai_forward_eps_fy1, "adopted_value": ai_forward_eps_fy1, "adopted_source": "AI/法人FY1" if ai_forward_eps_fy1 is not None else "無可用資料", "period": _nullize_text(ai_forward_eps_fy1_year), "fmt": "num", "notes": "第17-C-9c：FY1 保守估值用"},
+                {"field": "Forward EPS－FY2", "system_source": "不使用系統", "system_value": None, "ai_source": _ai_src("forward_eps_fy2"), "ai_source_url": _ai_url("forward_eps_fy2"), "ai_value": ai_forward_eps_fy2, "adopted_value": ai_forward_eps_fy2, "adopted_source": "AI/法人FY2" if ai_forward_eps_fy2 is not None else "無可用資料", "period": _nullize_text(ai_forward_eps_fy2_year), "fmt": "num", "notes": "第17-C-9c：市場先行估值用，不直接當買點"},
+                {"field": "Forward EPS－FY3", "system_source": "不使用系統", "system_value": None, "ai_source": _ai_src("forward_eps_fy3"), "ai_source_url": _ai_url("forward_eps_fy3"), "ai_value": ai_forward_eps_fy3, "adopted_value": ai_forward_eps_fy3, "adopted_source": "AI/法人FY3" if ai_forward_eps_fy3 is not None else "無可用資料", "period": _nullize_text(ai_forward_eps_fy3_year), "fmt": "num", "notes": "第17-C-9c：高風險樂觀情境，不作買點"},
                 {"field": "營收 YoY", "system_source": "FinMind 月營收優先；yfinance 備援", "system_value": rev_growth, "ai_source": _ai_src("yoy"), "ai_source_url": _ai_url("yoy"), "ai_value": ai_yoy, "adopted_value": eff_rg, "adopted_source": _adopt_src(rev_growth, ai_yoy, "FinMind/yfinance", "AI補齊"), "period": latest_rev_period, "fmt": "pct", "is_stale": rev_is_stale, "notes": latest_rev_notice or ("月營收可能不是最新公告月份" if rev_is_stale else "")},
                 {"field": "營收 MoM", "system_source": "FinMind 月營收", "system_value": (latest_mom_val / 100.0) if latest_mom_val is not None else None, "ai_source": _ai_src("mom"), "ai_source_url": _ai_url("mom"), "ai_value": ai_mom, "adopted_value": (latest_mom_val / 100.0) if latest_mom_val is not None else ai_mom, "adopted_source": "FinMind 月營收/AI覆蓋", "period": latest_rev_period, "fmt": "pct", "is_stale": rev_is_stale},
                 {"field": "毛利率", "system_source": "yfinance；缺值時 FinMind 財報健康度", "system_value": gross_margin, "ai_source": _ai_src("gross_margin"), "ai_source_url": _ai_url("gross_margin"), "ai_value": ai_gm, "adopted_value": eff_gm, "adopted_source": _adopt_src(gross_margin, ai_gm), "period": ai_period_text if gross_margin is None and ai_gm is not None else "系統最新可得", "fmt": "pct", "notes": dq_note_text if "毛利率" in dq_note_text else ""},
@@ -886,7 +886,7 @@ def render_main_page(sidebar_state=None):
                 except Exception:
                     return default
 
-            # 17-C-9a：倍率分層。可操作倍率 ≠ 公式合理倍率 ≠ 樂觀/極限倍率。
+            # 17-C-9c：倍率分層。可操作倍率 ≠ 公式合理倍率 ≠ 樂觀/極限倍率。
             operable_pe_cap = _cap_float(target_pe_cap, suggested_cap)
             formula_pe_cap = _cap_float(dynamic_cap_pack.get("formula_cap"), None)
             if formula_pe_cap is None:
@@ -899,7 +899,7 @@ def render_main_page(sidebar_state=None):
                 formula_pe_cap = min(formula_pe_cap, soft_pe_cap)
             extreme_pe_cap_for_calc = soft_pe_cap if soft_pe_cap is not None else operable_pe_cap
 
-            # 17-C-9a：公式合理估值口徑修正。
+            # 17-C-9c：公式合理估值口徑修正。
             # 舊邏輯曾使用 PEG/成長率推導倍率，容易把 5.11% 成長率誤當 5.11x 倍率。
             # 新邏輯一律使用：Forward EPS × formula_cap；若系統 Forward EPS 缺值，系統公式價維持 N/A。
             if eff_f_eps is not None and eff_f_eps > 0 and formula_pe_cap is not None:
@@ -920,7 +920,7 @@ def render_main_page(sidebar_state=None):
                 manual_cap_hit_hard = True
             manual_target_price = eff_f_eps * manual_cap_for_calc if eff_f_eps is not None and eff_f_eps > 0 and manual_cap_for_calc is not None else None
 
-            # 17-C-9a：AI/法人共識公式合理估值同樣使用 Forward EPS × formula_cap。
+            # 17-C-9c：AI/法人共識公式合理估值同樣使用 Forward EPS × formula_cap。
             # 不再把 AI 成長率直接當成 PE 倍數。
             if has_ai_fin_fetch and ai_f_eps_calc is not None and ai_f_eps_calc > 0 and formula_pe_cap is not None:
                 ai_target_price_est = ai_f_eps_calc * formula_pe_cap
@@ -931,7 +931,7 @@ def render_main_page(sidebar_state=None):
             ai_extreme_target_price = ai_f_eps_calc * extreme_pe_cap_for_calc if has_ai_fin_fetch and ai_f_eps_calc is not None and ai_f_eps_calc > 0 and extreme_pe_cap_for_calc is not None else None
             ai_manual_target_price = ai_f_eps_calc * manual_cap_for_calc if has_ai_fin_fetch and ai_f_eps_calc is not None and ai_f_eps_calc > 0 and manual_cap_for_calc is not None else None
 
-            # 17-C-9a：市場 / 法人隱含 Forward P/E 對照。用來解釋現價、法人價與系統估值差距。
+            # 17-C-9c：市場 / 法人隱含 Forward P/E 對照。用來解釋現價、法人價與系統估值差距。
             implied_eps = cap_adopted_forward_eps
             market_implied_pe = curr_p / implied_eps if implied_eps is not None and implied_eps > 0 and curr_p is not None else None
             target_avg_implied_pe = ai_me_val / implied_eps if implied_eps is not None and implied_eps > 0 and ai_me_val is not None else None
@@ -1112,7 +1112,7 @@ def render_main_page(sidebar_state=None):
             )
             target_confidence = valuation_separation.get('target_confidence', classify_target_price_confidence(ai_analyst_count))
             # ==========================================
-            # 📆 第 17-C-9a：Forward EPS 年期分層估值
+            # 📆 第 17-C-9c：Forward EPS 年期分層估值
             # ==========================================
             forward_eps_tier_pack = build_forward_eps_tiered_valuation_report(
                 current_price=curr_p,
@@ -1134,7 +1134,7 @@ def render_main_page(sidebar_state=None):
                 eps_basis=ai_forward_eps_fy_basis,
             )
             # ==========================================
-            # 🧪 第 17-C-9a：產業模型單次快照稽核表
+            # 🧪 第 17-C-9c：產業模型單次快照稽核表
             # ==========================================
             snapshot_audit = build_industry_model_snapshot_audit(
                 stock_id=curr_id,
@@ -1207,13 +1207,16 @@ def render_main_page(sidebar_state=None):
                 )
                 st.caption("公式合理估值與公式極限價只顯示模型輸出；可操作估值區間會額外考慮保守 EPS、法人樣本數、系統/AI 分歧警告與產業估值模型。")
                 st.dataframe(valuation_separation.get('report'), use_container_width=True, hide_index=True)
-                with st.expander("📆 17-C-9a Forward EPS 年期分層估值", expanded=True):
+                with st.expander("📆 17-C-9c Forward EPS 年期分層估值", expanded=True):
                     ft_summary = forward_eps_tier_pack.get("summary", {}) if isinstance(forward_eps_tier_pack, dict) else {}
                     st.markdown(
                         f"<div style='background:#111827;color:#F3F4F6;border-left:6px solid #60A5FA;padding:12px 14px;border-radius:8px;margin-bottom:10px;line-height:1.7;'>"
                         f"<div style='font-weight:bold;color:#93C5FD;'>市場 EPS 年期判讀：{ft_summary.get('market_view', '—')}</div>"
-                        f"<div><b>FY 定義：</b>{ft_summary.get('fy_definition', 'FY1/FY2/FY3 為法人預估年度序列')}</div>"
-                        f"<div>TTM / FY1 / FY2 / FY3 EPS：{_nullize_text(ft_summary.get('ttm_eps'))} / {_nullize_text(ft_summary.get('fy1_eps'))} / {_nullize_text(ft_summary.get('fy2_eps'))} / {_nullize_text(ft_summary.get('fy3_eps'))}</div>"
+                        f"<div><b>FY 定義：</b>{ft_summary.get('fy_definition', 'FY1/FY2/FY3 為預估年度 EPS 序列')}</div>"
+                        f"<div>TTM EPS：{_nullize_text(ft_summary.get('ttm_eps'))}｜近四季已實現 EPS，用於目前實際獲利估值</div>"
+                        f"<div>FY1 EPS：{_nullize_text(ft_summary.get('fy1_eps'))}｜{_nullize_text(ft_summary.get('fy1_label'))}</div>"
+                        f"<div>FY2 EPS：{_nullize_text(ft_summary.get('fy2_eps'))}｜{_nullize_text(ft_summary.get('fy2_label'))}</div>"
+                        f"<div>FY3 EPS：{_nullize_text(ft_summary.get('fy3_eps'))}｜{_nullize_text(ft_summary.get('fy3_label'))}</div>"
                         f"<div>現價隱含 P/E（TTM/FY1/FY2/FY3）：{_nullize_text(ft_summary.get('market_pe_ttm'))}x / {_nullize_text(ft_summary.get('market_pe_fy1'))}x / {_nullize_text(ft_summary.get('market_pe_fy2'))}x / {_nullize_text(ft_summary.get('market_pe_fy3'))}x</div>"
                         f"<div>EPS 年期基準 / 來源：{_nullize_text(ft_summary.get('eps_basis'))}｜{_nullize_text(ft_summary.get('eps_source_note'))}</div>"
                         f"<div style='color:#FCD34D;'>提醒：TTM 用於目前實際獲利風控；FY2 可用於市場先行判斷；FY3 只作高風險樂觀情境，不可直接當買點。</div>"
@@ -1224,7 +1227,7 @@ def render_main_page(sidebar_state=None):
                 with st.expander("🏭 產業估值模型明細", expanded=False):
                     st.dataframe(build_industry_valuation_model_report(industry_profile), use_container_width=True, hide_index=True)
 
-                with st.expander("🧪 17-C-9a 產業模型單次快照稽核表", expanded=True):
+                with st.expander("🧪 17-C-9c 產業模型單次快照稽核表", expanded=True):
                     audit_summary = snapshot_audit.get("summary", {}) if isinstance(snapshot_audit, dict) else {}
                     audit_color_map = {
                         "green": "#10B981",
@@ -1252,7 +1255,7 @@ def render_main_page(sidebar_state=None):
                         if dynamic_cap_pack.get("valuation_mode") == "pb_cycle":
                             st.warning("本分類採 P/B 週期模型：P/E Cap 僅作輔助，不直接作買進倍率。")
                         else:
-                            st.caption("17-C-9a：已修正估值 EPS 口徑，並保留循環復甦判斷、分歧折扣校準、公式/可操作/樂觀倍率分離，最後才套用產業 hard ceiling。")
+                            st.caption("17-C-9c：已修正估值 EPS 口徑，並保留循環復甦判斷、分歧折扣校準、公式/可操作/樂觀倍率分離，最後才套用產業 hard ceiling。")
                         st.dataframe(dynamic_cap_pack.get("report"), use_container_width=True, hide_index=True)
                         dc_warnings = dynamic_cap_pack.get("warnings") or []
                         if dc_warnings:
@@ -1734,21 +1737,24 @@ def render_main_page(sidebar_state=None):
 
 
             def _prompt_forward_eps_tier_core(pack):
-                """第 17-C-9a：Forward EPS 年期分層估值摘要，供外部 AI 判斷市場是看 FY1/FY2/FY3。"""
+                """第 17-C-9c：Forward EPS 年期分層估值摘要，供外部 AI 判斷市場是看 FY1/FY2/FY3。"""
                 try:
                     if not isinstance(pack, dict):
                         return "NULL"
                     s = pack.get("summary", {}) or {}
                     lines = [
                         f"- FY 定義: {_nullize_text(s.get('fy_definition'))}",
-                        f"- TTM/FY1/FY2/FY3 EPS: {_nullize_text(s.get('ttm_eps'))} / {_nullize_text(s.get('fy1_eps'))} / {_nullize_text(s.get('fy2_eps'))} / {_nullize_text(s.get('fy3_eps'))}",
+                        f"- TTM EPS: {_nullize_text(s.get('ttm_eps'))}｜近四季已實現 EPS，用於目前實際獲利估值",
+                        f"- FY1 EPS: {_nullize_text(s.get('fy1_eps'))}｜{_nullize_text(s.get('fy1_label'))}",
+                        f"- FY2 EPS: {_nullize_text(s.get('fy2_eps'))}｜{_nullize_text(s.get('fy2_label'))}",
+                        f"- FY3 EPS: {_nullize_text(s.get('fy3_eps'))}｜{_nullize_text(s.get('fy3_label'))}",
                         f"- EPS 年份/期間: 近四季 / {_nullize_text(s.get('fy1_year'))} / {_nullize_text(s.get('fy2_year'))} / {_nullize_text(s.get('fy3_year'))}",
                         f"- EPS 年期基準: {_nullize_text(s.get('eps_basis'))}",
                         f"- EPS 來源備註: {_nullize_text(s.get('eps_source_note'))}",
                         f"- 現價隱含 P/E（TTM/FY1/FY2/FY3）: {_nullize_text(s.get('market_pe_ttm'))}x / {_nullize_text(s.get('market_pe_fy1'))}x / {_nullize_text(s.get('market_pe_fy2'))}x / {_nullize_text(s.get('market_pe_fy3'))}x",
                         f"- 市場 EPS 年期判讀: {_nullize_text(s.get('market_view'))}",
                         "- 請 AI 判斷：目前股價/法人目標價偏高，是因為 Dynamic Cap 倍率太低，還是因為市場已經在看 FY2/FY3 EPS？也請同時對照 TTM EPS，看目前實際獲利是否能支撐股價。",
-                        "- 重要限制：FY1/FY2/FY3 是法人預估年度序列，不是查詢日後1/2/3年；FY2 只能用來解釋市場先行，不等於可操作買點；FY3 只作高風險樂觀情境，不可直接作為買進目標。",
+                        "- 重要限制：FY1/FY2/FY3 是預估年度 EPS 序列，不是查詢日後1/2/3年；FY2 只能用來解釋市場先行，不等於可操作買點；FY3 只作高風險樂觀情境，不可直接作為買進目標。",
                     ]
                     return "\\n".join(lines)
                 except Exception as e:
@@ -1759,7 +1765,7 @@ def render_main_page(sidebar_state=None):
                     return "NULL"
 
             def _prompt_snapshot_audit_core(audit, industry_profile=None, dynamic_cap_pack=None):
-                """第 17-C-9a-1：把單次快照稽核與是否需更新模型的判斷要求打包給外部 AI。"""
+                """第 17-C-9c-1：把單次快照稽核與是否需更新模型的判斷要求打包給外部 AI。"""
                 try:
                     if not isinstance(audit, dict):
                         return "NULL"
@@ -1834,7 +1840,7 @@ def render_main_page(sidebar_state=None):
 - 目標價可信度: {_nullize_text(target_confidence.get('label') if isinstance(target_confidence, dict) else 'NULL')}｜{_nullize_text(target_confidence.get('message') if isinstance(target_confidence, dict) else 'NULL')}
 - 目標價核心理由: {_nullize_text(ai_target_rationale)}
 
-【7. TTM + Forward EPS 年期分層估值（17-C-9aa，判斷目前EPS與FY1/FY2/FY3）】
+【7. TTM + Forward EPS 年期分層估值（17-C-9ca，判斷目前EPS與FY1/FY2/FY3）】
 {_prompt_forward_eps_tier_core(forward_eps_tier_pack)}
 
 【8. 公式估值 / 手動情境 / 可操作估值分離】
@@ -1908,7 +1914,7 @@ def render_main_page(sidebar_state=None):
 - Dynamic Cap 採用 EPS/輸入: {eps_adopted_for_prompt}
 - 市場 / 法人隱含倍率：現價隱含 {_nullize_text(market_implied_pe if 'market_implied_pe' in locals() else None)}x；法人均價隱含 {_nullize_text(target_avg_implied_pe if 'target_avg_implied_pe' in locals() else None)}x；法人高標隱含 {_nullize_text(target_high_implied_pe if 'target_high_implied_pe' in locals() else None)}x；判讀：{_nullize_text(implied_status if 'implied_status' in locals() else None)}
 
-【3. TTM + Forward EPS 年期分層估值（17-C-9aa）】
+【3. TTM + Forward EPS 年期分層估值（17-C-9ca）】
 {_prompt_forward_eps_tier_core(forward_eps_tier_pack)}
 
 【4. 核心財務與估值】
@@ -2029,8 +2035,8 @@ def render_main_page(sidebar_state=None):
 7. [倉位建議]：保守 / 中性 / 積極三種配置比例；資料可信度不足時限制最高倉位。
 8. [三情境目標價]：牛市 / 基準 / 熊市，各列目標價區間、假設前提、觸發條件。
 9. [下月追蹤清單]：列 8 個指標與警戒值，必須包含月營收 YoY、MoM、毛利率、EPS、Forward EPS 或法人 EPS 預估、法人目標價可信度、營益率或 ROE、重要訂單 / 產業事件。
-10. [EPS 年期判斷]：請先用 TTM EPS 判斷目前實際獲利估值，再說明目前股價與法人目標價比較像用 FY1、FY2 還是 FY3 EPS 定價；FY1/FY2/FY3 是法人預估年度序列，不是查詢日後1/2/3年。若用 FY2/FY3 才合理，請說明風險與是否能作為買進依據。
-11. [產業模型是否需更新]：請根據「17-C-9a 單次快照稽核」回答：不建議更新模型 / 暫時觀察 / 建議檢查 hybrid 權重 / 建議檢查 primary_taxon / 建議檢查整個產業倍率。若建議檢查，請說明是市場過熱、法人過度樂觀、EPS/營收尚未落地，還是公司營運型態已改變；不可因單次現價高於 hard ceiling 就直接調高模型。
+10. [EPS 年期判斷]：請先用 TTM EPS 判斷目前實際獲利估值，再說明目前股價與法人目標價比較像用 FY1、FY2 還是 FY3 EPS 定價；FY1/FY2/FY3 是預估年度 EPS 序列，不是查詢日後1/2/3年。若用 FY2/FY3 才合理，請說明風險與是否能作為買進依據。
+11. [產業模型是否需更新]：請根據「17-C-9c 單次快照稽核」回答：不建議更新模型 / 暫時觀察 / 建議檢查 hybrid 權重 / 建議檢查 primary_taxon / 建議檢查整個產業倍率。若建議檢查，請說明是市場過熱、法人過度樂觀、EPS/營收尚未落地，還是公司營運型態已改變；不可因單次現價高於 hard ceiling 就直接調高模型。
 
 以下是 WAY AI 投資戰情室 2.1「買進決策版」系統資料。這不是完整研究資料包，只保留會直接影響買進判斷的採用值、系統值/AI值、分歧、估值層級、產業模型、Dynamic Cap 與燈號。若資料不合理，可上網查證，但不可忽略系統標示的資料品質與分歧警告：
 {decision_context_str}

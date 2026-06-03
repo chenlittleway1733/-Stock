@@ -809,10 +809,10 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
     3. 「近四季 EPS 合計 (ttm_eps / trailing_eps)」：用於歷史 P/E。
     4. 「最近完整年度 EPS (fiscal_year_eps)」：最近完整會計年度 EPS。
     5. 「法人預估 {target_year} 年度 EPS (forward_eps_ai / forward_eps_consensus)」：若有多家法人共識請填 forward_eps_consensus；若只有 AI 從單一新聞/券商抓取或推估，請填 forward_eps_ai。
-    5-1. 「Forward EPS 年期分層」：請抓取「法人預估年度 EPS 序列」，不是查詢日後 1/2/3 年的滾動 EPS。
-        - forward_eps_fy1：第一個市場/法人主要預估年度 EPS，例如 2026E 或 2027E，需搭配 forward_eps_fy1_year。
-        - forward_eps_fy2：第二個法人預估年度 EPS，例如 FY1=2026E 時，FY2 通常為 2027E。
-        - forward_eps_fy3：第三個法人預估年度 EPS，或長期情境 EPS；若非法人共識，請在 forward_eps_fy_source_note 標示。
+    5-1. 「Forward EPS 年期分層」：請抓取「預估年度 EPS 序列」。FY1=一年預估 EPS，FY2=第二年預估 EPS，FY3=第三年預估 EPS；不是查詢日後 1/2/3 年的滾動 EPS。請務必回傳對應年度，例如 FY1=2026E、FY2=2027E、FY3=2028E；若查不到年度請填 null。
+        - forward_eps_fy1：一年預估 EPS，例如 2026E 或 2027E，需搭配 forward_eps_fy1_year。
+        - forward_eps_fy2：第二年預估 EPS，例如 FY1=2026E 時，FY2 通常為 2027E。
+        - forward_eps_fy3：第三年預估 EPS，或長期情境 EPS；若非法人共識，請在 forward_eps_fy_source_note 標示。
         - forward_eps_fy_basis：請填「法人共識年度預估 / 單一券商預估 / 新聞引用預估 / AI依成長率推估 / 查無明確資料」之一。
         若年度不明確或只是 AI 自行推算，請填 null 或明確標示「AI推估，非法人共識」。
     6. 「股價淨值比 (P/B)」
