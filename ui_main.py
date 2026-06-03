@@ -1959,6 +1959,64 @@ def render_main_page(sidebar_state=None):
                         pass
                     return "NULL"
 
+
+            def _prompt_peg_valuation_layers(
+                system_eps=locals().get('eff_f_eps'),
+                ai_eps=locals().get('ai_f_eps_calc'),
+                fy1_eps=locals().get('ai_forward_eps_fy1'),
+                fy2_eps=locals().get('ai_forward_eps_fy2'),
+                fy3_eps=locals().get('ai_forward_eps_fy3'),
+                fy1_year=locals().get('ai_forward_eps_fy1_year'),
+                fy2_year=locals().get('ai_forward_eps_fy2_year'),
+                fy3_year=locals().get('ai_forward_eps_fy3_year'),
+                fy1_eps_for_annual=locals().get('fy1_eps_for_annual'),
+                formula_cap=locals().get('formula_pe_cap'),
+                manual_cap=locals().get('manual_cap_for_calc'),
+                optimistic_cap=locals().get('extreme_pe_cap_for_calc'),
+                system_price=locals().get('sys_target_price_est'),
+                ai_price=locals().get('ai_target_price_est'),
+                fy1_price=locals().get('fy1_formula_target_price'),
+                fy2_price=locals().get('fy2_formula_target_price'),
+                fy3_price=locals().get('fy3_formula_target_price'),
+                manual_price=locals().get('fy1_manual_target_price'),
+                optimistic_price=locals().get('fy1_optimistic_target_price'),
+            ):
+                """前瞻 PEG 大區塊的新版 7 層估值，同步打包到買進決策版與研究完整版。"""
+                try:
+                    def _p(v):
+                        x = s_float(v)
+                        return "NULL" if x is None else f"{x:.1f}元"
+                    def _e(v):
+                        x = s_float(v)
+                        return "NULL" if x is None else f"{x:.2f}"
+                    def _c(v):
+                        x = s_float(v)
+                        return "NULL" if x is None else f"{x:.1f}x"
+                    def _y(v):
+                        t = _nullize_text(v)
+                        return "年期未明" if t == "NULL" else t
+
+                    rows = [
+                        ("1. 公式合理估值", "系統 EPS × formula cap，非買賣目標", system_eps, formula_cap, system_price, "保留系統抓取 EPS 口徑，作為原始系統估值。"),
+                        ("2. AI估值", "AI / 法人 EPS × formula cap，需看來源可信度", ai_eps, formula_cap, ai_price, "用 AI 取得或校正後 EPS 獨立估值，不覆蓋系統估值。"),
+                        ("3. FY1年度估值", f"FY1 EPS × formula cap｜{_y(fy1_year)}", fy1_eps, formula_cap, fy1_price, "一年預估 EPS 的年度主估值參考。"),
+                        ("4. FY2第二年度估值", f"FY2 EPS × formula cap｜{_y(fy2_year)}", fy2_eps, formula_cap, fy2_price, "只用於判斷市場是否提前反映第二年獲利，不直接當買點。"),
+                        ("5. FY3第三年度估值", f"FY3 EPS × formula cap｜{_y(fy3_year)}", fy3_eps, formula_cap, fy3_price, "高風險遠期情境，需多家法人共識或人工確認，不可直接當買進目標。"),
+                        ("6. 手動年度情境價", "FY1 EPS × 使用者可操作 Cap", fy1_eps_for_annual, manual_cap, manual_price, "用 FY1 EPS 搭配使用者可操作倍率，才接近可操作情境。"),
+                        ("7. 樂觀年度情境價", "FY1 EPS × soft ceiling，高風險情境", fy1_eps_for_annual, optimistic_cap, optimistic_price, "樂觀情境價不是買點；若現價高於此值，追高風險極高。"),
+                    ]
+                    lines = []
+                    for title, formula, eps, cap, price, note in rows:
+                        lines.append(f"- {title}: {_p(price)}｜{formula}｜EPS={_e(eps)}｜倍率={_c(cap)}｜判讀={note}")
+                    lines.append("- 使用規則: 公式合理估值保留系統 EPS；AI估值獨立顯示；FY1 是年度主估值參考；FY2 只解釋市場先行定價；FY3 是高風險遠期情境；手動/樂觀年度情境以 FY1 EPS 計算。")
+                    return "\n".join(lines)
+                except Exception as e:
+                    try:
+                        log_exception("PromptPack", "_prompt_peg_valuation_layers", e)
+                    except Exception:
+                        pass
+                    return _nullize_text(tp_est_str)
+
             def _prompt_snapshot_audit_core(audit, industry_profile=None, dynamic_cap_pack=None):
                 """第 17-C-9c-hotfix44-1：把單次快照稽核與是否需更新模型的判斷要求打包給外部 AI。"""
                 try:
@@ -2035,10 +2093,13 @@ def render_main_page(sidebar_state=None):
 - 目標價可信度: {_nullize_text(target_confidence.get('label') if isinstance(target_confidence, dict) else 'NULL')}｜{_nullize_text(target_confidence.get('message') if isinstance(target_confidence, dict) else 'NULL')}
 - 目標價核心理由: {_nullize_text(ai_target_rationale)}
 
-【7. TTM + Forward EPS 年期分層估值（17-C-9c-hotfix44，判斷目前EPS與FY1/FY2/FY3）】
+【7. 前瞻 PEG 詳細估值分層（目前新版計算內容：系統 / AI / FY1 / FY2 / FY3）】
+{_prompt_peg_valuation_layers()}
+
+【8. TTM + Forward EPS 年期分層估值（17-C-9c-hotfix44，判斷目前EPS與FY1/FY2/FY3）】
 {_prompt_forward_eps_tier_core(forward_eps_tier_pack)}
 
-【8. 公式估值 / 手動情境 / 可操作估值分離】
+【9. 公式估值 / 手動情境 / 可操作估值分離】
 - 系統逆向推算估值摘要: {ctx_tp_est}
 - 可操作估值提示: {_nullize_text(valuation_separation.get('action_hint') if isinstance(valuation_separation, dict) else 'NULL')}
 - 可操作估值區間低/中/高: {_nullize_text(valuation_separation.get('operable_low') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('operable_mid') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('operable_high') if isinstance(valuation_separation, dict) else 'NULL')}
@@ -2047,7 +2108,7 @@ def render_main_page(sidebar_state=None):
 - 警告數 / 重大警告數: {_nullize_text(valuation_separation.get('warning_count') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('danger_count') if isinstance(valuation_separation, dict) else 'NULL')}
 - 提醒: 公式合理價、樂觀情境價與 hard ceiling 不是買進目標；買賣以可操作區間與最終燈號為主。
 
-【9. 產業估值模型（只列本股模型）】
+【10. 產業估值模型（只列本股模型）】
 - 匹配模型: {_nullize_text(industry_profile.get('model_label') if isinstance(industry_profile, dict) else 'NULL')}
 - 主分類 / stocklist 分類: {_nullize_text(industry_profile.get('parent_category') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('stocklist_category') if isinstance(industry_profile, dict) else 'NULL')}
 - 題材標籤: {_nullize_text(industry_profile.get('themes_text') if isinstance(industry_profile, dict) else 'NULL')}
@@ -2064,16 +2125,16 @@ def render_main_page(sidebar_state=None):
 - 校準來源: {_nullize_text(industry_profile.get('calibration_source') if isinstance(industry_profile, dict) else 'NULL')}
 - 風險旗標: {_nullize_text(industry_profile.get('risk_flags') if isinstance(industry_profile, dict) else 'NULL')}
 
-【10. Dynamic Cap 2.0 摘要（核心拆解，不含完整表格）】
+【11. Dynamic Cap 2.0 摘要（核心拆解，不含完整表格）】
 {_prompt_dynamic_cap_core(dynamic_cap_pack)}
 
-【11. 產業模型單次快照稽核與更新判斷】
+【12. 產業模型單次快照稽核與更新判斷】
 {_prompt_snapshot_audit_core(snapshot_audit, industry_profile, dynamic_cap_pack)}
 
-【12. 最終操作燈號明細】
+【13. 最終操作燈號明細】
 {_prompt_df(final_signal_report_for_prompt, max_rows=12)}
 
-【13. AI 來源與 JSON 驗證摘要】
+【14. AI 來源與 JSON 驗證摘要】
 - AI 模型/資料期間: {_nullize_text(temp_ai_fin.get('model_used') if isinstance(temp_ai_fin, dict) else 'NULL')}｜{_nullize_text(raw_ai_period)}
 - AI JSON 驗證狀態: {_nullize_text(ai_validation_status_for_prompt)}
 - AI JSON 驗證警告: {_nullize_text('；'.join([str(x) for x in ai_validation_warnings_for_prompt[:8]]) if ai_validation_warnings_for_prompt else 'NULL')}
@@ -2133,9 +2194,8 @@ def render_main_page(sidebar_state=None):
 - 目標價可信度: {_nullize_text(target_confidence.get('label') if isinstance(target_confidence, dict) else 'NULL')}｜{_nullize_text(target_confidence.get('message') if isinstance(target_confidence, dict) else 'NULL')}
 - 核心理由: {_nullize_text(ai_target_rationale)}
 
-【7. 估值分層】
-- 公式 / 手動 / 樂觀估值摘要: {ctx_tp_est}
-- 手動情境推估價: {_nullize_text(manual_target_price if 'manual_target_price' in locals() else None)}；AI手動情境: {_nullize_text(ai_manual_target_price if 'ai_manual_target_price' in locals() else None)}
+【7. 前瞻 PEG 詳細估值分層（目前新版計算內容：系統 / AI / FY1 / FY2 / FY3）】
+{_prompt_peg_valuation_layers()}
 - 可操作估值區間低/中/高: {_nullize_text(valuation_separation.get('operable_low') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('operable_mid') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('operable_high') if isinstance(valuation_separation, dict) else 'NULL')}
 - 可操作估值提示: {_nullize_text(valuation_separation.get('action_hint') if isinstance(valuation_separation, dict) else 'NULL')}
 
