@@ -1609,6 +1609,90 @@ INDUSTRY_TAXONOMY.update({
 })
 
 
+
+# ===== 第 17-C-10：補齊矽晶圓 / 晶圓再生薄化 / IPC Edge AI / 電信防禦型分類 =====
+# 目的：避免新增公司落入 GENERAL 或過粗的半導體材料模型，讓 Dynamic Cap 可使用較貼近產業特性的倍率與風險因子。
+INDUSTRY_TAXONOMY.update({
+    "SILICON_WAFER_CYCLE": {
+        "display_name": "半導體矽晶圓 / 上游材料循環",
+        "parent": "半導體材料",
+        "primary_valuation": "forward_pe_pb_cycle",
+        "secondary_valuation": ["capacity_cycle", "asp", "inventory", "pb", "roe"],
+        "valuation_focus": ["Forward P/E", "P/B", "產能利用率", "矽晶圓報價", "庫存循環", "ROE"],
+        "base_pe": 18, "pe_range": (10, 36), "floor_pe": 10, "soft_ceiling_pe": 28, "hard_ceiling_pe": 36,
+        "base_pb": None, "pb_range": None,
+        "cyclical": True, "pe_applicable": True, "pe_trap_warning": True,
+        "theme_premium_allowed": True, "liquidity_sensitive": False,
+        "operable_discount_factor": 0.88,
+        "max_growth_factor": 1.14, "max_quality_factor": 1.12, "max_theme_factor": 1.04, "max_scale_factor": 1.03,
+        "gross_margin_baseline": 0.28, "gross_margin_good": 0.35, "gross_margin_excellent": 0.42,
+        "baked_in_themes": ["矽晶圓", "半導體材料", "上游材料"],
+        "geopolitical_factor": 0.96,
+        "recovery_sensitive": True,
+        "risk_flags": ["矽晶圓報價下滑", "庫存修正", "產能利用率下降", "景氣循環", "中國供給競爭"],
+        "note": "環球晶/中美晶/台勝科/合晶等矽晶圓循環股；低 P/E 不一定低估，需搭配 P/B、ROE、報價與庫存循環判斷。",
+        "calibration_source": "17-C-10 新增矽晶圓分類"
+    },
+    "WAFER_RECLAIM_THINNING": {
+        "display_name": "晶圓再生 / 晶圓薄化 / 先進封裝周邊",
+        "parent": "半導體材料與先進封裝周邊",
+        "primary_valuation": "forward_pe",
+        "secondary_valuation": ["advanced_packaging", "utilization", "gross_margin", "orders", "capex_cycle"],
+        "valuation_focus": ["Forward P/E", "晶圓薄化需求", "再生晶圓稼動率", "先進封裝周邊", "毛利率"],
+        "base_pe": 26, "pe_range": (16, 50), "floor_pe": 16, "soft_ceiling_pe": 40, "hard_ceiling_pe": 50,
+        "base_pb": None, "pb_range": None,
+        "cyclical": True, "pe_applicable": True, "pe_trap_warning": False,
+        "theme_premium_allowed": True, "liquidity_sensitive": True,
+        "operable_discount_factor": 0.88,
+        "max_growth_factor": 1.18, "max_quality_factor": 1.14, "max_theme_factor": 1.10, "max_scale_factor": 1.05,
+        "gross_margin_baseline": 0.30, "gross_margin_good": 0.38, "gross_margin_excellent": 0.45,
+        "baked_in_themes": ["晶圓再生", "晶圓薄化", "先進封裝", "半導體耗材"],
+        "geopolitical_factor": 0.96,
+        "recovery_sensitive": True,
+        "risk_flags": ["稼動率波動", "先進封裝需求遞延", "客戶集中", "資本支出循環"],
+        "note": "昇陽半導體等晶圓再生/薄化類；可給高於一般材料的 AI/先進封裝周邊溢價，但需確認 EPS 與稼動率落地。",
+        "calibration_source": "17-C-10 新增晶圓再生薄化分類"
+    },
+    "IPC_EDGE_AI": {
+        "display_name": "工業電腦 / IPC / Edge AI",
+        "parent": "工業電腦與邊緣運算",
+        "primary_valuation": "forward_pe",
+        "secondary_valuation": ["gross_margin", "operating_margin", "order_visibility", "ai_edge_revenue", "roe"],
+        "valuation_focus": ["Forward P/E", "毛利率", "營益率", "訂單能見度", "Edge AI / 工控需求", "ROE"],
+        "base_pe": 22, "pe_range": (14, 42), "floor_pe": 14, "soft_ceiling_pe": 34, "hard_ceiling_pe": 42,
+        "base_pb": None, "pb_range": None,
+        "cyclical": False, "pe_applicable": True, "pe_trap_warning": False,
+        "theme_premium_allowed": True, "liquidity_sensitive": True,
+        "operable_discount_factor": 0.90,
+        "max_growth_factor": 1.16, "max_quality_factor": 1.16, "max_theme_factor": 1.08, "max_scale_factor": 1.05,
+        "gross_margin_baseline": 0.32, "gross_margin_good": 0.38, "gross_margin_excellent": 0.45,
+        "baked_in_themes": ["IPC", "工業電腦", "Edge AI", "邊緣運算", "工控"],
+        "geopolitical_factor": 0.98,
+        "risk_flags": ["工控景氣循環", "Edge AI 題材未落地", "客戶專案遞延", "匯率"],
+        "note": "研華/樺漢/振樺電等 IPC/Edge AI；AI 題材需看工控訂單、毛利率與 EPS 是否同步改善，不能直接套純 AI Server 倍率。",
+        "calibration_source": "17-C-10 新增 IPC Edge AI 分類"
+    },
+    "TELECOM_DEFENSIVE": {
+        "display_name": "電信 / 基礎網路 / 高殖利率防禦型",
+        "parent": "電信與基礎網路",
+        "primary_valuation": "dividend_pe_pb_defensive",
+        "secondary_valuation": ["dividend_yield", "fcf", "pb", "roe", "subscriber_arpu"],
+        "valuation_focus": ["殖利率", "FCF", "P/B", "ROE", "ARPU", "穩定現金流"],
+        "base_pe": 16, "pe_range": (12, 26), "floor_pe": 12, "soft_ceiling_pe": 22, "hard_ceiling_pe": 26,
+        "base_pb": None, "pb_range": (1.2, 3.0),
+        "cyclical": False, "pe_applicable": True, "pe_trap_warning": False,
+        "theme_premium_allowed": False, "liquidity_sensitive": False,
+        "operable_discount_factor": 0.92,
+        "max_growth_factor": 1.06, "max_quality_factor": 1.10, "max_theme_factor": 1.00, "max_scale_factor": 1.03,
+        "gross_margin_baseline": 0.35, "gross_margin_good": 0.40, "gross_margin_excellent": 0.45,
+        "baked_in_themes": ["電信", "基礎網路", "高殖利率", "防禦型"],
+        "geopolitical_factor": 1.00,
+        "risk_flags": ["資本支出增加", "價格競爭", "殖利率吸引力下降", "利率上升"],
+        "note": "中華電/台灣大/遠傳等防禦型電信；重點是殖利率、FCF 與穩定現金流，不應用高成長題材倍率追價。",
+        "calibration_source": "17-C-10 新增電信防禦型分類"
+    },
+})
+
 def get_taxonomy(taxon_key: str):
     """安全取得產業分類設定。"""
     if not taxon_key:
