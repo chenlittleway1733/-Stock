@@ -1,4 +1,4 @@
-import re 
+import re
 """
 主畫面 UI 模組：
 包含個股儀表板、AI 分析、財務資料、圖表、ETF 曝險等主要畫面。
@@ -1814,7 +1814,9 @@ def render_main_page(sidebar_state=None):
             panel_roe = _nullize_text(roe_str)
             panel_de = _nullize_text(de_str)
 
-            # 🚀 修正處：正確讀取系統目標價與 AI 目標價的判斷邏輯
+            # 🚀 法人目標價：提示詞必須跟「法人預估目標價」面板同源。
+            # 面板實際顯示順序是：AI/法人聯網高均低 > AI 單一目標價 > 系統/yfinance 高均低。
+            # 之前提示詞優先抓系統 targetHigh/Mean/Low，會出現面板 3030/2600/2288，提示詞卻 3250/2589.6/2051 的錯位。
             sys_hi = s_float(info.get('targetHighPrice'))
             sys_me = s_float(info.get('targetMeanPrice'))
             sys_lo = s_float(info.get('targetLowPrice'))
@@ -1822,33 +1824,42 @@ def render_main_page(sidebar_state=None):
             me_str = f"{sys_me:.1f}" if sys_me is not None else "N/A"
             lo_str = f"{sys_lo:.1f}" if sys_lo is not None else "N/A"
 
-            prompt_hi_str = f"{ai_hi_val:.1f}" if ai_hi_val is not None else hi_str
-            prompt_me_str = f"{ai_me_val:.1f}" if ai_me_val is not None else me_str
-            prompt_lo_str = f"{ai_lo_val:.1f}" if ai_lo_val is not None else lo_str
-            
-            if ai_target_price is not None:
-                if prompt_hi_str == "N/A": prompt_hi_str = f"{ai_target_price:.1f} (AI回填)"
-                if prompt_me_str == "N/A": prompt_me_str = f"{ai_target_price:.1f} (AI回填)"
-                if prompt_lo_str == "N/A": prompt_lo_str = f"{ai_target_price:.1f} (AI回填)"
-
-            # 17-C-9c-hotfix47：法人目標價打包提示詞改為「與面板同源」。
-            # 若系統面板有 yfinance 目標價與分析師人數，提示詞優先使用系統面板值；
-            # AI 目標價只列為補充，避免面板顯示 17 位/高可信，提示詞卻是 NULL/低可信。
-            prompt_analyst_count = _first_valid_analyst_count(
-                sys_analyst_count,
-                ai_analyst_count,
-                ai_fin.get('analyst_count') if has_ai_fin_fetch else None,
-                ai_fin.get('target_analyst_count') if has_ai_fin_fetch else None,
-            )
-            if sys_hi is not None and sys_me is not None and sys_lo is not None:
+            if ai_hi_val is not None and ai_me_val is not None and ai_lo_val is not None:
+                prompt_hi_str = f"{ai_hi_val:.1f}"
+                prompt_me_str = f"{ai_me_val:.1f}"
+                prompt_lo_str = f"{ai_lo_val:.1f}"
+                prompt_target_source = "法人目標價面板顯示值：AI/法人聯網 target_price_high-target_price_avg-target_price_low"
+            elif ai_me_val is not None:
+                prompt_hi_str = "N/A"
+                prompt_me_str = f"{ai_me_val:.1f}"
+                prompt_lo_str = "N/A"
+                prompt_target_source = "法人目標價面板顯示值：AI/法人聯網平均目標價"
+            elif ai_target_price is not None:
+                prompt_hi_str = "N/A"
+                prompt_me_str = f"{ai_target_price:.1f}"
+                prompt_lo_str = "N/A"
+                prompt_target_source = "法人目標價面板顯示值：AI 單一目標價"
+            elif sys_hi is not None and sys_me is not None and sys_lo is not None:
                 prompt_hi_str = f"{sys_hi:.1f}"
                 prompt_me_str = f"{sys_me:.1f}"
                 prompt_lo_str = f"{sys_lo:.1f}"
-                prompt_target_source = "系統面板/yfinance targetHighPrice-targetMeanPrice-targetLowPrice"
-            elif ai_hi_val is not None or ai_me_val is not None or ai_lo_val is not None or ai_target_price is not None:
-                prompt_target_source = "AI 聯網/法人目標價欄位"
+                prompt_target_source = "法人目標價面板備援值：系統/yfinance targetHighPrice-targetMeanPrice-targetLowPrice"
+            elif sys_me is not None:
+                prompt_hi_str = "N/A"
+                prompt_me_str = f"{sys_me:.1f}"
+                prompt_lo_str = "N/A"
+                prompt_target_source = "法人目標價面板備援值：系統/yfinance targetMeanPrice"
             else:
+                prompt_hi_str = prompt_me_str = prompt_lo_str = "N/A"
                 prompt_target_source = "無可用法人目標價"
+
+            # 分析師人數也跟面板同源：面板標題使用 ai_analyst_count；前面已把 AI / 系統 numberOfAnalystOpinions 做過 first_valid 合併。
+            prompt_analyst_count = _first_valid_analyst_count(
+                ai_analyst_count,
+                sys_analyst_count,
+                ai_fin.get('analyst_count') if has_ai_fin_fetch else None,
+                ai_fin.get('target_analyst_count') if has_ai_fin_fetch else None,
+            )
             prompt_target_confidence = classify_target_price_confidence(prompt_analyst_count)
             target_confidence = prompt_target_confidence
 
@@ -3031,4 +3042,5 @@ def render_main_page(sidebar_state=None):
             fig_k.update_layout(height=750, xaxis_rangeslider_visible=False, margin=dict(l=10,r=10,t=10,b=10), template="plotly_dark", hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
             st.plotly_chart(fig_k, use_container_width=True)
         else:
-            st.error(f"找不到代號 {curr_id} 的資料，請確認代號是否正確或重新整理。")
+            st.error(f"找不到代號 {curr_id} 的資料，請確認代號是否正確或重新整理。") 
+ 
