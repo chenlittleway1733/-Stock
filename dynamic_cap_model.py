@@ -1417,3 +1417,36 @@ CALIBRATION_DEFAULTS.update({
     "OPTICAL_COMM_SILICON_PHOTONICS": {"base_pe": 36.0, "floor_pe": 22.0, "soft_ceiling_pe": 54.0, "hard_ceiling_pe": 68.0, "max_growth_factor": 1.22, "max_quality_factor": 1.18, "max_theme_factor": 1.12, "max_scale_factor": 1.08, "gross_margin_baseline": 0.32, "gross_margin_good": 0.40, "gross_margin_excellent": 0.48, "baked_in_themes": ["矽光子", "cpo", "800g", "1.6t"]},
     "GENERAL": {"base_pe": 15.0, "floor_pe": 8.0, "soft_ceiling_pe": 24.0, "hard_ceiling_pe": 30.0, "max_growth_factor": 1.10, "max_quality_factor": 1.08, "max_theme_factor": 1.02, "max_scale_factor": 1.00, "gross_margin_baseline": None}
 })
+
+
+# ===== 第 17-C-10：補齊新增產業 Dynamic Cap 校準預設 =====
+CALIBRATION_DEFAULTS.update({
+    "SILICON_WAFER_CYCLE": {
+        "base_pe": 18.0, "floor_pe": 10.0, "soft_ceiling_pe": 28.0, "hard_ceiling_pe": 36.0,
+        "max_growth_factor": 1.14, "max_quality_factor": 1.12, "max_theme_factor": 1.04, "max_scale_factor": 1.03,
+        "gross_margin_baseline": 0.28, "gross_margin_good": 0.35, "gross_margin_excellent": 0.42,
+        "baked_in_themes": ["矽晶圓", "半導體材料", "上游材料"],
+        "geopolitical_factor": 0.96, "recovery_sensitive": True,
+    },
+    "WAFER_RECLAIM_THINNING": {
+        "base_pe": 26.0, "floor_pe": 16.0, "soft_ceiling_pe": 40.0, "hard_ceiling_pe": 50.0,
+        "max_growth_factor": 1.18, "max_quality_factor": 1.14, "max_theme_factor": 1.10, "max_scale_factor": 1.05,
+        "gross_margin_baseline": 0.30, "gross_margin_good": 0.38, "gross_margin_excellent": 0.45,
+        "baked_in_themes": ["晶圓再生", "晶圓薄化", "先進封裝", "半導體耗材"],
+        "geopolitical_factor": 0.96, "recovery_sensitive": True,
+    },
+    "IPC_EDGE_AI": {
+        "base_pe": 22.0, "floor_pe": 14.0, "soft_ceiling_pe": 34.0, "hard_ceiling_pe": 42.0,
+        "max_growth_factor": 1.16, "max_quality_factor": 1.16, "max_theme_factor": 1.08, "max_scale_factor": 1.05,
+        "gross_margin_baseline": 0.32, "gross_margin_good": 0.38, "gross_margin_excellent": 0.45,
+        "baked_in_themes": ["IPC", "工業電腦", "Edge AI", "邊緣運算", "工控"],
+        "geopolitical_factor": 0.98,
+    },
+    "TELECOM_DEFENSIVE": {
+        "base_pe": 16.0, "floor_pe": 12.0, "soft_ceiling_pe": 22.0, "hard_ceiling_pe": 26.0,
+        "max_growth_factor": 1.06, "max_quality_factor": 1.10, "max_theme_factor": 1.00, "max_scale_factor": 1.03,
+        "gross_margin_baseline": 0.35, "gross_margin_good": 0.40, "gross_margin_excellent": 0.45,
+        "baked_in_themes": ["電信", "基礎網路", "高殖利率", "防禦型"],
+        "geopolitical_factor": 1.00,
+    },
+})
