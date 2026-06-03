@@ -1,4 +1,4 @@
-import re
+import re 
 """
 主畫面 UI 模組：
 包含個股儀表板、AI 分析、財務資料、圖表、ETF 曝險等主要畫面。
@@ -1830,12 +1830,34 @@ def render_main_page(sidebar_state=None):
                 if prompt_hi_str == "N/A": prompt_hi_str = f"{ai_target_price:.1f} (AI回填)"
                 if prompt_me_str == "N/A": prompt_me_str = f"{ai_target_price:.1f} (AI回填)"
                 if prompt_lo_str == "N/A": prompt_lo_str = f"{ai_target_price:.1f} (AI回填)"
+
+            # 17-C-9c-hotfix47：法人目標價打包提示詞改為「與面板同源」。
+            # 若系統面板有 yfinance 目標價與分析師人數，提示詞優先使用系統面板值；
+            # AI 目標價只列為補充，避免面板顯示 17 位/高可信，提示詞卻是 NULL/低可信。
+            prompt_analyst_count = _first_valid_analyst_count(
+                sys_analyst_count,
+                ai_analyst_count,
+                ai_fin.get('analyst_count') if has_ai_fin_fetch else None,
+                ai_fin.get('target_analyst_count') if has_ai_fin_fetch else None,
+            )
+            if sys_hi is not None and sys_me is not None and sys_lo is not None:
+                prompt_hi_str = f"{sys_hi:.1f}"
+                prompt_me_str = f"{sys_me:.1f}"
+                prompt_lo_str = f"{sys_lo:.1f}"
+                prompt_target_source = "系統面板/yfinance targetHighPrice-targetMeanPrice-targetLowPrice"
+            elif ai_hi_val is not None or ai_me_val is not None or ai_lo_val is not None or ai_target_price is not None:
+                prompt_target_source = "AI 聯網/法人目標價欄位"
+            else:
+                prompt_target_source = "無可用法人目標價"
+            prompt_target_confidence = classify_target_price_confidence(prompt_analyst_count)
+            target_confidence = prompt_target_confidence
+
             ai_source_trace_df_for_prompt = build_ai_source_trace_report(temp_ai_fin) if isinstance(temp_ai_fin, dict) else pd.DataFrame()
             ai_validation_warnings_for_prompt = temp_ai_fin.get("_ai_validation_warnings", []) if isinstance(temp_ai_fin, dict) else []
             ai_validation_status_for_prompt = temp_ai_fin.get("_ai_validation_status", "") if isinstance(temp_ai_fin, dict) else ""
             final_signal_report_for_prompt = final_signal.get("report") if isinstance(final_signal, dict) else None
             valuation_report_for_prompt = valuation_separation.get("report") if isinstance(valuation_separation, dict) else None
-            target_confidence_report_for_prompt = build_target_price_confidence_report(ai_analyst_count, ai_hi_val, ai_me_val, ai_lo_val, ai_target_rationale)
+            target_confidence_report_for_prompt = build_target_price_confidence_report(prompt_analyst_count, sys_hi if sys_hi is not None else ai_hi_val, sys_me if sys_me is not None else ai_me_val, sys_lo if sys_lo is not None else ai_lo_val, ai_target_rationale)
             industry_report_for_prompt = build_industry_valuation_model_report(industry_profile)
             dynamic_cap_report_for_prompt = dynamic_cap_pack.get("report") if isinstance(dynamic_cap_pack, dict) else None
 
@@ -1855,13 +1877,21 @@ def render_main_page(sidebar_state=None):
                         field = _nullize_text(row.get(field_col, ""))
                         row_text = " ".join([_nullize_text(row.get(c, "")) for c in cols])
                         is_important = any(k.lower() in row_text.lower() for k in important_fields)
-                        is_abnormal = any(k in row_text for k in ["異常", "分歧", "校正", "缺", "NULL", "過期", "警告"])
+                        is_abnormal = any(k in row_text for k in ["異常", "分歧", "校正", "過期", "警告"])
+                        adopted_text = _nullize_text(row.get(adopted_col, "")) if adopted_col else "NULL"
+                        status_text = _nullize_text(row.get(status_col, "")) if status_col else ""
+                        # 打包提示詞只帶「有值、可用、或有真正分歧/異常」的資料；
+                        # 單純缺資料的 NULL 欄位不塞進提示詞，避免外部 AI 被雜訊干擾。
+                        if adopted_col and adopted_text == "NULL" and not is_abnormal:
+                            continue
+                        if any(k in status_text for k in ["❌", "缺資料", "無可用資料"]):
+                            continue
                         if is_important or is_abnormal:
                             parts = [f"欄位={field}"]
                             if adopted_col:
-                                parts.append(f"採用={_nullize_text(row.get(adopted_col, ''))}")
-                            if status_col:
-                                parts.append(f"狀態={_nullize_text(row.get(status_col, ''))}")
+                                parts.append(f"採用={adopted_text}")
+                            if status_col and status_text != "NULL":
+                                parts.append(f"狀態={status_text}")
                             if note_col:
                                 note = _nullize_text(row.get(note_col, ''))
                                 if note != "NULL":
@@ -2126,25 +2156,69 @@ def render_main_page(sidebar_state=None):
                     if _fy1_annual is None:
                         _fy1_annual = ai_forward_eps_fy1_val if ai_forward_eps_fy1_val is not None else cap_adopted_forward_eps_val
 
-                    lines = [
-                        f"- 最新單季 EPS: 系統={_n(sys_latest_quarter_eps_val)} / AI={_n(ai_latest_quarter_eps_val)} / 採用={_n(ai_latest_quarter_eps_val)} / 期間={_n(raw_ai_period_val)}",
-                        f"- TTM EPS: 系統={_n(sys_ttm_eps_val)} / AI={_n(ai_ttm_eps_val)} / 採用={_n(eff_t_eps_val)}",
-                        f"- 完整年度 EPS: 系統={_n(sys_fiscal_year_eps_val)} / AI={_n(ai_fiscal_year_eps_val)} / 採用={_n(ai_fiscal_year_eps_val)}",
-                        f"- Forward EPS－系統原始值: {_num(sys_forward_eps_system_val)}",
-                        f"- Forward EPS－系統估值採用值: {_num(eff_f_eps_val)}（用於『公式合理估值』）",
-                        f"- Forward EPS－AI一般欄位: {_num(ai_forward_eps_ai_val)}",
-                        f"- Forward EPS－法人共識: {_num(ai_forward_eps_consensus_val)}",
-                        f"- FY1 EPS: {_num(ai_forward_eps_fy1_val)}｜年度={_year(ai_forward_eps_fy1_year_val)}｜用於『FY1年度估值』與年度情境主基準",
-                        f"- FY2 EPS: {_num(ai_forward_eps_fy2_val)}｜年度={_year(ai_forward_eps_fy2_year_val)}｜用於『FY2第二年度估值』，只判斷市場先行定價",
-                        f"- FY3 EPS: {_num(ai_forward_eps_fy3_val)}｜年度={_year(ai_forward_eps_fy3_year_val)}｜用於高風險遠期情境，不可直接當買點",
-                        f"- AI估值採用 EPS: {_num(ai_f_eps_calc_val)}（AI/法人 EPS × formula cap）",
-                        f"- 手動/樂觀年度情境採用 EPS: {_num(_fy1_annual)}（優先 FY1 EPS；FY1 無資料才退回採用 Forward EPS）",
-                        f"- EPS 年期/來源日期: {_n(raw_ai_period_val)}｜FY來源說明={_n(ai_forward_eps_fy_source_note_val)}｜FY基準={_n(ai_forward_eps_fy_basis_val)}",
-                        f"- 估值倍率: formula cap={_cap(formula_pe_cap_val)}；可操作 Cap={_cap(manual_cap_for_calc_val)}；soft ceiling={_cap(extreme_pe_cap_for_calc_val)}",
-                        f"- 新版估值結果: 系統公式={_price(sys_target_price_est_val)}；AI估值={_price(ai_target_price_est_val)}；FY1={_price(fy1_formula_target_price_val)}；FY2={_price(fy2_formula_target_price_val)}；FY3={_price(fy3_formula_target_price_val)}；手動年度={_price(fy1_manual_target_price_val)}；樂觀年度={_price(fy1_optimistic_target_price_val)}",
-                        "- 重要規則: 公式合理估值保留系統 EPS 口徑；AI估值獨立顯示；FY1 是年度主估值參考；FY2 僅判斷市場是否先行定價；FY3 為高風險遠期情境；手動/樂觀年度情境以 FY1 EPS 為主。",
-                    ]
-                    return "\n".join(lines)
+                    lines = []
+
+                    def _has(*vals):
+                        return any(s_float(v) is not None for v in vals)
+
+                    if _has(sys_latest_quarter_eps_val, ai_latest_quarter_eps_val):
+                        adopted = ai_latest_quarter_eps_val if s_float(ai_latest_quarter_eps_val) is not None else sys_latest_quarter_eps_val
+                        lines.append(f"- 最新單季 EPS: 系統={_n(sys_latest_quarter_eps_val)} / AI={_n(ai_latest_quarter_eps_val)} / 採用={_n(adopted)} / 期間={_n(raw_ai_period_val)}")
+                    if _has(sys_ttm_eps_val, ai_ttm_eps_val, eff_t_eps_val):
+                        lines.append(f"- TTM EPS: 系統={_n(sys_ttm_eps_val)} / AI={_n(ai_ttm_eps_val)} / 採用={_n(eff_t_eps_val)}")
+                    if _has(sys_fiscal_year_eps_val, ai_fiscal_year_eps_val):
+                        adopted = ai_fiscal_year_eps_val if s_float(ai_fiscal_year_eps_val) is not None else sys_fiscal_year_eps_val
+                        lines.append(f"- 完整年度 EPS: 系統={_n(sys_fiscal_year_eps_val)} / AI={_n(ai_fiscal_year_eps_val)} / 採用={_n(adopted)}")
+                    if _has(sys_forward_eps_system_val, eff_f_eps_val):
+                        lines.append(f"- Forward EPS－系統估值採用值: {_num(eff_f_eps_val)}（用於『公式合理估值』；系統原始={_num(sys_forward_eps_system_val)}）")
+                    if _has(ai_forward_eps_ai_val):
+                        lines.append(f"- Forward EPS－AI一般欄位: {_num(ai_forward_eps_ai_val)}")
+                    if _has(ai_forward_eps_consensus_val):
+                        lines.append(f"- Forward EPS－法人共識: {_num(ai_forward_eps_consensus_val)}")
+                    if _has(ai_forward_eps_fy1_val):
+                        lines.append(f"- FY1 EPS: {_num(ai_forward_eps_fy1_val)}｜年度={_year(ai_forward_eps_fy1_year_val)}｜用於『FY1年度估值』與年度情境主基準")
+                    if _has(ai_forward_eps_fy2_val):
+                        lines.append(f"- FY2 EPS: {_num(ai_forward_eps_fy2_val)}｜年度={_year(ai_forward_eps_fy2_year_val)}｜用於『FY2第二年度估值』，只判斷市場先行定價")
+                    if _has(ai_forward_eps_fy3_val):
+                        lines.append(f"- FY3 EPS: {_num(ai_forward_eps_fy3_val)}｜年度={_year(ai_forward_eps_fy3_year_val)}｜用於高風險遠期情境，不可直接當買點")
+                    if _has(ai_f_eps_calc_val):
+                        lines.append(f"- AI估值採用 EPS: {_num(ai_f_eps_calc_val)}（AI/法人 EPS × formula cap）")
+                    if _has(_fy1_annual):
+                        lines.append(f"- 手動/樂觀年度情境採用 EPS: {_num(_fy1_annual)}（優先 FY1 EPS；FY1 無資料才退回採用 Forward EPS）")
+
+                    source_parts = []
+                    if _n(raw_ai_period_val) != "NULL":
+                        source_parts.append(f"來源日期={_n(raw_ai_period_val)}")
+                    if _n(ai_forward_eps_fy_source_note_val) != "NULL":
+                        source_parts.append(f"FY來源說明={_n(ai_forward_eps_fy_source_note_val)}")
+                    if _n(ai_forward_eps_fy_basis_val) != "NULL":
+                        source_parts.append(f"FY基準={_n(ai_forward_eps_fy_basis_val)}")
+                    if source_parts:
+                        lines.append("- EPS 年期/來源: " + "｜".join(source_parts))
+
+                    cap_parts = []
+                    if _cap(formula_pe_cap_val) != "NULL":
+                        cap_parts.append(f"formula cap={_cap(formula_pe_cap_val)}")
+                    if _cap(manual_cap_for_calc_val) != "NULL":
+                        cap_parts.append(f"可操作 Cap={_cap(manual_cap_for_calc_val)}")
+                    if _cap(extreme_pe_cap_for_calc_val) != "NULL":
+                        cap_parts.append(f"soft ceiling={_cap(extreme_pe_cap_for_calc_val)}")
+                    if cap_parts:
+                        lines.append("- 估值倍率: " + "；".join(cap_parts))
+
+                    price_parts = []
+                    for label, val in [
+                        ("系統公式", sys_target_price_est_val), ("AI估值", ai_target_price_est_val),
+                        ("FY1", fy1_formula_target_price_val), ("FY2", fy2_formula_target_price_val),
+                        ("FY3", fy3_formula_target_price_val), ("手動年度", fy1_manual_target_price_val),
+                        ("樂觀年度", fy1_optimistic_target_price_val),
+                    ]:
+                        if _price(val) != "NULL":
+                            price_parts.append(f"{label}={_price(val)}")
+                    if price_parts:
+                        lines.append("- 新版估值結果: " + "；".join(price_parts))
+                    lines.append("- 重要規則: 公式合理估值保留系統 EPS 口徑；AI估值獨立顯示；FY1 是年度主估值參考；FY2 僅判斷市場是否先行定價；FY3 為高風險遠期情境；手動/樂觀年度情境以 FY1 EPS 為主。")
+                    return "\n".join(lines) if lines else "無可用 EPS 面板資料，提示詞不納入 EPS 估值判斷。"
                 except Exception as e:
                     try:
                         log_exception("PromptPack", "_prompt_eps_adoption_sync_summary", e)
@@ -2153,6 +2227,32 @@ def render_main_page(sidebar_state=None):
                     return "NULL"
 
             eps_adopted_for_prompt = _prompt_eps_adoption_sync_summary()
+
+
+            def _prompt_target_price_panel_summary():
+                """法人目標價提示詞與畫面面板同源；沒有值的 AI 欄位不輸出 NULL。"""
+                try:
+                    lines = []
+                    if _nullize_text(prompt_hi_str) != "NULL" or _nullize_text(prompt_me_str) != "NULL" or _nullize_text(prompt_lo_str) != "NULL":
+                        lines.append(f"- 最高 / 平均 / 最低目標價: {_nullize_text(prompt_hi_str)} / {_nullize_text(prompt_me_str)} / {_nullize_text(prompt_lo_str)}")
+                    if _nullize_text(prompt_analyst_count) != "NULL":
+                        lines.append(f"- 分析師人數: {_nullize_text(prompt_analyst_count)}")
+                    if isinstance(target_confidence, dict):
+                        lines.append(f"- 目標價可信度: {_nullize_text(target_confidence.get('label'))}｜{_nullize_text(target_confidence.get('message'))}")
+                    if _nullize_text(prompt_target_source) != "NULL":
+                        lines.append(f"- 目標價資料來源: {_nullize_text(prompt_target_source)}")
+                    if _nullize_text(ai_tp_str) != "NULL":
+                        lines.append(f"- AI 最新目標價補充: {_nullize_text(ai_tp_str)}")
+                    if _nullize_text(ai_target_rationale) != "NULL":
+                        lines.append(f"- 核心理由: {_nullize_text(ai_target_rationale)}")
+                    lines.append("- 同步規則: 以法人目標價面板顯示值為準；若面板無系統值，才回填 AI 目標價；沒有資料的 AI 欄位不輸出 NULL。")
+                    return "\n".join(lines) if lines else "無可用法人目標價面板資料，本次不納入法人目標價判斷。"
+                except Exception as e:
+                    try:
+                        log_exception("PromptPack", "_prompt_target_price_panel_summary", e)
+                    except Exception:
+                        pass
+                    return "無可用法人目標價面板資料，本次不納入法人目標價判斷。"
 
 
             def _prompt_etf_panel_summary():
@@ -2255,7 +2355,7 @@ def render_main_page(sidebar_state=None):
                         ("月營收公告月份", latest_rev_display_label not in (None, "", "公告月份：未知")),
                         ("EPS拆欄/FY1/FY2/FY3", eps_adopted_for_prompt not in (None, "", "NULL")),
                         ("Forward PEG 7層估值", _prompt_peg_valuation_layers() not in (None, "", "NULL")),
-                        ("法人目標價/分析師人數", ai_analyst_count is not None),
+                        ("法人目標價/分析師人數", locals().get("prompt_analyst_count") is not None),
                         ("Dynamic Cap/可操作區間", isinstance(dynamic_cap_pack, dict) and bool(dynamic_cap_pack)),
                         ("最終操作燈號", isinstance(final_signal, dict) and bool(final_signal.get('signal'))),
                         ("ETF摘要", True),
@@ -2304,12 +2404,7 @@ def render_main_page(sidebar_state=None):
 {_prompt_quality_summary(dq_report_df)}
 
 【6. 法人目標價與可信度】
-- 最高 / 平均 / 最低目標價: {_nullize_text(prompt_hi_str)} / {_nullize_text(prompt_me_str)} / {_nullize_text(prompt_lo_str)}
-- AI 最新聯網目標價({ai_label}): {_nullize_text(ai_tp_str)}
-- 分析師人數: {_nullize_text(ai_analyst_count)}
-- 目標價可信度: {_nullize_text(target_confidence.get('label') if isinstance(target_confidence, dict) else 'NULL')}｜{_nullize_text(target_confidence.get('message') if isinstance(target_confidence, dict) else 'NULL')}
-- 同步規則: 分析師人數優先採 AI 聯網欄位；若 AI 缺值，回填系統 numberOfAnalystOpinions，避免面板與提示詞不同步。
-- 目標價核心理由: {_nullize_text(ai_target_rationale)}
+{_prompt_target_price_panel_summary()}
 
 【7. 前瞻 PEG 詳細估值分層（目前新版計算內容：系統 / AI / FY1 / FY2 / FY3）】
 {_prompt_peg_valuation_layers()}
@@ -2412,12 +2507,7 @@ def render_main_page(sidebar_state=None):
 {_prompt_quality_summary(dq_report_df)}
 
 【6. 法人目標價與可信度】
-- 最高 / 平均 / 最低目標價: {_nullize_text(prompt_hi_str)} / {_nullize_text(prompt_me_str)} / {_nullize_text(prompt_lo_str)}
-- AI 最新目標價: {_nullize_text(ai_tp_str)}
-- 分析師人數: {_nullize_text(ai_analyst_count)}
-- 目標價可信度: {_nullize_text(target_confidence.get('label') if isinstance(target_confidence, dict) else 'NULL')}｜{_nullize_text(target_confidence.get('message') if isinstance(target_confidence, dict) else 'NULL')}
-- 同步規則: 分析師人數優先採 AI 聯網欄位；若 AI 缺值，回填系統 numberOfAnalystOpinions，避免面板與提示詞不同步。
-- 核心理由: {_nullize_text(ai_target_rationale)}
+{_prompt_target_price_panel_summary()}
 
 【7. 前瞻 PEG 詳細估值分層（目前新版計算內容：系統 / AI / FY1 / FY2 / FY3）】
 {_prompt_peg_valuation_layers()}
