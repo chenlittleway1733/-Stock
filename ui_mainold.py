@@ -2979,6 +2979,46 @@ def render_main_page(sidebar_state=None):
 
             # 第 17-C-2：買進決策版資料包。只保留會影響「現在是否值得買進」的關鍵欄位。
             # 原 context_str 保留為研究完整版資料包。
+            # 第 17-C-10：買進決策版再瘦身，移除同步自檢與模型庫更新要求；模型稽核只保留一行摘要。
+            def _prompt_has_real_content(text):
+                try:
+                    t = _nullize_text(text)
+                    if t in {"", "NULL"}:
+                        return False
+                    nullish_keywords = ["查無", "尚未執行", "未取得", "不保證完整", "NULL｜"]
+                    return not all(k in t for k in nullish_keywords[:1])
+                except Exception:
+                    return False
+
+            def _prompt_one_line(text, max_len=520):
+                try:
+                    t = re.sub(r"<[^>]+>", " ", str(text or ""))
+                    t = re.sub(r"\s*\n\s*-\s*", "；", t)
+                    t = re.sub(r"\s*\n\s*", "；", t)
+                    t = re.sub(r"\s+", " ", t).strip(" ；-")
+                    if not t:
+                        return "NULL"
+                    return t[:max_len] + ("..." if len(t) > max_len else "")
+                except Exception:
+                    return "NULL"
+
+            decision_snapshot_audit_one_line = _prompt_one_line(
+                _prompt_snapshot_audit_summary(snapshot_audit, industry_profile, dynamic_cap_pack),
+                max_len=520,
+            )
+            decision_etf_summary = _prompt_etf_panel_summary()
+            decision_chip_summary = _prompt_chip_panel_summary()
+            decision_optional_etf_chip_context = ""
+            if _prompt_has_real_content(decision_etf_summary) or _prompt_has_real_content(decision_chip_summary):
+                decision_optional_etf_chip_context = f"""
+【12. ETF / 籌碼】
+- ETF 持有與曝險：
+{decision_etf_summary}
+- 籌碼/股權結構：
+{decision_chip_summary}
+"""
+            decision_ai_key_source_summary = _prompt_ai_source_summary(ai_source_trace_df_for_prompt)
+
             decision_context_str = f"""
 【0. 系統判讀總覽】
 - 股票: {c_name} ({curr_id})
@@ -2993,11 +3033,11 @@ def render_main_page(sidebar_state=None):
 - 月營收 YoY / MoM: {panel_rg} / {_nullize_text(latest_mom_str)}
 - 資料源 / 提醒: {_nullize_text(latest_rev_source)} / {_nullize_text(latest_rev_notice)}
 
-【2. EPS 口徑與採用值（新版同步：系統 / AI / FY1 / FY2 / FY3）】
+【2. EPS 口徑與採用值】
 {eps_adopted_for_prompt}
 - 市場 / 法人隱含倍率：現價隱含 {_nullize_text(market_implied_pe if 'market_implied_pe' in locals() else None)}x；法人均價隱含 {_nullize_text(target_avg_implied_pe if 'target_avg_implied_pe' in locals() else None)}x；法人高標隱含 {_nullize_text(target_high_implied_pe if 'target_high_implied_pe' in locals() else None)}x；判讀：{_nullize_text(implied_status if 'implied_status' in locals() else None)}
 
-【3. TTM + Forward EPS 年期分層估值（17-C-9c-hotfix44）】
+【3. TTM + Forward EPS 年期分層估值】
 {_prompt_forward_eps_tier_core(forward_eps_tier_pack)}
 
 【4. 核心財務與估值】
@@ -3017,12 +3057,12 @@ def render_main_page(sidebar_state=None):
 【6. 法人目標價與可信度】
 {_prompt_target_price_panel_summary()}
 
-【7. 前瞻 PEG 詳細估值分層（目前新版計算內容：系統 / AI / FY1 / FY2 / FY3）】
+【7. 前瞻 PEG 詳細估值分層】
 {_prompt_peg_valuation_layers()}
 - 可操作估值區間低/中/高: {_nullize_text(valuation_separation.get('operable_low') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('operable_mid') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('operable_high') if isinstance(valuation_separation, dict) else 'NULL')}
 - 可操作估值提示: {_nullize_text(valuation_separation.get('action_hint') if isinstance(valuation_separation, dict) else 'NULL')}
 
-【8. 模型落差風險提示（買進決策版專用）】
+【8. 模型落差風險提示】
 {_prompt_buy_decision_gap_risk_conditions()}
 
 【9. 產業估值模型】
@@ -3041,24 +3081,12 @@ def render_main_page(sidebar_state=None):
 {_prompt_dynamic_cap_core(dynamic_cap_pack, mode="decision")}
 
 【11. 產業模型稽核摘要】
-{_prompt_snapshot_audit_summary(snapshot_audit, industry_profile, dynamic_cap_pack)}
-
-【12. ETF / 防禦力 / 籌碼摘要】
-- ETF 持有與曝險：
-{_prompt_etf_panel_summary()}
-- 防禦力/財務健康：
-{_prompt_defense_panel_summary()}
-- 籌碼/股權結構：
-{_prompt_chip_panel_summary()}
-
-【13. 提示詞與面板同步自檢】
-{_prompt_panel_sync_audit()}
-
-【14. AI 來源與驗證摘要】
-- AI JSON 驗證: {_nullize_text(ai_validation_status_for_prompt)}；警告: {_nullize_text('；'.join([str(x) for x in ai_validation_warnings_for_prompt[:5]]) if ai_validation_warnings_for_prompt else 'NULL')}
-- 估值採用 AI 欄位來源摘要:
-{_prompt_ai_source_summary(ai_source_trace_df_for_prompt)}
+{decision_snapshot_audit_one_line}
+{decision_optional_etf_chip_context}
+【14. AI 關鍵來源摘要】
+{decision_ai_key_source_summary}
 """
+
 
 
             full_prompt_for_copy = f"""你是台股研究總監 + 交易策略專家。請用繁體中文、條列、可執行結論，並嚴格使用下方 WAY AI 投資戰情室 2.1 數據。
@@ -3133,7 +3161,7 @@ def render_main_page(sidebar_state=None):
 9. [三情境目標價]：牛市 / 基準 / 熊市，各列目標價區間、假設前提、觸發條件。
 10. [下月追蹤清單]：列 8 個指標與警戒值，必須包含月營收 YoY、MoM、毛利率、EPS、Forward EPS 或法人 EPS 預估、法人目標價可信度、營益率或 ROE、重要訂單 / 產業事件。
 11. [EPS 年期判斷]：請先用 TTM EPS 判斷目前實際獲利估值，再說明目前股價與法人目標價比較像用 FY1、FY2 還是 FY3 EPS 定價；FY1/FY2/FY3 是預估年度 EPS 序列，不是查詢日後1/2/3年。若用 FY2/FY3 才合理，請說明風險與是否能作為買進依據。
-12. [產業模型是否需更新]：請根據「17-C-9c-hotfix44 單次快照稽核」回答：不建議更新模型 / 暫時觀察 / 建議檢查 hybrid 權重 / 建議檢查 primary_taxon / 建議檢查整個產業倍率。若建議檢查，請說明是市場過熱、法人過度樂觀、EPS/營收尚未落地，還是公司營運型態已改變；不可因單次現價高於 hard ceiling 就直接調高模型。
+12. [模型落差是否傷害買進安全邊際]：不要回答「產業模型是否需更新」。請只判斷現價、法人目標價、FY1/FY2/FY3 估值、Dynamic Cap 可操作區間之間的落差，是否已經降低現在買進的安全邊際。
 
 以下是 WAY AI 投資戰情室 2.1「買進決策版」系統資料。這不是完整研究資料包，只保留會直接影響買進判斷的採用值、系統值/AI值、分歧、估值層級、產業模型、Dynamic Cap 與燈號。若資料不合理，可上網查證，但不可忽略系統標示的資料品質與分歧警告：
 {decision_context_str}
@@ -3148,7 +3176,7 @@ def render_main_page(sidebar_state=None):
                     key=f"prompt_pack_mode_{curr_id}",
                 )
                 selected_prompt_for_copy = buy_decision_prompt_for_copy if prompt_mode.startswith("買進決策版") else research_prompt_for_copy
-                st.caption("買進決策版只保留會影響是否買進的採用值、系統/AI差異、估值層級、產業模型、Dynamic Cap 與燈號；研究完整版保留較完整資料品質與來源摘要。")
+                st.caption("買進決策版已精簡為買進安全邊際判斷：保留採用值、分歧、估值層級、產業模型、Dynamic Cap、燈號與關鍵來源；研究完整版保留模型稽核、同步自檢與模型庫回饋。")
 
                 # 用 json.dumps 包裝提示詞，避免換行、引號或特殊符號造成 JavaScript 失效。
                 safe_prompt_js = json.dumps(selected_prompt_for_copy, ensure_ascii=False)

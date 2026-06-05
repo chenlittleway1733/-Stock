@@ -236,6 +236,10 @@ def build_divergence_warnings(
     ai_yoy=None,
     system_peg=None,
     ai_peg=None,
+    system_forward_pe=None,
+    ai_forward_pe=None,
+    system_growth_yoy=None,
+    ai_growth_yoy=None,
     system_fair_value=None,
     ai_fair_value=None,
     system_de=None,
@@ -279,12 +283,13 @@ def build_divergence_warnings(
             "請優先確認 Forward EPS 是單一券商、AI 推估，還是多家法人共識；可操作估值應採較保守 EPS。",
         )
 
-    # 2) YoY 分歧：系統 YoY 與 AI YoY 差距 > 20 個百分點
+    # 2) YoY 分歧：單月 YoY 是核心動能欄位，差距超過 5 個百分點且相對差距 >20% 就警示。
     sy = s_float(system_yoy)
     ay = s_float(ai_yoy)
     if sy is not None and ay is not None:
         yoy_gap_pp = abs(sy - ay) * 100
-        if yoy_gap_pp > 20:
+        yoy_rel_gap = _relative_gap(sy, ay, "min")
+        if yoy_gap_pp >= 5 and (yoy_rel_gap is None or yoy_rel_gap > 0.20):
             add(
                 "YoY 分歧",
                 f"{label} 的營收年增率口徑可能混淆，請確認單月 YoY / 累計 YoY / yfinance revenueGrowth。",
@@ -308,6 +313,51 @@ def build_divergence_warnings(
                 format_quality_value(ap, "x"),
                 _fmt_gap_pct(_relative_gap(sp, ap, "min")),
                 "請回頭檢查 Forward P/E 與成長率分母，特別是低基期 EPS 或 AI 成長率口徑。",
+            )
+
+    # 3.1) Forward P/E 分歧：估值核心倍數，差距 >20% 即降權。
+    sfpe = s_float(system_forward_pe)
+    afpe = s_float(ai_forward_pe)
+    fpe_gap = _relative_gap(sfpe, afpe, "min")
+    if fpe_gap is not None and fpe_gap > 0.20:
+        add(
+            "Forward P/E 分歧",
+            f"{label} 的 Forward P/E 系統值與 AI 反推值差距過大，估值口徑需降權。",
+            "warning",
+            format_quality_value(sfpe, "x"),
+            format_quality_value(afpe, "x"),
+            _fmt_gap_pct(fpe_gap),
+            "請確認 Forward EPS 採用系統 forwardEps、法人 FY1 共識，或單一券商預估；不可混用。",
+        )
+
+    # 3.2) PEG 分歧：即使不是 <1 vs >3 的極端矛盾，差距 >50% 也要列警告。
+    peg_gap = _relative_gap(sp, ap, "min")
+    if peg_gap is not None and peg_gap > 0.50 and not ((sp < 1 and ap > 3) or (ap < 1 and sp > 3)):
+        add(
+            "PEG 分歧",
+            f"{label} 的 PEG 系統值與 AI 推估值差距過大，成長率或 Forward P/E 口徑需確認。",
+            "warning",
+            format_quality_value(sp, "x"),
+            format_quality_value(ap, "x"),
+            _fmt_gap_pct(peg_gap),
+            "PEG 對成長率分母非常敏感；請確認預估獲利成長 YoY 是否為同一年度、同一口徑。",
+        )
+
+    # 3.3) 預估獲利成長 YoY 分歧：會直接影響 PEG 與系統 Forward EPS 反推。
+    sg = s_float(system_growth_yoy)
+    ag = s_float(ai_growth_yoy)
+    if sg is not None and ag is not None:
+        growth_gap_pp = abs(sg - ag) * 100
+        growth_rel_gap = _relative_gap(sg, ag, "min")
+        if growth_gap_pp >= 10 and (growth_rel_gap is None or growth_rel_gap > 0.30):
+            add(
+                "預估獲利成長 YoY 分歧",
+                f"{label} 的預估獲利成長 YoY 系統值與 AI 推估值差距過大，PEG 與 Forward EPS 可信度需降權。",
+                "warning",
+                format_quality_value(sg, "pct"),
+                format_quality_value(ag, "pct"),
+                f"{growth_gap_pp:.1f} 個百分點",
+                "請確認成長率是年度 EPS 成長、營收成長、或單一券商推估；不宜直接帶入 PEG。",
             )
 
     # 4) 合理價分歧：公式合理價與 AI 公式合理價差距 > 50%
@@ -363,13 +413,7 @@ def infer_quality_status(adopted_value, system_value=None, ai_value=None, is_sta
     if adopted_value is None:
         return "❌ 缺資料"
     if is_stale:
-        # 若是 AI 補齊但公告月份未取得，不能顯示為高可信 / 完全可用。
-        if any(k in note_text for k in ["公告月份未取得", "未取得 FinMind 月營收", "單月 / 累計", "需人工確認", "可信度：中"]):
-            return "⚠️ 中可信/需人工確認"
         return "⚠️ 可能過期"
-    medium_risk_keywords = ["公告月份未取得", "未取得 FinMind 月營收", "單月 / 累計", "需人工確認", "可信度：中"]
-    if any(k in note_text for k in medium_risk_keywords):
-        return "⚠️ 中可信/需人工確認"
     high_risk_keywords = ["校驗失敗", "不合理", "已排除", "NULL", "過舊", "錯置", "幻覺"]
     if any(k in note_text for k in high_risk_keywords):
         return "⚠️ 已校正/需留意"
