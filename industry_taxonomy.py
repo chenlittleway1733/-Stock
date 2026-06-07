@@ -1693,6 +1693,51 @@ INDUSTRY_TAXONOMY.update({
     },
 })
 
+# ===== 第 17-C-11：第二批上市半導體缺漏股補充分類 =====
+# 目的：承接功率/類比 IC 與化合物/光電半導體，避免錯套一般 IC 設計或材料模型。
+INDUSTRY_TAXONOMY.update({
+    "POWER_ANALOG_IC": {
+        "display_name": "類比 / 電源管理 / 功率半導體",
+        "parent": "半導體核心",
+        "primary_valuation": "forward_pe_pb_cycle",
+        "secondary_valuation": ["gross_margin", "inventory", "auto_industrial_cycle", "pb", "roe"],
+        "valuation_focus": ["Forward P/E", "毛利率", "庫存週期", "車用/工控需求", "P/B", "ROE"],
+        "base_pe": 22, "pe_range": (12, 48), "floor_pe": 12, "soft_ceiling_pe": 36, "hard_ceiling_pe": 48,
+        "base_pb": None, "pb_range": None,
+        "cyclical": True, "pe_applicable": True, "pe_trap_warning": "secondary_only",
+        "theme_premium_allowed": True, "liquidity_sensitive": True,
+        "operable_discount_factor": 0.90,
+        "max_growth_factor": 1.16, "max_quality_factor": 1.16, "max_theme_factor": 1.06, "max_scale_factor": 1.04,
+        "gross_margin_baseline": 0.34, "gross_margin_good": 0.42, "gross_margin_excellent": 0.52,
+        "baked_in_themes": ["電源管理IC", "類比IC", "功率半導體", "MOSFET", "二極體"],
+        "geopolitical_factor": 0.97,
+        "recovery_sensitive": True,
+        "risk_flags": ["庫存修正", "消費/工控需求循環", "價格競爭", "車用認證時程", "中國供給競爭"],
+        "note": "PMIC、類比 IC、MOSFET、整流二極體與功率元件適用；需搭配庫存、毛利率與車用/工控週期判斷。",
+        "calibration_source": "17-C-11 第二批上市半導體補充分類"
+    },
+    "COMPOUND_SEMICONDUCTOR_OPTO": {
+        "display_name": "化合物半導體 / RF PA / 光電半導體",
+        "parent": "半導體核心",
+        "primary_valuation": "forward_pe_pb_cycle",
+        "secondary_valuation": ["orders", "gross_margin", "capacity_cycle", "pb", "customer_certification"],
+        "valuation_focus": ["Forward P/E", "訂單能見度", "毛利率", "產能利用率", "客戶認證", "P/B"],
+        "base_pe": 22, "pe_range": (12, 45), "floor_pe": 12, "soft_ceiling_pe": 34, "hard_ceiling_pe": 45,
+        "base_pb": None, "pb_range": None,
+        "cyclical": True, "pe_applicable": True, "pe_trap_warning": "secondary_only",
+        "theme_premium_allowed": True, "liquidity_sensitive": True,
+        "operable_discount_factor": 0.88,
+        "max_growth_factor": 1.16, "max_quality_factor": 1.14, "max_theme_factor": 1.08, "max_scale_factor": 1.04,
+        "gross_margin_baseline": 0.28, "gross_margin_good": 0.36, "gross_margin_excellent": 0.45,
+        "baked_in_themes": ["化合物半導體", "GaAs", "RF功率放大器", "LED", "光電半導體"],
+        "geopolitical_factor": 0.97,
+        "recovery_sensitive": True,
+        "risk_flags": ["終端需求循環", "產能利用率", "客戶認證遞延", "價格競爭", "題材未落地"],
+        "note": "台亞/全訊等化合物、RF PA 或光電半導體；若 EPS 未穩定，需降低題材溢價並交叉檢查 P/B。",
+        "calibration_source": "17-C-11 第二批上市半導體補充分類"
+    },
+})
+
 def get_taxonomy(taxon_key: str):
     """安全取得產業分類設定。"""
     if not taxon_key:

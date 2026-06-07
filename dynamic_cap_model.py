@@ -1450,3 +1450,74 @@ CALIBRATION_DEFAULTS.update({
         "geopolitical_factor": 1.00,
     },
 })
+
+
+# ===== 第 17-C-11：第二批上市半導體缺漏股 Dynamic Cap 校準預設 =====
+CALIBRATION_DEFAULTS.update({
+    "POWER_ANALOG_IC": {
+        "base_pe": 22.0, "floor_pe": 12.0, "soft_ceiling_pe": 36.0, "hard_ceiling_pe": 48.0,
+        "max_growth_factor": 1.16, "max_quality_factor": 1.16, "max_theme_factor": 1.06, "max_scale_factor": 1.04,
+        "gross_margin_baseline": 0.34, "gross_margin_good": 0.42, "gross_margin_excellent": 0.52,
+        "baked_in_themes": ["電源管理IC", "類比IC", "功率半導體", "MOSFET", "二極體"],
+        "geopolitical_factor": 0.97, "recovery_sensitive": True,
+    },
+    "COMPOUND_SEMICONDUCTOR_OPTO": {
+        "base_pe": 22.0, "floor_pe": 12.0, "soft_ceiling_pe": 34.0, "hard_ceiling_pe": 45.0,
+        "max_growth_factor": 1.16, "max_quality_factor": 1.14, "max_theme_factor": 1.08, "max_scale_factor": 1.04,
+        "gross_margin_baseline": 0.28, "gross_margin_good": 0.36, "gross_margin_excellent": 0.45,
+        "baked_in_themes": ["化合物半導體", "GaAs", "RF功率放大器", "LED", "光電半導體"],
+        "geopolitical_factor": 0.97, "recovery_sensitive": True,
+    },
+})
+
+
+# ===== 第 17-C-11B：既有 P/B 週期與特殊分類 Dynamic Cap 兜底 =====
+# 這些分類的主估值多為 P/B/ROE/事件，P/E 只作低權重輔助，避免落回 GENERAL base_pe。
+CALIBRATION_DEFAULTS.update({
+    "MEMORY_CYCLE": {
+        "base_pe": 12.0, "floor_pe": 6.0, "soft_ceiling_pe": 18.0, "hard_ceiling_pe": 24.0,
+        "max_growth_factor": 1.10, "max_quality_factor": 1.08, "max_theme_factor": 1.00, "max_scale_factor": 1.02,
+        "gross_margin_baseline": 0.18, "gross_margin_good": 0.28, "gross_margin_excellent": 0.38,
+        "baked_in_themes": ["記憶體", "DRAM", "NAND", "記憶體模組"],
+        "recovery_sensitive": True,
+    },
+    "DISPLAY_LED_CYCLE": {
+        "base_pe": 10.0, "floor_pe": 5.0, "soft_ceiling_pe": 16.0, "hard_ceiling_pe": 22.0,
+        "max_growth_factor": 1.08, "max_quality_factor": 1.08, "max_theme_factor": 1.00, "max_scale_factor": 1.02,
+        "gross_margin_baseline": 0.08, "gross_margin_good": 0.15, "gross_margin_excellent": 0.25,
+        "baked_in_themes": ["面板", "LED", "光電循環"],
+        "recovery_sensitive": True,
+    },
+    "PASSIVE_COMPONENT_CYCLE": {
+        "base_pe": 14.0, "floor_pe": 8.0, "soft_ceiling_pe": 22.0, "hard_ceiling_pe": 30.0,
+        "max_growth_factor": 1.10, "max_quality_factor": 1.10, "max_theme_factor": 1.00, "max_scale_factor": 1.02,
+        "gross_margin_baseline": 0.25, "gross_margin_good": 0.35, "gross_margin_excellent": 0.45,
+        "baked_in_themes": ["被動元件", "MLCC", "電阻", "景氣循環"],
+        "recovery_sensitive": True,
+    },
+    "FINANCIAL": {
+        "base_pe": 12.0, "floor_pe": 8.0, "soft_ceiling_pe": 18.0, "hard_ceiling_pe": 24.0,
+        "max_growth_factor": 1.06, "max_quality_factor": 1.10, "max_theme_factor": 1.00, "max_scale_factor": 1.03,
+        "gross_margin_baseline": None,
+        "baked_in_themes": ["金控", "銀行", "保險", "金融"],
+    },
+    "SHIPPING_CYCLE": {
+        "base_pe": 8.0, "floor_pe": 4.0, "soft_ceiling_pe": 14.0, "hard_ceiling_pe": 20.0,
+        "max_growth_factor": 1.08, "max_quality_factor": 1.06, "max_theme_factor": 1.00, "max_scale_factor": 1.02,
+        "gross_margin_baseline": None,
+        "baked_in_themes": ["海運", "航運", "運價循環"],
+        "recovery_sensitive": True,
+    },
+    "BIOTECH_MEDICAL": {
+        "base_pe": 22.0, "floor_pe": 12.0, "soft_ceiling_pe": 35.0, "hard_ceiling_pe": 45.0,
+        "max_growth_factor": 1.16, "max_quality_factor": 1.14, "max_theme_factor": 1.04, "max_scale_factor": 1.04,
+        "gross_margin_baseline": 0.45, "gross_margin_good": 0.55, "gross_margin_excellent": 0.65,
+        "baked_in_themes": ["藥廠", "醫材", "生技醫療"],
+    },
+    "THEME_EVENT": {
+        "base_pe": 8.0, "floor_pe": 0.0, "soft_ceiling_pe": 12.0, "hard_ceiling_pe": 18.0,
+        "max_growth_factor": 1.00, "max_quality_factor": 1.00, "max_theme_factor": 1.00, "max_scale_factor": 1.00,
+        "gross_margin_baseline": None,
+        "baked_in_themes": ["題材", "事件"],
+    },
+})
