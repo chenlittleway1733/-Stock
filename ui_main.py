@@ -1006,15 +1006,29 @@ def render_main_page(sidebar_state=None):
                 except Exception:
                     return default
 
-            # 17-C-9c-hotfix44：倍率分層。可操作倍率 ≠ 公式合理倍率 ≠ 樂觀/極限倍率。
+            # 17-C-16：倍率分層。FY 年度估值使用模型庫 base / soft / hard，
+            # 手動情境若未調整，預設使用 FY1 base，避免把 Dynamic Cap 中性倍率誤當年度手動倍率。
             operable_pe_cap = _cap_float(target_pe_cap, suggested_cap)
+            base_pe_cap_for_calc = _cap_float(dynamic_cap_pack.get("base_multiple"), None)
+            if base_pe_cap_for_calc is None:
+                base_pe_cap_for_calc = _cap_float(industry_profile.get("base_pe"), None)
+            if base_pe_cap_for_calc is None:
+                base_pe_cap_for_calc = _cap_float(industry_profile.get("cap_hint"), None)
             formula_pe_cap = _cap_float(dynamic_cap_pack.get("formula_cap"), None)
             if formula_pe_cap is None:
-                formula_pe_cap = _cap_float(dynamic_cap_pack.get("raw_cap"), operable_pe_cap)
+                formula_pe_cap = _cap_float(dynamic_cap_pack.get("raw_cap"), base_pe_cap_for_calc if base_pe_cap_for_calc is not None else operable_pe_cap)
+            if base_pe_cap_for_calc is None:
+                base_pe_cap_for_calc = formula_pe_cap
             soft_pe_cap = _cap_float(dynamic_cap_pack.get("optimistic_cap"), None)
             if soft_pe_cap is None:
                 soft_pe_cap = _cap_float(dynamic_cap_pack.get("soft_ceiling_cap"), formula_pe_cap)
             hard_pe_cap = _cap_float(dynamic_cap_pack.get("hard_ceiling_cap"), _cap_float(dynamic_cap_pack.get("ceiling_cap"), soft_pe_cap))
+            if soft_pe_cap is not None and base_pe_cap_for_calc is not None:
+                soft_pe_cap = max(soft_pe_cap, base_pe_cap_for_calc)
+            if hard_pe_cap is not None and soft_pe_cap is not None:
+                hard_pe_cap = max(hard_pe_cap, soft_pe_cap)
+            soft_pe_cap_for_calc = soft_pe_cap
+            hard_pe_cap_for_calc = hard_pe_cap
             if formula_pe_cap is not None and soft_pe_cap is not None:
                 formula_pe_cap = min(formula_pe_cap, soft_pe_cap)
             extreme_pe_cap_for_calc = soft_pe_cap if soft_pe_cap is not None else operable_pe_cap
@@ -1029,10 +1043,19 @@ def render_main_page(sidebar_state=None):
                 sys_target_price_est = None; is_capped = False
             
             extreme_target_price = eff_f_eps * extreme_pe_cap_for_calc if eff_f_eps is not None and eff_f_eps > 0 and extreme_pe_cap_for_calc is not None else None
-            # 17-B-5：使用者手動調整 Cap 時，公式合理估值仍受公式倍率/soft ceiling 控制；
-            # 但額外顯示「手動情境推估價」，讓使用者可以看見自行提高可操作 Cap 後的情境價。
+            # 17-B-5 / 17-C-16：使用者手動調整 Cap 時，公式合理估值仍受公式倍率/soft ceiling 控制；
+            # 但額外顯示「手動情境推估價」。若使用者沒有改 number_input，手動年度情境採 FY1 base。
             # 若手動倍率超過 hard ceiling，情境價仍以 hard ceiling 截斷並顯示警示。
-            manual_cap_input = operable_pe_cap
+            try:
+                manual_cap_user_adjusted = (
+                    target_pe_cap is not None
+                    and suggested_cap is not None
+                    and abs(float(target_pe_cap) - float(suggested_cap)) > 1e-6
+                )
+            except Exception:
+                manual_cap_user_adjusted = False
+            manual_cap_input = operable_pe_cap if manual_cap_user_adjusted else base_pe_cap_for_calc
+            manual_cap_source_text = "使用者手動 Cap" if manual_cap_user_adjusted else "未手動調整，採 FY1 base"
             manual_cap_for_calc = manual_cap_input
             manual_cap_hit_hard = False
             if manual_cap_input is not None and hard_pe_cap is not None and manual_cap_input > hard_pe_cap:
@@ -1218,7 +1241,7 @@ def render_main_page(sidebar_state=None):
                 elif eff_peg > 2: peg_color, peg_text = "#ff4d4d", "透支未來成長"
                 elif eff_peg <= 1: peg_color, peg_text = "#00cc66", "低估 (成長性支撐)"
                 else: peg_color, peg_text = "#FFD700", "合理區間"
-            if sys_target_price_est or ai_target_price_est:
+            if sys_target_price_est or ai_target_price_est or ai_forward_eps_fy1 is not None or ai_forward_eps_fy2 is not None or ai_forward_eps_fy3 is not None:
                 cap_warning_html = ""
                 if dynamic_cap_pack.get("valuation_mode") == "turnaround_event" or dynamic_cap_pack.get("available") is False and dynamic_cap_pack.get("valuation_mode") in {"turnaround_event", "event_chip"}:
                     cap_warning_html += "<br><span style='color:#FFD700; font-weight:bold;'>⚠️ EPS 尚未穩定轉正或產業/題材尚待確認，系統已停用 P/E 公式估值；請改看轉機事件、P/B、營收與單季 EPS 是否連續改善。</span>"
@@ -1229,7 +1252,7 @@ def render_main_page(sidebar_state=None):
                     cap_msg = f"⚠️ PEG 公式倍率已受公式合理倍率限制 ({formula_pe_cap:.1f}x)"
                     cap_warning_html = f"<br><span style='color:#FFD700; font-weight:bold;'>{cap_msg}；這不是產業 hard ceiling 封頂。</span>"
                 if (extreme_target_price and curr_p > extreme_target_price) or (ai_extreme_target_price and curr_p > ai_extreme_target_price):
-                    cap_warning_html += "<br><span style='color:#ff4d4d; font-weight:bold;'>現價已高於樂觀情境價，追高風險極大！</span>"
+                    cap_warning_html += "<br><span style='color:#ff4d4d; font-weight:bold;'>現價已高於 soft 情境公式價，追高風險極大！</span>"
                 sys_tp_str = f"{sys_target_price_est:.1f}元" if sys_target_price_est else "N/A"
                 ai_tp_est_html = f"<span style='color:#FFD700; font-size:0.95rem;'>(AI推估: {ai_target_price_est:.1f}元{time_str})</span>" if ai_target_price_est else ""            
                 sys_ext_str = f"{extreme_target_price:.1f}元" if extreme_target_price else "N/A"
@@ -1238,11 +1261,11 @@ def render_main_page(sidebar_state=None):
                 ai_manual_str = f"<span style='color:#FFD700; font-size:0.95rem;'>(AI推估: {ai_manual_target_price:.1f}元{time_str})</span>" if ai_manual_target_price else ""
                 if manual_cap_hit_hard:
                     cap_warning_html += f"<br><span style='color:#ff4d4d; font-weight:bold;'>手動情境倍率 {manual_cap_input:.1f}x 已超過產業 hard ceiling，情境價以 {hard_pe_cap:.1f}x 截斷。</span>"
-                # 17-C-9c-hotfix45：估值顯示口徑重整。
+                # 17-C-16：估值顯示口徑重整。
                 # 1) 公式合理估值保留「系統 Forward EPS × formula cap」。
-                # 2) AI估值保留「AI/法人 Forward EPS × formula cap」。
-                # 3) 年度 FY1/FY2/FY3 估值另外列示，不再混入公式合理估值。
-                # 4) 手動年度情境價以 FY1 EPS × 使用者手動 Cap 計算，用於壓力測試/反推現價倍率；樂觀年度情境價以 FY1 EPS × soft ceiling 計算。
+                # 2) 不再單列 AI估值，避免與 FY1 EPS 重複；AI/法人 EPS 留在 EPS 來源與 FY 年度層。
+                # 3) FY1/FY2/FY3 各自列出 base / soft / hard：基礎 / 樂觀 / 極限。
+                # 4) 手動年度情境價以 FY1 EPS × 使用者手動 Cap；若未手動調整，倍率採 FY1 base。
                 def _valuation_num(v):
                     try:
                         if v is None:
@@ -1279,47 +1302,43 @@ def render_main_page(sidebar_state=None):
                 fy1_formula_target_price = _valuation_price(ai_forward_eps_fy1, formula_pe_cap)
                 fy2_formula_target_price = _valuation_price(ai_forward_eps_fy2, formula_pe_cap)
                 fy3_formula_target_price = _valuation_price(ai_forward_eps_fy3, formula_pe_cap)
+                fy1_base_target_price = _valuation_price(ai_forward_eps_fy1, base_pe_cap_for_calc)
+                fy1_soft_target_price = _valuation_price(ai_forward_eps_fy1, soft_pe_cap_for_calc)
+                fy1_hard_target_price = _valuation_price(ai_forward_eps_fy1, hard_pe_cap_for_calc)
+                fy2_base_target_price = _valuation_price(ai_forward_eps_fy2, base_pe_cap_for_calc)
+                fy2_soft_target_price = _valuation_price(ai_forward_eps_fy2, soft_pe_cap_for_calc)
+                fy2_hard_target_price = _valuation_price(ai_forward_eps_fy2, hard_pe_cap_for_calc)
+                fy3_base_target_price = _valuation_price(ai_forward_eps_fy3, base_pe_cap_for_calc)
+                fy3_soft_target_price = _valuation_price(ai_forward_eps_fy3, soft_pe_cap_for_calc)
+                fy3_hard_target_price = _valuation_price(ai_forward_eps_fy3, hard_pe_cap_for_calc)
                 fy1_manual_target_price = _valuation_price(fy1_eps_for_annual, manual_cap_for_calc)
-                fy1_optimistic_target_price = _valuation_price(fy1_eps_for_annual, extreme_pe_cap_for_calc)
 
                 sys_tp_str = _fmt_price(sys_target_price_est)
-                ai_tp_txt = _fmt_price(ai_target_price_est)
-                fy1_formula_txt = _fmt_price(fy1_formula_target_price)
-                fy2_formula_txt = _fmt_price(fy2_formula_target_price)
-                fy3_formula_txt = _fmt_price(fy3_formula_target_price)
+                fy1_range_txt = f"{_fmt_price(fy1_base_target_price)} / {_fmt_price(fy1_soft_target_price)} / {_fmt_price(fy1_hard_target_price)}"
+                fy2_range_txt = f"{_fmt_price(fy2_base_target_price)} / {_fmt_price(fy2_soft_target_price)} / {_fmt_price(fy2_hard_target_price)}"
+                fy3_range_txt = f"{_fmt_price(fy3_base_target_price)} / {_fmt_price(fy3_soft_target_price)} / {_fmt_price(fy3_hard_target_price)}"
                 fy1_manual_txt = _fmt_price(fy1_manual_target_price)
-                fy1_optimistic_txt = _fmt_price(fy1_optimistic_target_price)
 
-                if fy1_optimistic_target_price is not None and curr_p is not None and curr_p > fy1_optimistic_target_price:
-                    cap_warning_html += "<br><span style='color:#ff4d4d; font-weight:bold;'>現價已高於 FY1 樂觀年度情境價，追高風險極大！</span>"
+                if fy1_hard_target_price is not None and curr_p is not None and curr_p > fy1_hard_target_price:
+                    cap_warning_html += "<br><span style='color:#ff4d4d; font-weight:bold;'>現價已高於 FY1 極限情境價，追高風險極大！</span>"
 
                 tp_est_str = (
                     f"公式合理估值(系統Forward EPS×formula cap): {sys_tp_str}；"
-                    f"AI估值(AI EPS×formula cap): {ai_tp_txt}；"
-                    f"FY1年度估值(FY1 EPS×formula cap): {fy1_formula_txt}；"
-                    f"FY2第二年度估值(FY2 EPS×formula cap): {fy2_formula_txt}；"
-                    f"FY3第三年度估值(FY3 EPS×formula cap，高風險): {fy3_formula_txt}；"
-                    f"手動年度情境價(FY1 EPS×使用者手動Cap，壓力測試): {fy1_manual_txt}；"
-                    f"樂觀年度情境價(FY1 EPS×soft ceiling): {fy1_optimistic_txt}；"
-                    f"公式倍率: {_fmt_cap(formula_pe_cap)}；使用者手動倍率: {_fmt_cap(manual_cap_for_calc)}；樂觀倍率: {_fmt_cap(extreme_pe_cap_for_calc)}"
+                    f"FY1年度估值 base/soft/hard(基礎/樂觀/極限): {fy1_range_txt}；"
+                    f"FY2第二年度估值 base/soft/hard(基礎/樂觀/極限): {fy2_range_txt}；"
+                    f"FY3第三年度估值 base/soft/hard(基礎/樂觀/極限，高風險): {fy3_range_txt}；"
+                    f"手動年度情境價(FY1 EPS×{manual_cap_source_text}，壓力測試): {fy1_manual_txt}；"
+                    f"年度倍率 base/soft/hard: {_fmt_cap(base_pe_cap_for_calc)} / {_fmt_cap(soft_pe_cap_for_calc)} / {_fmt_cap(hard_pe_cap_for_calc)}；"
+                    f"公式倍率: {_fmt_cap(formula_pe_cap)}；手動情境倍率: {_fmt_cap(manual_cap_for_calc)}"
                 )
 
                 eps_period_note = raw_ai_period or "系統/推估，請確認 EPS 年期"
                 debug_eps = eff_f_eps if eff_f_eps else (ai_f_eps_calc if ai_f_eps_calc else 0)
 
-                _rows = [
-                    ("🎯 1. 公式合理估值", "系統 Forward EPS × formula cap，非買賣目標", eff_f_eps, formula_pe_cap, sys_target_price_est, "#ffffff"),
-                    ("🤖 2. AI估值", "AI / 法人 EPS × formula cap，需看來源可信度", ai_f_eps_calc, formula_pe_cap, ai_target_price_est, "#FCD34D"),
-                    ("📅 3. FY1年度估值", f"FY1 EPS × formula cap｜{fy1_year_text}", ai_forward_eps_fy1, formula_pe_cap, fy1_formula_target_price, "#93C5FD"),
-                    ("📆 4. FY2第二年度估值", f"FY2 EPS × formula cap｜{fy2_year_text}｜僅供市場先行定價判斷", ai_forward_eps_fy2, formula_pe_cap, fy2_formula_target_price, "#A7F3D0"),
-                    ("🚧 5. FY3第三年度估值", f"FY3 EPS × formula cap｜{fy3_year_text}｜高風險遠期情境", ai_forward_eps_fy3, formula_pe_cap, fy3_formula_target_price, "#FCA5A5"),
-                    ("🛠️ 6. 手動年度情境價", "FY1 EPS × 使用者手動 Cap（壓力測試 / 反推現價倍率）", fy1_eps_for_annual, manual_cap_for_calc, fy1_manual_target_price, "#00BFFF"),
-                    ("🚀 7. 樂觀年度情境價", "FY1 EPS × soft ceiling，高風險情境", fy1_eps_for_annual, extreme_pe_cap_for_calc, fy1_optimistic_target_price, "#ff4d4d"),
-                ]
-
                 _valuation_rows_html = ""
-                for _title, _desc, _eps, _cap, _price, _color in _rows:
-                    _valuation_rows_html += (
+
+                def _single_valuation_row(_title, _desc, _eps, _cap, _price, _color):
+                    return (
                         f"<div style='border-bottom:1px solid #333; padding:6px 0; line-height:1.45;'>"
                         f"<div style='display:flex; justify-content:space-between; gap:10px;'>"
                         f"<span style='color:{_color}; font-weight:bold;'>{_title}</span>"
@@ -1329,12 +1348,69 @@ def render_main_page(sidebar_state=None):
                         f"</div>"
                     )
 
+                def _fy_matrix_row(_title, _desc, _eps, _base_price, _soft_price, _hard_price, _color):
+                    return (
+                        f"<div style='border-bottom:1px solid #333; padding:8px 0; line-height:1.45;'>"
+                        f"<div style='color:{_color}; font-weight:bold; margin-bottom:5px;'>{_title}</div>"
+                        f"<div style='display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px;'>"
+                        f"<div style='background:#111827; padding:6px 7px; border-radius:6px;'><div style='color:#93C5FD;font-size:0.76rem;'>基礎 base</div><div style='color:#E5E7EB;font-weight:bold;'>{_fmt_price(_base_price)}</div></div>"
+                        f"<div style='background:#111827; padding:6px 7px; border-radius:6px;'><div style='color:#FCD34D;font-size:0.76rem;'>樂觀 soft</div><div style='color:#E5E7EB;font-weight:bold;'>{_fmt_price(_soft_price)}</div></div>"
+                        f"<div style='background:#111827; padding:6px 7px; border-radius:6px;'><div style='color:#FCA5A5;font-size:0.76rem;'>極限 hard</div><div style='color:#E5E7EB;font-weight:bold;'>{_fmt_price(_hard_price)}</div></div>"
+                        f"</div>"
+                        f"<div style='color:#aaa; font-size:0.78rem; margin-top:4px;'>{_desc}｜EPS: {_fmt_eps(_eps)}｜倍率 base/soft/hard: {_fmt_cap(base_pe_cap_for_calc)} / {_fmt_cap(soft_pe_cap_for_calc)} / {_fmt_cap(hard_pe_cap_for_calc)}</div>"
+                        f"</div>"
+                    )
+
+                _valuation_rows_html += _single_valuation_row(
+                    "🎯 1. 公式合理估值",
+                    "系統 Forward EPS × formula cap，非買賣目標",
+                    eff_f_eps,
+                    formula_pe_cap,
+                    sys_target_price_est,
+                    "#ffffff",
+                )
+                _valuation_rows_html += _fy_matrix_row(
+                    "📅 2. FY1年度估值",
+                    f"FY1 EPS 年度主估值參考｜{fy1_year_text}",
+                    ai_forward_eps_fy1,
+                    fy1_base_target_price,
+                    fy1_soft_target_price,
+                    fy1_hard_target_price,
+                    "#93C5FD",
+                )
+                _valuation_rows_html += _fy_matrix_row(
+                    "📆 3. FY2第二年度估值",
+                    f"只用於判斷市場先行定價，不直接當買點｜{fy2_year_text}",
+                    ai_forward_eps_fy2,
+                    fy2_base_target_price,
+                    fy2_soft_target_price,
+                    fy2_hard_target_price,
+                    "#A7F3D0",
+                )
+                _valuation_rows_html += _fy_matrix_row(
+                    "🚧 4. FY3第三年度估值",
+                    f"第三年預估或長期情境，高風險解讀｜{fy3_year_text}",
+                    ai_forward_eps_fy3,
+                    fy3_base_target_price,
+                    fy3_soft_target_price,
+                    fy3_hard_target_price,
+                    "#FCA5A5",
+                )
+                _valuation_rows_html += _single_valuation_row(
+                    "🛠️ 5. 手動年度情境價",
+                    f"FY1 EPS × {manual_cap_source_text}（壓力測試 / 反推現價倍率）",
+                    fy1_eps_for_annual,
+                    manual_cap_for_calc,
+                    fy1_manual_target_price,
+                    "#00BFFF",
+                )
+
                 target_price_html = f"""
                 <div style='background:#1e1e1e; padding:16px 18px; border-radius:10px; border-left:6px solid {peg_color}; margin-top:4px; margin-bottom:20px;'>
                     <div style='display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:12px;'>
                         <div>
                             <div style='font-weight:bold; color:#F3F4F6; font-size:1.25rem;'>📈 前瞻 PEG (Forward PEG)｜詳細估值分層</div>
-                            <div style='color:#AAB2C0; font-size:0.88rem; margin-top:4px;'>系統 / AI / FY1 / FY2 / FY3 獨立列示，避免與本益比、股價淨值比小卡混在同一列。</div>
+                            <div style='color:#AAB2C0; font-size:0.88rem; margin-top:4px;'>系統公式與 FY1/FY2/FY3 年度三情境分開顯示；AI/法人 EPS 不再另列重複估值。</div>
                         </div>
                         <div style='text-align:right; min-width:170px;'>
                             <div style='background:{peg_color}; color:#000; padding:4px 10px; border-radius:999px; font-size:0.85rem; font-weight:bold; display:inline-block;'>{peg_text}</div>
@@ -1345,10 +1421,10 @@ def render_main_page(sidebar_state=None):
                     {_valuation_rows_html}
                     <div style='background:#111827; color:#E5E7EB; padding:7px 9px; border-radius:6px; margin-top:7px; line-height:1.55;'>
                         <b>使用規則</b><br>
-                        公式合理估值只使用系統 Forward EPS；系統 Forward EPS 缺值時為 NULL，不得用 AI/FY1 冒充系統公式；AI估值獨立顯示；FY1 是年度主估值參考；FY2 只用於市場先行定價判斷；FY3 為高風險遠期情境，不可直接當買點。
+                        公式合理估值只使用系統 Forward EPS；FY1/FY2/FY3 同時列出 base / soft / hard，分別代表基礎 / 樂觀 / 極限。FY2 只用於市場先行定價判斷；FY3 為高風險遠期情境，不可直接當買點；手動情境若未調整，預設採 FY1 base。
                     </div>
                     <div style='background:#2c2c2c; padding:4px 8px; border-radius:4px; margin-top:4px;'>
-                        <small style='color:#00bfff;'>🐛 [底層運算除錯] 系統EPS: {_fmt_eps(eff_f_eps)}｜AI EPS: {_fmt_eps(ai_f_eps_calc)}｜FY1 EPS: {_fmt_eps(ai_forward_eps_fy1)}｜FY2 EPS: {_fmt_eps(ai_forward_eps_fy2)}｜FY3 EPS: {_fmt_eps(ai_forward_eps_fy3)}｜EPS 年期/來源: {eps_period_note}｜公式倍率: {_fmt_cap(formula_pe_cap)}｜使用者手動倍率: {_fmt_cap(manual_cap_for_calc)}｜樂觀倍率: {_fmt_cap(extreme_pe_cap_for_calc)}</small>
+                        <small style='color:#00bfff;'>🐛 [底層運算除錯] 系統EPS: {_fmt_eps(eff_f_eps)}｜AI/法人 EPS: {_fmt_eps(ai_f_eps_calc)}｜FY1 EPS: {_fmt_eps(ai_forward_eps_fy1)}｜FY2 EPS: {_fmt_eps(ai_forward_eps_fy2)}｜FY3 EPS: {_fmt_eps(ai_forward_eps_fy3)}｜EPS 年期/來源: {eps_period_note}｜formula: {_fmt_cap(formula_pe_cap)}｜base/soft/hard: {_fmt_cap(base_pe_cap_for_calc)} / {_fmt_cap(soft_pe_cap_for_calc)} / {_fmt_cap(hard_pe_cap_for_calc)}｜手動倍率: {_fmt_cap(manual_cap_for_calc)} ({manual_cap_source_text})</small>
                     </div>
                     {implied_html}{cap_warning_html}
                     </div>
@@ -1393,6 +1469,7 @@ def render_main_page(sidebar_state=None):
                 fy1_year=ai_forward_eps_fy1_year,
                 fy2_year=ai_forward_eps_fy2_year,
                 fy3_year=ai_forward_eps_fy3_year,
+                base_cap=base_pe_cap_for_calc,
                 formula_cap=formula_pe_cap,
                 operable_cap=operable_pe_cap,
                 soft_ceiling=soft_pe_cap,
@@ -1494,10 +1571,15 @@ def render_main_page(sidebar_state=None):
                     _ft_pe_fy3 = _nullize_text(ft_summary.get("market_pe_fy3"))
                     _ft_basis = _nullize_text(ft_summary.get("eps_basis"))
                     _ft_source = _nullize_text(ft_summary.get("eps_source_note"))
+                    _ft_base_cap = _nullize_text(ft_summary.get("base_cap"))
+                    _ft_soft_cap = _nullize_text(ft_summary.get("soft_cap"))
+                    _ft_hard_cap = _nullize_text(ft_summary.get("hard_cap"))
+                    _ft_cap_definition = _nullize_text(ft_summary.get("cap_definition"))
                     st.markdown(
                         "<div style='background:#111827;color:#F3F4F6;border-left:6px solid #60A5FA;padding:12px 14px;border-radius:8px;margin-bottom:10px;line-height:1.7;'>"
                         f"<div style='font-weight:bold;color:#93C5FD;'>市場 EPS 年期判讀：{_ft_market_view}</div>"
                         f"<div><b>FY 定義：</b>{_ft_definition}</div>"
+                        f"<div><b>年度估值倍率 base / soft / hard：</b>{_ft_base_cap}x / {_ft_soft_cap}x / {_ft_hard_cap}x｜{_ft_cap_definition}</div>"
                         f"<div>TTM EPS：{_ft_ttm_eps}｜近四季已實現 EPS，用於目前實際獲利估值</div>"
                         f"<div>FY1 EPS：{_ft_fy1_eps}｜{_ft_fy1_label}</div>"
                         f"<div>FY2 EPS：{_ft_fy2_eps}｜{_ft_fy2_label}</div>"
@@ -1514,6 +1596,18 @@ def render_main_page(sidebar_state=None):
                     else:
                         st.caption("Forward EPS 年期分層估值資料不足。")
                 with st.expander("🏭 產業估值模型明細", expanded=False):
+                    _industry_model_built_at = industry_profile.get("model_built_at", "—") if isinstance(industry_profile, dict) else "—"
+                    _industry_model_version = industry_profile.get("model_build_version", "—") if isinstance(industry_profile, dict) else "—"
+                    _industry_model_note = industry_profile.get("model_build_note", "—") if isinstance(industry_profile, dict) else "—"
+                    st.markdown(
+                        "<div style='background:#0F172A;color:#E5E7EB;border-left:6px solid #38BDF8;"
+                        "padding:12px 14px;border-radius:8px;margin-bottom:10px;line-height:1.7;'>"
+                        f"<div style='font-weight:bold;color:#7DD3FC;'>產業估值模型建立日期：{_industry_model_built_at}</div>"
+                        f"<div>模型版本：{_industry_model_version}</div>"
+                        f"<div style='color:#CBD5E1;'>{_industry_model_note}</div>"
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
                     st.dataframe(build_industry_valuation_model_report(industry_profile), use_container_width=True, hide_index=True)
 
                 with st.expander("🧪 17-C-9c-hotfix44 產業模型單次快照稽核表", expanded=True):
@@ -2273,7 +2367,7 @@ def render_main_page(sidebar_state=None):
                         lines.append(f"- AI校對採用紀錄: {notes}")
                     if warnings != "無":
                         lines.append(f"- 模型警告: {warnings}")
-                    lines.append("- 使用限制: 公式合理倍率與樂觀倍率不是買點；操作應優先看系統可操作倍率區間、Forward PEG 估值分層與最終燈號；使用者手動倍率僅供壓力測試/反推現價倍率。")
+                    lines.append("- 使用限制: 公式合理倍率、soft/hard 情境倍率都不是買點；操作應優先看系統可操作倍率區間、Forward PEG 年度三情境與最終燈號；使用者手動倍率僅供壓力測試/反推現價倍率。")
 
                     if str(mode).lower() in {"decision", "buy", "compact"}:
                         return "\n".join(lines) if lines else "NULL"
@@ -2301,7 +2395,7 @@ def render_main_page(sidebar_state=None):
                         research_lines.append("\n【9-2. Dynamic Cap 採用成長/現金流因子】")
                         research_lines.append("- " + "；".join(growth_parts))
                     research_lines.append("\n【9-3. EPS 採用規則】")
-                    research_lines.append("- TTM EPS 看目前實際獲利；FY1 作主估值；FY2 判斷市場是否先行定價；FY3 僅作高風險樂觀情境；最新單季 EPS 不進年度估值。")
+                    research_lines.append("- TTM EPS 看目前實際獲利；FY1 作主估值；FY2 判斷市場是否先行定價；FY3 僅作高風險遠期情境；最新單季 EPS 不進年度估值。")
                     return "\n".join(research_lines) if research_lines else "NULL"
                 except Exception as e:
                     try:
@@ -2317,8 +2411,17 @@ def render_main_page(sidebar_state=None):
                     if not isinstance(pack, dict):
                         return "NULL"
                     s = pack.get("summary", {}) or {}
+                    report = pack.get("report")
+                    def _fmt_price(v):
+                        x = s_float(v)
+                        return "NULL" if x is None else f"{x:.1f}元"
+                    def _fmt_cap(v):
+                        x = s_float(v)
+                        return "NULL" if x is None else f"{x:.1f}x"
                     lines = [
                         f"- FY 定義: {_nullize_text(s.get('fy_definition'))}",
+                        f"- 年度估值倍率 base / soft / hard: {_fmt_cap(s.get('base_cap'))} / {_fmt_cap(s.get('soft_cap'))} / {_fmt_cap(s.get('hard_cap'))}",
+                        f"- 倍率意義: {_nullize_text(s.get('cap_definition'))}",
                         f"- TTM EPS: {_nullize_text(s.get('ttm_eps'))}｜近四季已實現 EPS，用於目前實際獲利估值",
                         f"- FY1 EPS: {_nullize_text(s.get('fy1_eps'))}｜{_nullize_text(s.get('fy1_label'))}",
                         f"- FY2 EPS: {_nullize_text(s.get('fy2_eps'))}｜{_nullize_text(s.get('fy2_label'))}",
@@ -2328,10 +2431,24 @@ def render_main_page(sidebar_state=None):
                         f"- EPS 來源備註: {_nullize_text(s.get('eps_source_note'))}",
                         f"- 現價隱含 P/E（TTM/FY1/FY2/FY3）: {_nullize_text(s.get('market_pe_ttm'))}x / {_nullize_text(s.get('market_pe_fy1'))}x / {_nullize_text(s.get('market_pe_fy2'))}x / {_nullize_text(s.get('market_pe_fy3'))}x",
                         f"- 市場 EPS 年期判讀: {_nullize_text(s.get('market_view'))}",
-                        "- 請 AI 判斷：目前股價/法人目標價偏高，是因為 Dynamic Cap 倍率太低，還是因為市場已經在看 FY2/FY3 EPS？也請同時對照 TTM EPS，看目前實際獲利是否能支撐股價。",
-                        "- 重要限制：FY1/FY2/FY3 是預估年度 EPS 序列，不是查詢日後1/2/3年；FY2 只能用來解釋市場先行，不等於可操作買點；FY3 只作高風險樂觀情境，不可直接作為買進目標。",
                     ]
-                    return "\\n".join(lines)
+                    if report is not None and not getattr(report, "empty", True):
+                        for _label in ["FY1", "FY2", "FY3"]:
+                            try:
+                                _mask = report["EPS口徑"].astype(str).str.contains(_label, na=False)
+                                if _mask.any():
+                                    _r = report[_mask].iloc[0]
+                                    lines.append(
+                                        f"- {_label} base/soft/hard 估值: "
+                                        f"{_fmt_price(_r.get('基礎估值'))} / {_fmt_price(_r.get('樂觀估值'))} / {_fmt_price(_r.get('極限估值'))}"
+                                    )
+                            except Exception:
+                                pass
+                    lines.extend([
+                        "- 請 AI 判斷：目前股價/法人目標價偏高，是因為 Dynamic Cap 倍率太低，還是因為市場已經在看 FY2/FY3 EPS？也請同時對照 TTM EPS，看目前實際獲利是否能支撐股價。",
+                        "- 重要限制：FY1/FY2/FY3 是預估年度 EPS 序列，不是查詢日後1/2/3年；base 是基礎估值，soft 是樂觀估值，hard 是極限風控上限；FY2 只能用來解釋市場先行，不等於可操作買點；FY3 屬高風險遠期情境，不可直接作為買進目標。",
+                    ])
+                    return "\n".join(lines)
                 except Exception as e:
                     try:
                         log_exception("PromptPack", "_prompt_forward_eps_tier_core", e)
@@ -2342,7 +2459,6 @@ def render_main_page(sidebar_state=None):
 
             def _prompt_peg_valuation_layers(
                 system_eps=locals().get('eff_f_eps'),
-                ai_eps=locals().get('ai_f_eps_calc'),
                 fy1_eps=locals().get('ai_forward_eps_fy1'),
                 fy2_eps=locals().get('ai_forward_eps_fy2'),
                 fy3_eps=locals().get('ai_forward_eps_fy3'),
@@ -2351,17 +2467,24 @@ def render_main_page(sidebar_state=None):
                 fy3_year=locals().get('ai_forward_eps_fy3_year'),
                 fy1_eps_for_annual=locals().get('fy1_eps_for_annual'),
                 formula_cap=locals().get('formula_pe_cap'),
+                base_cap=locals().get('base_pe_cap_for_calc'),
+                soft_cap=locals().get('soft_pe_cap_for_calc'),
+                hard_cap=locals().get('hard_pe_cap_for_calc'),
                 manual_cap=locals().get('manual_cap_for_calc'),
-                optimistic_cap=locals().get('extreme_pe_cap_for_calc'),
+                manual_cap_source=locals().get('manual_cap_source_text'),
                 system_price=locals().get('sys_target_price_est'),
-                ai_price=locals().get('ai_target_price_est'),
-                fy1_price=locals().get('fy1_formula_target_price'),
-                fy2_price=locals().get('fy2_formula_target_price'),
-                fy3_price=locals().get('fy3_formula_target_price'),
+                fy1_base_price=locals().get('fy1_base_target_price'),
+                fy1_soft_price=locals().get('fy1_soft_target_price'),
+                fy1_hard_price=locals().get('fy1_hard_target_price'),
+                fy2_base_price=locals().get('fy2_base_target_price'),
+                fy2_soft_price=locals().get('fy2_soft_target_price'),
+                fy2_hard_price=locals().get('fy2_hard_target_price'),
+                fy3_base_price=locals().get('fy3_base_target_price'),
+                fy3_soft_price=locals().get('fy3_soft_target_price'),
+                fy3_hard_price=locals().get('fy3_hard_target_price'),
                 manual_price=locals().get('fy1_manual_target_price'),
-                optimistic_price=locals().get('fy1_optimistic_target_price'),
             ):
-                """前瞻 PEG 大區塊的新版 7 層估值，同步打包到買進決策版與研究完整版。"""
+                """前瞻 PEG 大區塊：系統公式 + FY1/FY2/FY3 base/soft/hard + 手動情境。"""
                 try:
                     def _p(v):
                         x = s_float(v)
@@ -2376,19 +2499,21 @@ def render_main_page(sidebar_state=None):
                         t = _nullize_text(v)
                         return "年期未明" if t == "NULL" else t
 
-                    rows = [
-                        ("1. 公式合理估值", "系統 Forward EPS × formula cap，非買賣目標", system_eps, formula_cap, system_price, "保留系統 Forward EPS 口徑；若 EPS/估值為 NULL，代表系統未取得 Forward EPS，不得用 AI/FY1 冒充系統公式。"),
-                        ("2. AI估值", "AI / 法人 EPS × formula cap，需看來源可信度", ai_eps, formula_cap, ai_price, "用 AI 取得或校正後 EPS 獨立估值，不覆蓋系統估值。"),
-                        ("3. FY1年度估值", f"FY1 EPS × formula cap｜{_y(fy1_year)}", fy1_eps, formula_cap, fy1_price, "一年預估 EPS 的年度主估值參考。"),
-                        ("4. FY2第二年度估值", f"FY2 EPS × formula cap｜{_y(fy2_year)}", fy2_eps, formula_cap, fy2_price, "只用於判斷市場是否提前反映第二年獲利，不直接當買點。"),
-                        ("5. FY3第三年度估值", f"FY3 EPS × formula cap｜{_y(fy3_year)}", fy3_eps, formula_cap, fy3_price, "高風險遠期情境，需多家法人共識或人工確認，不可直接當買進目標。"),
-                        ("6. 手動年度情境價", "FY1 EPS × 使用者手動 Cap（壓力測試 / 反推現價倍率）", fy1_eps_for_annual, manual_cap, manual_price, "用 FY1 EPS 搭配使用者手動倍率，供壓力測試/反推現價倍率；不代表系統建議買點。"),
-                        ("7. 樂觀年度情境價", "FY1 EPS × soft ceiling，高風險情境", fy1_eps_for_annual, optimistic_cap, optimistic_price, "樂觀情境價不是買點；若現價高於此值，追高風險極高。"),
-                    ]
                     lines = []
-                    for title, formula, eps, cap, price, note in rows:
-                        lines.append(f"- {title}: {_p(price)}｜{formula}｜EPS={_e(eps)}｜倍率={_c(cap)}｜判讀={note}")
-                    lines.append("- 使用規則: 公式合理估值只使用系統 Forward EPS；系統 Forward EPS 缺值時為 NULL，不得用 AI/FY1 冒充系統公式；AI估值獨立顯示；FY1 是年度主估值參考；FY2 只解釋市場先行定價；FY3 是高風險遠期情境；手動/樂觀年度情境以 FY1 EPS 計算。")
+                    lines.append(f"- 1. 公式合理估值: {_p(system_price)}｜系統 Forward EPS × formula cap｜EPS={_e(system_eps)}｜倍率={_c(formula_cap)}｜判讀=保留系統 Forward EPS 口徑；若為 NULL，不得用 AI/FY1 冒充系統公式。")
+                    lines.append(f"- 年度情境倍率: base={_c(base_cap)}（基礎） / soft={_c(soft_cap)}（樂觀） / hard={_c(hard_cap)}（極限風控上限）")
+
+                    for title, eps, year, base_price, soft_price, hard_price, note in [
+                        ("2. FY1年度估值", fy1_eps, fy1_year, fy1_base_price, fy1_soft_price, fy1_hard_price, "一年預估 EPS 的年度主估值參考。"),
+                        ("3. FY2第二年度估值", fy2_eps, fy2_year, fy2_base_price, fy2_soft_price, fy2_hard_price, "只用於判斷市場是否提前反映第二年獲利，不直接當買點。"),
+                        ("4. FY3第三年度估值", fy3_eps, fy3_year, fy3_base_price, fy3_soft_price, fy3_hard_price, "高風險遠期情境，需多家法人共識或人工確認，不可直接當買進目標。"),
+                    ]:
+                        lines.append(
+                            f"- {title}: base/soft/hard={_p(base_price)} / {_p(soft_price)} / {_p(hard_price)}"
+                            f"｜EPS={_e(eps)}｜年度={_y(year)}｜判讀={note}"
+                        )
+                    lines.append(f"- 5. 手動年度情境價: {_p(manual_price)}｜FY1 EPS × {_nullize_text(manual_cap_source or '使用者手動 Cap')}｜EPS={_e(fy1_eps_for_annual)}｜倍率={_c(manual_cap)}｜判讀=壓力測試/反推現價倍率；不代表系統建議買點。")
+                    lines.append("- 使用規則: 前瞻 PEG 面板不再單列 AI估值，避免與 FY1 年度估值重複；AI/法人 EPS 留在 EPS 來源與 FY 年度層。FY2 只解釋市場先行定價；FY3 是高風險遠期情境；hard 是極限風控上限，不是買進目標。")
                     return "\n".join(lines)
                 except Exception as e:
                     try:
@@ -2622,15 +2747,22 @@ def render_main_page(sidebar_state=None):
                 ai_forward_eps_fy_source_note_val=locals().get('ai_forward_eps_fy_source_note'),
                 ai_forward_eps_fy_basis_val=locals().get('ai_forward_eps_fy_basis'),
                 formula_pe_cap_val=locals().get('formula_pe_cap'),
+                base_pe_cap_val=locals().get('base_pe_cap_for_calc'),
+                soft_pe_cap_val=locals().get('soft_pe_cap_for_calc'),
+                hard_pe_cap_val=locals().get('hard_pe_cap_for_calc'),
                 manual_cap_for_calc_val=locals().get('manual_cap_for_calc'),
-                extreme_pe_cap_for_calc_val=locals().get('extreme_pe_cap_for_calc'),
+                manual_cap_source_val=locals().get('manual_cap_source_text'),
                 sys_target_price_est_val=locals().get('sys_target_price_est'),
-                ai_target_price_est_val=locals().get('ai_target_price_est'),
-                fy1_formula_target_price_val=locals().get('fy1_formula_target_price'),
-                fy2_formula_target_price_val=locals().get('fy2_formula_target_price'),
-                fy3_formula_target_price_val=locals().get('fy3_formula_target_price'),
+                fy1_base_target_price_val=locals().get('fy1_base_target_price'),
+                fy1_soft_target_price_val=locals().get('fy1_soft_target_price'),
+                fy1_hard_target_price_val=locals().get('fy1_hard_target_price'),
+                fy2_base_target_price_val=locals().get('fy2_base_target_price'),
+                fy2_soft_target_price_val=locals().get('fy2_soft_target_price'),
+                fy2_hard_target_price_val=locals().get('fy2_hard_target_price'),
+                fy3_base_target_price_val=locals().get('fy3_base_target_price'),
+                fy3_soft_target_price_val=locals().get('fy3_soft_target_price'),
+                fy3_hard_target_price_val=locals().get('fy3_hard_target_price'),
                 fy1_manual_target_price_val=locals().get('fy1_manual_target_price'),
-                fy1_optimistic_target_price_val=locals().get('fy1_optimistic_target_price'),
             ):
                 """第 17-C-9c-hotfix45-2：打包提示詞專用 EPS/估值同步摘要，避免仍顯示 dynamic_cap_pack 舊 cap_inputs。"""
                 try:
@@ -2679,9 +2811,9 @@ def render_main_page(sidebar_state=None):
                     if _has(ai_forward_eps_fy3_val):
                         lines.append(f"- FY3 EPS: {_num(ai_forward_eps_fy3_val)}｜年度={_year(ai_forward_eps_fy3_year_val)}｜用於高風險遠期情境，不可直接當買點")
                     if _has(ai_f_eps_calc_val):
-                        lines.append(f"- AI估值採用 EPS: {_num(ai_f_eps_calc_val)}（AI/法人 EPS × formula cap）")
+                        lines.append(f"- AI/法人 Forward EPS 採用值: {_num(ai_f_eps_calc_val)}（只作來源與交叉檢查；不再單列 AI估值，避免與 FY1 重複）")
                     if _has(_fy1_annual):
-                        lines.append(f"- 手動/樂觀年度情境採用 EPS: {_num(_fy1_annual)}（優先 FY1 EPS；FY1 無資料才退回採用 Forward EPS）")
+                        lines.append(f"- 手動年度情境採用 EPS: {_num(_fy1_annual)}（優先 FY1 EPS；FY1 無資料才退回採用 Forward EPS）")
 
                     source_parts = []
                     if _n(raw_ai_period_val) != "NULL":
@@ -2696,25 +2828,26 @@ def render_main_page(sidebar_state=None):
                     cap_parts = []
                     if _cap(formula_pe_cap_val) != "NULL":
                         cap_parts.append(f"formula cap={_cap(formula_pe_cap_val)}")
+                    if _cap(base_pe_cap_val) != "NULL" or _cap(soft_pe_cap_val) != "NULL" or _cap(hard_pe_cap_val) != "NULL":
+                        cap_parts.append(f"年度 base/soft/hard={_cap(base_pe_cap_val)} / {_cap(soft_pe_cap_val)} / {_cap(hard_pe_cap_val)}")
                     if _cap(manual_cap_for_calc_val) != "NULL":
-                        cap_parts.append(f"使用者手動 Cap={_cap(manual_cap_for_calc_val)}")
-                    if _cap(extreme_pe_cap_for_calc_val) != "NULL":
-                        cap_parts.append(f"soft ceiling={_cap(extreme_pe_cap_for_calc_val)}")
+                        cap_parts.append(f"手動情境 Cap={_cap(manual_cap_for_calc_val)}（{_n(manual_cap_source_val)}）")
                     if cap_parts:
                         lines.append("- 估值倍率: " + "；".join(cap_parts))
 
                     price_parts = []
                     for label, val in [
-                        ("系統公式", sys_target_price_est_val), ("AI估值", ai_target_price_est_val),
-                        ("FY1", fy1_formula_target_price_val), ("FY2", fy2_formula_target_price_val),
-                        ("FY3", fy3_formula_target_price_val), ("手動年度", fy1_manual_target_price_val),
-                        ("樂觀年度", fy1_optimistic_target_price_val),
+                        ("系統公式", sys_target_price_est_val),
+                        ("FY1-base", fy1_base_target_price_val), ("FY1-soft", fy1_soft_target_price_val), ("FY1-hard", fy1_hard_target_price_val),
+                        ("FY2-base", fy2_base_target_price_val), ("FY2-soft", fy2_soft_target_price_val), ("FY2-hard", fy2_hard_target_price_val),
+                        ("FY3-base", fy3_base_target_price_val), ("FY3-soft", fy3_soft_target_price_val), ("FY3-hard", fy3_hard_target_price_val),
+                        ("手動年度", fy1_manual_target_price_val),
                     ]:
                         if _price(val) != "NULL":
                             price_parts.append(f"{label}={_price(val)}")
                     if price_parts:
                         lines.append("- 新版估值結果: " + "；".join(price_parts))
-                    lines.append("- 重要規則: 公式合理估值只使用系統 Forward EPS；系統 Forward EPS 缺值時為 NULL，不得用 AI/FY1 冒充系統公式；AI估值獨立顯示；FY1 是年度主估值參考；FY2 僅判斷市場是否先行定價；FY3 為高風險遠期情境；手動/樂觀年度情境以 FY1 EPS 為主。")
+                    lines.append("- 重要規則: 公式合理估值只使用系統 Forward EPS；系統 Forward EPS 缺值時為 NULL，不得用 AI/FY1 冒充系統公式；前瞻 PEG 不再單列 AI估值；FY1/FY2/FY3 各列 base/soft/hard，分別為基礎/樂觀/極限；手動年度情境以 FY1 EPS 為主，未手動調整時採 FY1 base。")
                     return "\n".join(lines) if lines else "無可用 EPS 面板資料，提示詞不納入 EPS 估值判斷。"
                 except Exception as e:
                     try:
@@ -2851,7 +2984,7 @@ def render_main_page(sidebar_state=None):
                     checks = [
                         ("月營收公告月份", latest_rev_display_label not in (None, "", "公告月份：未知")),
                         ("EPS拆欄/FY1/FY2/FY3", eps_adopted_for_prompt not in (None, "", "NULL")),
-                        ("Forward PEG 7層估值", _prompt_peg_valuation_layers() not in (None, "", "NULL")),
+                        ("Forward PEG 年度三情境估值", _prompt_peg_valuation_layers() not in (None, "", "NULL")),
                         ("法人目標價/分析師人數", (_nullize_text(prompt_analyst_count) != "NULL") or (_nullize_text(prompt_hi_str) != "NULL") or (_nullize_text(prompt_me_str) != "NULL") or (_nullize_text(prompt_lo_str) != "NULL")),
                         ("Dynamic Cap/可操作區間", isinstance(dynamic_cap_pack, dict) and bool(dynamic_cap_pack)),
                         ("最終操作燈號", isinstance(final_signal, dict) and bool(final_signal.get('signal'))),
@@ -2881,7 +3014,7 @@ def render_main_page(sidebar_state=None):
 
 若符合下列任一條件，請啟動模型落差診斷：
 - 現價高於系統可操作區間高標 20% 以上。
-- 現價高於 FY1年度估值 / AI-FY1估值 30% 以上；若系統公式合理估值為 NULL，不得用系統公式價判斷。
+- 現價高於 FY1 base 基礎估值 30% 以上；若系統公式合理估值為 NULL，不得用系統公式價判斷。
 - 法人平均目標價與系統可操作區間中值差距超過 30%。
 - 法人最高目標價與最低目標價差距超過平均目標價 60%。
 - 現價用 FY1 EPS 看高於 hard ceiling，但用 FY2 / FY3 EPS 看可解釋。
@@ -2913,7 +3046,7 @@ def render_main_page(sidebar_state=None):
 
 若符合下列任一條件，請啟動買進風險檢查：
 - 現價高於系統可操作區間高標 20% 以上。
-- 現價高於 FY1年度估值 / AI-FY1估值 30% 以上；若系統公式合理估值為 NULL，不得用系統公式價判斷。
+- 現價高於 FY1 base 基礎估值 30% 以上；若系統公式合理估值為 NULL，不得用系統公式價判斷。
 - 現價只能用 FY2 / FY3 EPS 才能解釋。
 - 法人平均目標價與系統可操作區間中值差距超過 30%。
 - 法人最高目標價與最低目標價差距超過平均目標價 60%。
@@ -2930,7 +3063,7 @@ def render_main_page(sidebar_state=None):
 - FY2 只能解釋市場先行定價，不等於買點。
 - FY3 只作高風險遠期情境，不可作一般買進依據。
 - 法人高標不可直接視為合理買進價。
-- 公式合理價、樂觀情境價、使用者手動壓力測試價都不是系統建議買點。"""
+- 公式合理價、年度 soft/hard 情境價、使用者手動壓力測試價都不是系統建議買點。"""
 
             def _prompt_model_library_feedback_request():
                 """研究完整版專用：請外部 AI 把個案分析回饋成模型庫修正候選，不放入買進決策版。"""
@@ -3024,7 +3157,7 @@ def render_main_page(sidebar_state=None):
 【6. 法人目標價與可信度】
 {_prompt_target_price_panel_summary()}
 
-【7. 前瞻 PEG 詳細估值分層（目前新版計算內容：系統 / AI / FY1 / FY2 / FY3）】
+【7. 前瞻 PEG 詳細估值分層（系統公式 + FY1/FY2/FY3 base/soft/hard）】
 {_prompt_peg_valuation_layers()}
 
 【8. TTM + Forward EPS 年期分層估值（17-C-9c-hotfix44，判斷目前EPS與FY1/FY2/FY3）】
@@ -3034,10 +3167,10 @@ def render_main_page(sidebar_state=None):
 - 系統逆向推算估值摘要: {ctx_tp_est}
 - 可操作估值提示: {_nullize_text(valuation_separation.get('action_hint') if isinstance(valuation_separation, dict) else 'NULL')}
 - 可操作估值區間低/中/高: {_nullize_text(valuation_separation.get('operable_low') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('operable_mid') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('operable_high') if isinstance(valuation_separation, dict) else 'NULL')}
-- 手動年度情境價（FY1 EPS × 使用者手動 Cap，壓力測試 / 反推現價倍率）: {_nullize_text(fy1_manual_target_price if 'fy1_manual_target_price' in locals() else None)}
-- 樂觀年度情境價（FY1 EPS × soft ceiling）: {_nullize_text(fy1_optimistic_target_price if 'fy1_optimistic_target_price' in locals() else None)}
+- 手動年度情境價（FY1 EPS × 手動情境 Cap；未調整時採 FY1 base）: {_nullize_text(fy1_manual_target_price if 'fy1_manual_target_price' in locals() else None)}
+- 年度 base / soft / hard 倍率: {_nullize_text(base_pe_cap_for_calc if 'base_pe_cap_for_calc' in locals() else None)} / {_nullize_text(soft_pe_cap_for_calc if 'soft_pe_cap_for_calc' in locals() else None)} / {_nullize_text(hard_pe_cap_for_calc if 'hard_pe_cap_for_calc' in locals() else None)}
 - 警告數 / 重大警告數: {_nullize_text(valuation_separation.get('warning_count') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('danger_count') if isinstance(valuation_separation, dict) else 'NULL')}
-- 提醒: 手動年度情境價為使用者手動倍率壓力測試，不等於系統可操作買點；公式合理價、樂觀情境價與 hard ceiling 也不是買進目標；買賣以系統可操作區間與最終燈號為主。
+- 提醒: 手動年度情境價為壓力測試，不等於系統可操作買點；公式合理價、年度 soft/hard 情境價與 hard ceiling 也不是買進目標；買賣以系統可操作區間與最終燈號為主。
 
 【10. 產業估值模型（只列本股模型）】
 - 匹配模型: {_nullize_text(industry_profile.get('model_label') if isinstance(industry_profile, dict) else 'NULL')}
@@ -3133,7 +3266,7 @@ def render_main_page(sidebar_state=None):
 【6. 法人目標價與可信度】
 {_prompt_target_price_panel_summary()}
 
-【7. 前瞻 PEG 詳細估值分層（目前新版計算內容：系統 / AI / FY1 / FY2 / FY3）】
+【7. 前瞻 PEG 詳細估值分層（系統公式 + FY1/FY2/FY3 base/soft/hard）】
 {_prompt_peg_valuation_layers()}
 - 可操作估值區間低/中/高: {_nullize_text(valuation_separation.get('operable_low') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('operable_mid') if isinstance(valuation_separation, dict) else 'NULL')} / {_nullize_text(valuation_separation.get('operable_high') if isinstance(valuation_separation, dict) else 'NULL')}
 - 可操作估值提示: {_nullize_text(valuation_separation.get('action_hint') if isinstance(valuation_separation, dict) else 'NULL')}

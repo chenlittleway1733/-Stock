@@ -778,6 +778,7 @@ def validate_ai_financial_json(ai_fin, stock_id="", stock_name=""):
         "trailing_eps", "forward_eps",
         "latest_quarter_eps", "ttm_eps", "fiscal_year_eps",
         "forward_eps_system", "forward_eps_ai", "forward_eps_consensus",
+        "forward_eps_fy1", "forward_eps_fy2", "forward_eps_fy3",
         "pb", "target_price", "target_price_high",
         "target_price_avg", "target_price_low", "target_price_analyst_count", "free_cash_flow",
         "current_ratio", "shares_outstanding"
@@ -815,7 +816,7 @@ def validate_ai_financial_json(ai_fin, stock_id="", stock_name=""):
         null_field("pb", f"P/B={pb:.2f} 超出 0～100 安全範圍")
 
     # EPS：允許虧損，但極端值通常是單位或股本欄位誤抓
-    for field in ["trailing_eps", "forward_eps", "latest_quarter_eps", "ttm_eps", "fiscal_year_eps", "forward_eps_system", "forward_eps_ai", "forward_eps_consensus"]:
+    for field in ["trailing_eps", "forward_eps", "latest_quarter_eps", "ttm_eps", "fiscal_year_eps", "forward_eps_system", "forward_eps_ai", "forward_eps_consensus", "forward_eps_fy1", "forward_eps_fy2", "forward_eps_fy3"]:
         v = data.get(field)
         if v is not None and abs(v) > 10000:
             null_field(field, f"EPS={v:,.2f} 絕對值過大，疑似單位錯置")
@@ -1529,8 +1530,9 @@ def build_valuation_separation_report(
     conservative_eps_candidates = _positive_numbers(consensus_forward_eps, system_forward_eps, ai_forward_eps)
     conservative_eps = min(conservative_eps_candidates) if conservative_eps_candidates else None
 
-    # 可納入可操作估值的基準價：系統/AI公式合理價為主；法人平均目標價需至少中可信才納入；法人低標可作風險下緣參考。
-    base_candidates = _positive_numbers(system_formula_fair_value, ai_formula_fair_value)
+    # 可納入可操作估值的基準價：系統公式合理價為主；法人平均目標價需至少中可信才納入；法人低標可作風險下緣參考。
+    # 17-C-16：AI/法人 FY1 已在 Forward PEG 年度三情境呈現，不再作為獨立 AI 公式價進入可操作區間。
+    base_candidates = _positive_numbers(system_formula_fair_value)
     if target_conf["rank"] >= 3:
         base_candidates.extend(_positive_numbers(broker_target_avg))
     if not base_candidates and conservative_eps is not None and s_float(target_pe_cap) is not None:
@@ -1602,22 +1604,10 @@ def build_valuation_separation_report(
             "可信度/限制": "第 17-C-6a 後採 Forward EPS × 公式倍率；PEG 僅作輔助檢查，不直接推公式價。",
         },
         {
-            "估值類型": "AI公式合理估值",
-            "數值": format_quality_value(ai_formula_fair_value, "price"),
-            "用途": "AI 補值後的公式輸出，用於和系統公式交叉檢查。",
-            "可信度/限制": "若 AI EPS 或 YoY 與系統分歧，需降級使用。",
-        },
-        {
             "估值類型": "系統公式極限價",
             "數值": format_quality_value(system_formula_extreme_value, "price"),
             "用途": "情境上限 / 風險提醒，不作為買進目標價。",
             "可信度/限制": "Forward EPS × Cap，容易被樂觀 EPS 放大。",
-        },
-        {
-            "估值類型": "AI公式極限價",
-            "數值": format_quality_value(ai_formula_extreme_value, "price"),
-            "用途": "AI 輸入值推算的情境上限，只供壓力測試。",
-            "可信度/限制": "AI 來源不明或樣本數不足時，可信度降低。",
         },
         {
             "估值類型": "產業估值模型",
@@ -1923,6 +1913,7 @@ def build_forward_eps_tiered_valuation_report(
     fy1_year=None,
     fy2_year=None,
     fy3_year=None,
+    base_cap=None,
     formula_cap=None,
     operable_cap=None,
     soft_ceiling=None,
@@ -1950,11 +1941,18 @@ def build_forward_eps_tiered_valuation_report(
     tgt_hi = sf(broker_target_high)
     tgt_lo = sf(broker_target_low)
     caps = {
+        "base": sf(base_cap),
         "formula": sf(formula_cap),
         "operable": sf(operable_cap),
         "soft": sf(soft_ceiling),
         "hard": sf(hard_ceiling),
     }
+    if caps["base"] is None:
+        caps["base"] = caps["formula"] or caps["operable"]
+    if caps["soft"] is not None and caps["base"] is not None:
+        caps["soft"] = max(caps["soft"], caps["base"])
+    if caps["hard"] is not None and caps["soft"] is not None:
+        caps["hard"] = max(caps["hard"], caps["soft"])
 
     fy_definition = "FY1/FY2/FY3 EPS 是預估年度 EPS 序列；FY1=一年預估EPS、FY2=第二年預估EPS、FY3=第三年預估EPS，實際年度請以 EPS 對應年度欄位解讀。"
 
@@ -1974,16 +1972,20 @@ def build_forward_eps_tiered_valuation_report(
 
     rows = []
     tiers = [
-        ("TTM 目前實際獲利估值", "TTM EPS", "近四季已實現 EPS", ttm_eps, "近四季", caps["formula"], "看目前已實現獲利與風控；不反映未來成長。"),
-        ("FY1 一年預估估值", "FY1 EPS", fy1_label, fy1_eps, year_label(fy1_year), caps["formula"], "一年預估 EPS；主要作防守與合理估值參考。"),
-        ("FY2 第二年預估估值", "FY2 EPS", fy2_label, fy2_eps, year_label(fy2_year), caps["formula"], "第二年預估 EPS；可解釋市場先行 6～18 個月，但需折扣看待。"),
-        ("FY3 第三年預估 / 高風險情境", "FY3 EPS", fy3_label, fy3_eps, year_label(fy3_year), caps["soft"], "第三年預估 EPS 或長期情境 EPS；不可直接視為買進目標。"),
+        ("TTM 目前實際獲利估值", "TTM EPS", "近四季已實現 EPS", ttm_eps, "近四季", "看目前已實現獲利與風控；不反映未來成長。"),
+        ("FY1 一年預估估值", "FY1 EPS", fy1_label, fy1_eps, year_label(fy1_year), "一年預估 EPS；主要作防守與合理估值參考。"),
+        ("FY2 第二年預估估值", "FY2 EPS", fy2_label, fy2_eps, year_label(fy2_year), "第二年預估 EPS；可解釋市場先行 6～18 個月，但需折扣看待。"),
+        ("FY3 第三年預估 / 高風險情境", "FY3 EPS", fy3_label, fy3_eps, year_label(fy3_year), "第三年預估 EPS 或長期情境 EPS；不可直接視為買進目標。"),
     ]
 
-    for tier_name, eps_label, display_name, eps, year, cap, note in tiers:
+    for tier_name, eps_label, display_name, eps, year, note in tiers:
         e = sf(eps)
-        c = sf(cap)
-        price = e * c if e is not None and e > 0 and c is not None else None
+        base_c = sf(caps["base"])
+        soft_c = sf(caps["soft"])
+        hard_c = sf(caps["hard"])
+        base_price = e * base_c if e is not None and e > 0 and base_c is not None else None
+        soft_price = e * soft_c if e is not None and e > 0 and soft_c is not None else None
+        hard_price = e * hard_c if e is not None and e > 0 and hard_c is not None else None
         market_pe = cp / e if cp is not None and e is not None and e > 0 else None
         avg_pe = tgt_avg / e if tgt_avg is not None and e is not None and e > 0 else None
         hi_pe = tgt_hi / e if tgt_hi is not None and e is not None and e > 0 else None
@@ -1994,8 +1996,14 @@ def build_forward_eps_tiered_valuation_report(
             "顯示名稱": display_name,
             "EPS對應年度/期間": year if year is not None else "未標示",
             "EPS數值": e,
-            "採用倍率": c,
-            "估值": price,
+            "採用倍率": base_c,
+            "估值": base_price,
+            "基礎倍率(base)": base_c,
+            "樂觀倍率(soft)": soft_c,
+            "極限倍率(hard)": hard_c,
+            "基礎估值": base_price,
+            "樂觀估值": soft_price,
+            "極限估值": hard_price,
             "現價隱含PE": market_pe,
             "法人均價隱含PE": avg_pe,
             "法人高標隱含PE": hi_pe,
@@ -2043,6 +2051,10 @@ def build_forward_eps_tiered_valuation_report(
         "fy3_label": fy3_label,
         "eps_basis": eps_basis or "未標示",
         "eps_source_note": eps_source_note or "—",
+        "base_cap": caps["base"],
+        "soft_cap": caps["soft"],
+        "hard_cap": caps["hard"],
+        "cap_definition": "base=基礎估值倍率；soft=樂觀估值倍率；hard=極限估值倍率。hard 只作風控上限，不是買進目標。",
         "market_view": market_view,
         "market_pe_ttm": cp_pe_ttm,
         "market_pe_fy1": cp_pe_fy1,
@@ -2050,4 +2062,3 @@ def build_forward_eps_tiered_valuation_report(
         "market_pe_fy3": cp_pe_fy3,
     }
     return {"summary": summary, "report": report}
-

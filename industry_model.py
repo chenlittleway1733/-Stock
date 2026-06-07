@@ -15,9 +15,9 @@ from stock_mapping import STOCK_MAPPING
 
 
 # ===== 第 17-C-9：產業估值模型維護資訊 =====
-INDUSTRY_MODEL_BUILD_VERSION = "17-C-9"
-INDUSTRY_MODEL_BUILT_AT = "2026-06-02"
-INDUSTRY_MODEL_BUILD_NOTE = "17-C-9 單次快照稽核表；17-C-7C-1 已完成 hybrid 權重顯示同步。"
+INDUSTRY_MODEL_BUILD_VERSION = "17-C-16"
+INDUSTRY_MODEL_BUILT_AT = "2026-06-08"
+INDUSTRY_MODEL_BUILD_NOTE = "17-C-16 產業分類、倍率與 hybrid 權重擴充；已完成第六批混合型企業調整。"
 INDUSTRY_MODEL_REVIEW_SUGGESTION = "建議每月做 mapping/hybrid 小檢查，每季檢查產業 base/soft/hard；本系統目前未啟用歷史紀錄。"
 
 

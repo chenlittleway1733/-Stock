@@ -774,6 +774,25 @@ def _roe_adjustment(roev: Optional[float]) -> tuple[float, str]:
     return 0.09, f"ROE {_fmt_pct(roev)} 極佳"
 
 
+def _operating_margin_adjustment(opm: Optional[float]) -> tuple[float, str]:
+    """第 17-C-16：營益率納入品質係數，而不只是高毛利低轉換率防呆。"""
+    if opm is None:
+        return 0.0, "營益率缺值"
+    if opm < 0:
+        return -0.08, f"營益率 {_fmt_pct(opm)} 為負"
+    if opm < 0.05:
+        return -0.04, f"營益率 {_fmt_pct(opm)} 偏低，獲利轉換率不足"
+    if opm < 0.10:
+        return -0.02, f"營益率 {_fmt_pct(opm)} 略低"
+    if opm < 0.15:
+        return 0.0, f"營益率 {_fmt_pct(opm)} 中性"
+    if opm < 0.25:
+        return _linear_score(opm, 0.15, 0.25, 0.01, 0.03), f"營益率 {_fmt_pct(opm)} 正常偏佳，小幅加分"
+    if opm < 0.35:
+        return _linear_score(opm, 0.25, 0.35, 0.04, 0.06), f"營益率 {_fmt_pct(opm)} 優良"
+    return 0.07, f"營益率 {_fmt_pct(opm)} 極佳，獲利轉換率明確"
+
+
 def _operating_margin_guard(
     opm: Optional[float],
     gm: Optional[float],
@@ -813,8 +832,9 @@ def quality_factor_relative(
     1) 絕對毛利率水準
     2) 相對產業毛利位置，含低於同業分層扣分
     3) ROE 漸進式加減分
-    4) 營益率、D/E、FCF 與資料分歧防呆
-    5) 最後才套產業 max_quality_factor
+    4) 營益率獲利轉換率加減分
+    5) 高毛利低營益率、D/E、FCF 與資料分歧防呆
+    6) 最後才套產業 max_quality_factor
     """
     calibration = calibration or {}
     gm = _pct01(gross_margin)
@@ -837,9 +857,10 @@ def quality_factor_relative(
     abs_adj, abs_note = _absolute_margin_adjustment(gm)
     rel_adj, rel_note = _relative_margin_adjustment(gm, gm_base, gm_good, gm_excellent)
     roe_adj, roe_note = _roe_adjustment(roev)
+    op_adj, op_note = _operating_margin_adjustment(opm)
 
-    adjustment += abs_adj + rel_adj + roe_adj
-    notes.extend([abs_note, rel_note, roe_note])
+    adjustment += abs_adj + rel_adj + roe_adj + op_adj
+    notes.extend([abs_note, rel_note, roe_note, op_note])
 
     factor = 1.0 + adjustment
 
@@ -847,7 +868,7 @@ def quality_factor_relative(
     before_op = factor
     factor = _operating_margin_guard(opm, gm, factor, notes)
     if opm is not None and before_op == factor:
-        notes.append(f"營益率 {_fmt_pct(opm)} 未觸發品質折扣")
+        notes.append(f"營益率 {_fmt_pct(opm)} 已納入品質係數，未觸發額外折扣")
 
     # 營收、負債、FCF、防呆。
     rev = _pct01(revenue_yoy)
@@ -1108,6 +1129,15 @@ def build_pb_cycle_pack(current_price: Any, pb_ratio: Any, industry_profile: Dic
     rows.append({"類型": "P/B 週期模型", "項目": "目前 P/B", "倍率/係數": _fmt_x(pb), "說明": "週期股優先看 P/B 與報價/運價/庫存週期"})
     rows.append({"類型": "P/B 週期模型", "項目": "參考 P/B 區間", "倍率/係數": f"{_fmt_x(low_pb)}～{_fmt_x(high_pb)}", "說明": industry_profile.get("warning_note", "低 P/E 不一定代表低估")})
     rows.append({"類型": "P/B 週期模型", "項目": "BVPS 推估", "倍率/係數": "NULL" if bvps is None else f"{bvps:.2f}", "說明": "以現價 ÷ P/B 反推；後續可改接 Yahoo BVPS"})
+    warnings = ["本產業優先使用 P/B 週期模型，P/E 僅作輔助"]
+    high_warn = _sf(industry_profile.get("pb_high_warning_threshold"))
+    low_warn = _sf(industry_profile.get("pb_low_warning_threshold"))
+    if pb is not None and high_warn is not None and pb > high_warn:
+        warnings.append(f"目前 P/B {pb:.2f}x 高於週期警戒 {high_warn:.1f}x，需避免用低 P/E 誤判便宜")
+        rows.append({"類型": "P/B 週期模型", "項目": "P/B 高檔警示", "倍率/係數": f"{pb:.2f}x", "說明": f"高於週期警戒 {high_warn:.1f}x；需確認報價/庫存/稼動率是否仍在上行段。"})
+    if pb is not None and low_warn is not None and pb < low_warn:
+        warnings.append(f"目前 P/B {pb:.2f}x 低於週期低檔 {low_warn:.1f}x，需查獲利與資產減損風險")
+        rows.append({"類型": "P/B 週期模型", "項目": "P/B 低檔觀察", "倍率/係數": f"{pb:.2f}x", "說明": f"低於週期低檔 {low_warn:.1f}x；可能是低估，也可能反映獲利/資產疑慮。"})
     return {
         "available": False,
         "valuation_mode": "pb_cycle",
@@ -1117,7 +1147,7 @@ def build_pb_cycle_pack(current_price: Any, pb_ratio: Any, industry_profile: Dic
         "bvps": bvps,
         "pb_low_price": low_val,
         "pb_high_price": high_val,
-        "warnings": ["本產業優先使用 P/B 週期模型，P/E 僅作輔助"],
+        "warnings": warnings,
         "report": pd.DataFrame(rows),
     }
 
@@ -1286,7 +1316,7 @@ def calculate_dynamic_cap_v2(
 
     for name, pack in [
         ("成長係數", g),
-        ("品質係數（毛利率相對化 + ROE）", q),
+        ("品質係數（毛利率相對化 + 營益率 + ROE）", q),
         ("題材 / 訂單係數", th),
         ("規模與成長彈性係數", sc),
         ("地緣政治 / 供應鏈風險係數", geo),
@@ -1356,12 +1386,20 @@ def calculate_dynamic_cap_v2(
         market_implied_forward_pe = cp_for_implied / adopted_forward_eps_for_implied
         if market_implied_forward_pe > fc["hard_ceiling"]:
             market_implied_status = "現價隱含 Forward P/E 已高於系統 hard ceiling，屬市場重估 / 題材動能區，不可直接當可操作買點。"
+            warnings.append("現價隱含 Forward P/E 已高於產業 hard ceiling：列為市場重估 / 題材動能區，不上修買進倍率")
+            if p.get("market_momentum_zone_if_above_hard"):
+                _add_row(rows, "風控", "市場重估 / 動能區", f"{market_implied_forward_pe:.1f}x", "現價隱含倍率已超過 hard ceiling；模型保留風控上限，不追高上修可操作倍率。")
         elif market_implied_forward_pe > fc["soft_ceiling"]:
             market_implied_status = "現價隱含 Forward P/E 高於 soft ceiling，屬偏樂觀估值區。"
+            if p.get("market_momentum_zone_if_above_hard"):
+                _add_row(rows, "風控", "估值偏熱區", f"{market_implied_forward_pe:.1f}x", "現價隱含倍率高於 soft ceiling，需 EPS 上修與法人共識支撐。")
         elif market_implied_forward_pe > final_cap:
             market_implied_status = "現價隱含 Forward P/E 高於可操作倍率，但仍低於產業硬上限。"
         else:
             market_implied_status = "現價隱含 Forward P/E 未高於可操作倍率。"
+        extreme_guard = _sf(p.get("extreme_implied_pe_guard"))
+        if extreme_guard is not None and market_implied_forward_pe > extreme_guard:
+            warnings.append(f"現價隱含 Forward P/E 超過 {extreme_guard:.0f}x，疑似 EPS 分母過低或題材化估值，需改用事件/PB 輔助交叉驗證")
 
     return {
         "available": True,
@@ -1521,3 +1559,632 @@ CALIBRATION_DEFAULTS.update({
         "baked_in_themes": ["題材", "事件"],
     },
 })
+
+
+# ===== 第 17-C-12：高倍率分類拆分 Dynamic Cap 校準預設 =====
+CALIBRATION_DEFAULTS.update({
+    "OPTICAL_COMM_CPO_HIGH_VISIBILITY": {
+        "base_pe": 42.0, "floor_pe": 24.0, "soft_ceiling_pe": 70.0, "hard_ceiling_pe": 90.0,
+        "max_growth_factor": 1.25, "max_quality_factor": 1.18, "max_theme_factor": 1.10, "max_scale_factor": 1.08,
+        "gross_margin_baseline": 0.34, "gross_margin_good": 0.42, "gross_margin_excellent": 0.50,
+        "baked_in_themes": ["CPO", "矽光子", "800G", "1.6T", "AI data center"],
+        "geopolitical_factor": 0.97,
+    },
+    "OPTICAL_COMM_STANDARD": {
+        "base_pe": 30.0, "floor_pe": 16.0, "soft_ceiling_pe": 45.0, "hard_ceiling_pe": 58.0,
+        "max_growth_factor": 1.18, "max_quality_factor": 1.14, "max_theme_factor": 1.06, "max_scale_factor": 1.05,
+        "gross_margin_baseline": 0.28, "gross_margin_good": 0.36, "gross_margin_excellent": 0.44,
+        "baked_in_themes": ["光通訊", "光收發", "AI data center"],
+        "geopolitical_factor": 0.98, "recovery_sensitive": True,
+    },
+    "SEMICAP_ADV_PACKAGING_CORE": {
+        "base_pe": 38.0, "floor_pe": 22.0, "soft_ceiling_pe": 60.0, "hard_ceiling_pe": 80.0,
+        "max_growth_factor": 1.24, "max_quality_factor": 1.18, "max_theme_factor": 1.10, "max_scale_factor": 1.08,
+        "gross_margin_baseline": 0.32, "gross_margin_good": 0.40, "gross_margin_excellent": 0.48,
+        "baked_in_themes": ["CoWoS", "先進封裝", "濕製程", "設備"],
+        "geopolitical_factor": 0.96,
+    },
+    "SEMICAP_GENERAL_EQUIPMENT": {
+        "base_pe": 28.0, "floor_pe": 14.0, "soft_ceiling_pe": 42.0, "hard_ceiling_pe": 55.0,
+        "max_growth_factor": 1.16, "max_quality_factor": 1.12, "max_theme_factor": 1.05, "max_scale_factor": 1.04,
+        "gross_margin_baseline": 0.26, "gross_margin_good": 0.34, "gross_margin_excellent": 0.42,
+        "baked_in_themes": ["半導體設備", "PCB設備", "自動化設備"],
+        "geopolitical_factor": 0.97, "recovery_sensitive": True,
+    },
+    "THERMAL_LIQUID_CORE": {
+        "base_pe": 38.0, "floor_pe": 22.0, "soft_ceiling_pe": 60.0, "hard_ceiling_pe": 80.0,
+        "max_growth_factor": 1.24, "max_quality_factor": 1.18, "max_theme_factor": 1.10, "max_scale_factor": 1.08,
+        "gross_margin_baseline": 0.28, "gross_margin_good": 0.35, "gross_margin_excellent": 0.44,
+        "baked_in_themes": ["液冷", "水冷", "AI伺服器", "高階散熱"],
+    },
+    "THERMAL_AI_COMPONENTS": {
+        "base_pe": 30.0, "floor_pe": 16.0, "soft_ceiling_pe": 45.0, "hard_ceiling_pe": 58.0,
+        "max_growth_factor": 1.18, "max_quality_factor": 1.14, "max_theme_factor": 1.06, "max_scale_factor": 1.05,
+        "gross_margin_baseline": 0.24, "gross_margin_good": 0.30, "gross_margin_excellent": 0.38,
+        "baked_in_themes": ["AI散熱", "散熱零組件", "AI伺服器"],
+        "recovery_sensitive": "partial",
+    },
+    "MEMORY_IP_AI": {
+        "base_pe": 35.0, "floor_pe": 18.0, "soft_ceiling_pe": 60.0, "hard_ceiling_pe": 75.0,
+        "max_growth_factor": 1.22, "max_quality_factor": 1.20, "max_theme_factor": 1.08, "max_scale_factor": 1.06,
+        "gross_margin_baseline": 0.45, "gross_margin_good": 0.55, "gross_margin_excellent": 0.65,
+        "baked_in_themes": ["記憶體IP", "AI記憶體", "Royalty", "記憶體循環"],
+        "geopolitical_factor": 0.97,
+    },
+})
+
+
+# ===== 第 17-C-13：第二批半導體中游/週期分類 Dynamic Cap 校準預設 =====
+CALIBRATION_DEFAULTS.update({
+    "OSAT_AI_HPC_TESTING": {
+        "base_pe": 28.0, "floor_pe": 16.0, "soft_ceiling_pe": 45.0, "hard_ceiling_pe": 58.0,
+        "max_growth_factor": 1.20, "max_quality_factor": 1.14, "max_theme_factor": 1.08, "max_scale_factor": 1.05,
+        "gross_margin_baseline": 0.24, "gross_margin_good": 0.30, "gross_margin_excellent": 0.38,
+        "baked_in_themes": ["AI晶片測試", "HPC測試", "先進封裝", "封測"],
+        "geopolitical_factor": 0.96, "recovery_sensitive": True,
+    },
+    "OSAT_MEMORY_DISPLAY_MATURE": {
+        "base_pe": 18.0, "floor_pe": 10.0, "soft_ceiling_pe": 30.0, "hard_ceiling_pe": 40.0,
+        "max_growth_factor": 1.12, "max_quality_factor": 1.10, "max_theme_factor": 1.02, "max_scale_factor": 1.03,
+        "gross_margin_baseline": 0.18, "gross_margin_good": 0.24, "gross_margin_excellent": 0.32,
+        "baked_in_themes": ["記憶體封測", "驅動IC封測", "成熟封測"],
+        "geopolitical_factor": 0.97, "recovery_sensitive": True,
+    },
+    "POWER_MANAGEMENT_IC_DESIGN": {
+        "base_pe": 26.0, "floor_pe": 14.0, "soft_ceiling_pe": 42.0, "hard_ceiling_pe": 58.0,
+        "max_growth_factor": 1.18, "max_quality_factor": 1.16, "max_theme_factor": 1.06, "max_scale_factor": 1.04,
+        "gross_margin_baseline": 0.38, "gross_margin_good": 0.46, "gross_margin_excellent": 0.55,
+        "baked_in_themes": ["電源管理IC", "類比IC", "PMIC"],
+        "geopolitical_factor": 0.97, "recovery_sensitive": True,
+    },
+    "POWER_DISCRETE_COMPONENT_CYCLE": {
+        "base_pe": 18.0, "floor_pe": 10.0, "soft_ceiling_pe": 30.0, "hard_ceiling_pe": 42.0,
+        "max_growth_factor": 1.12, "max_quality_factor": 1.10, "max_theme_factor": 1.02, "max_scale_factor": 1.03,
+        "gross_margin_baseline": 0.26, "gross_margin_good": 0.34, "gross_margin_excellent": 0.42,
+        "baked_in_themes": ["功率半導體", "MOSFET", "二極體", "整流器"],
+        "geopolitical_factor": 0.97, "recovery_sensitive": True,
+    },
+    "SEMIMAT_ADVANCED_CONSUMABLES": {
+        "base_pe": 34.0, "floor_pe": 20.0, "soft_ceiling_pe": 55.0, "hard_ceiling_pe": 70.0,
+        "max_growth_factor": 1.22, "max_quality_factor": 1.18, "max_theme_factor": 1.08, "max_scale_factor": 1.06,
+        "gross_margin_baseline": 0.34, "gross_margin_good": 0.42, "gross_margin_excellent": 0.50,
+        "baked_in_themes": ["EUV", "晶圓載具", "CMP", "半導體耗材", "先進製程"],
+        "geopolitical_factor": 0.96, "recovery_sensitive": True,
+    },
+    "SEMIMAT_POWER_LEADFRAME": {
+        "base_pe": 22.0, "floor_pe": 12.0, "soft_ceiling_pe": 35.0, "hard_ceiling_pe": 45.0,
+        "max_growth_factor": 1.14, "max_quality_factor": 1.12, "max_theme_factor": 1.04, "max_scale_factor": 1.04,
+        "gross_margin_baseline": 0.24, "gross_margin_good": 0.32, "gross_margin_excellent": 0.40,
+        "baked_in_themes": ["導線架", "功率元件材料", "車用半導體材料"],
+        "geopolitical_factor": 0.97, "recovery_sensitive": True,
+    },
+    "DISPLAY_COF_MATERIALS": {
+        "base_pe": 18.0, "floor_pe": 10.0, "soft_ceiling_pe": 30.0, "hard_ceiling_pe": 40.0,
+        "max_growth_factor": 1.10, "max_quality_factor": 1.10, "max_theme_factor": 1.00, "max_scale_factor": 1.03,
+        "gross_margin_baseline": 0.20, "gross_margin_good": 0.28, "gross_margin_excellent": 0.36,
+        "baked_in_themes": ["COF", "顯示材料", "驅動IC材料"],
+        "recovery_sensitive": True,
+    },
+    "IC_DESIGN_SERVER_BMC_HIGH_VISIBILITY": {
+        "base_pe": 42.0, "floor_pe": 24.0, "soft_ceiling_pe": 70.0, "hard_ceiling_pe": 90.0,
+        "max_growth_factor": 1.25, "max_quality_factor": 1.22, "max_theme_factor": 1.08, "max_scale_factor": 1.08,
+        "gross_margin_baseline": 0.55, "gross_margin_good": 0.62, "gross_margin_excellent": 0.70,
+        "baked_in_themes": ["Server BMC", "資料中心", "AI伺服器", "高毛利IC"],
+        "geopolitical_factor": 0.97,
+    },
+})
+
+
+# ===== 第 17-C-14：第三批 AI 伺服器/電子零組件主鏈 Dynamic Cap 校準預設 =====
+CALIBRATION_DEFAULTS.update({
+    "AI_CCL_HIGH_VISIBILITY": {
+        "base_pe": 36.0, "floor_pe": 20.0, "soft_ceiling_pe": 60.0, "hard_ceiling_pe": 80.0,
+        "max_growth_factor": 1.24, "max_quality_factor": 1.18, "max_theme_factor": 1.10, "max_scale_factor": 1.06,
+        "gross_margin_baseline": 0.28, "gross_margin_good": 0.36, "gross_margin_excellent": 0.45,
+        "baked_in_themes": ["AI伺服器", "高速材料", "CCL", "高階PCB材料"],
+        "recovery_sensitive": True,
+    },
+    "CCL_STANDARD_CYCLE": {
+        "base_pe": 22.0, "floor_pe": 12.0, "soft_ceiling_pe": 35.0, "hard_ceiling_pe": 45.0,
+        "max_growth_factor": 1.14, "max_quality_factor": 1.12, "max_theme_factor": 1.04, "max_scale_factor": 1.03,
+        "gross_margin_baseline": 0.20, "gross_margin_good": 0.28, "gross_margin_excellent": 0.36,
+        "baked_in_themes": ["CCL", "銅箔基板", "PCB材料"],
+        "recovery_sensitive": True,
+    },
+    "SERVER_RAIL_HIGH_VISIBILITY": {
+        "base_pe": 38.0, "floor_pe": 22.0, "soft_ceiling_pe": 60.0, "hard_ceiling_pe": 80.0,
+        "max_growth_factor": 1.22, "max_quality_factor": 1.20, "max_theme_factor": 1.08, "max_scale_factor": 1.06,
+        "gross_margin_baseline": 0.34, "gross_margin_good": 0.42, "gross_margin_excellent": 0.50,
+        "baked_in_themes": ["滑軌", "高階機構件", "AI伺服器"],
+    },
+    "AI_SERVER_CHASSIS_CORE": {
+        "base_pe": 30.0, "floor_pe": 16.0, "soft_ceiling_pe": 45.0, "hard_ceiling_pe": 58.0,
+        "max_growth_factor": 1.18, "max_quality_factor": 1.14, "max_theme_factor": 1.06, "max_scale_factor": 1.05,
+        "gross_margin_baseline": 0.22, "gross_margin_good": 0.30, "gross_margin_excellent": 0.38,
+        "baked_in_themes": ["AI機櫃", "伺服器機殼", "AI伺服器"],
+        "recovery_sensitive": True,
+    },
+    "SERVER_CHASSIS_STANDARD": {
+        "base_pe": 18.0, "floor_pe": 10.0, "soft_ceiling_pe": 30.0, "hard_ceiling_pe": 40.0,
+        "max_growth_factor": 1.12, "max_quality_factor": 1.10, "max_theme_factor": 1.02, "max_scale_factor": 1.03,
+        "gross_margin_baseline": 0.16, "gross_margin_good": 0.22, "gross_margin_excellent": 0.30,
+        "baked_in_themes": ["機殼", "伺服器機構件"],
+        "recovery_sensitive": True,
+    },
+    "DATACENTER_POWER_LEADER": {
+        "base_pe": 34.0, "floor_pe": 20.0, "soft_ceiling_pe": 55.0, "hard_ceiling_pe": 70.0,
+        "max_growth_factor": 1.20, "max_quality_factor": 1.18, "max_theme_factor": 1.08, "max_scale_factor": 1.05,
+        "gross_margin_baseline": 0.26, "gross_margin_good": 0.32, "gross_margin_excellent": 0.40,
+        "baked_in_themes": ["資料中心電源", "BBU", "能源管理", "電源龍頭"],
+    },
+    "UPS_POWER_QUALITY": {
+        "base_pe": 28.0, "floor_pe": 16.0, "soft_ceiling_pe": 42.0, "hard_ceiling_pe": 55.0,
+        "max_growth_factor": 1.14, "max_quality_factor": 1.18, "max_theme_factor": 1.04, "max_scale_factor": 1.04,
+        "gross_margin_baseline": 0.30, "gross_margin_good": 0.38, "gross_margin_excellent": 0.45,
+        "baked_in_themes": ["UPS", "不斷電系統", "高毛利電源"],
+    },
+    "POWER_SUPPLY_STANDARD": {
+        "base_pe": 18.0, "floor_pe": 10.0, "soft_ceiling_pe": 30.0, "hard_ceiling_pe": 40.0,
+        "max_growth_factor": 1.10, "max_quality_factor": 1.10, "max_theme_factor": 1.00, "max_scale_factor": 1.03,
+        "gross_margin_baseline": 0.16, "gross_margin_good": 0.22, "gross_margin_excellent": 0.30,
+        "baked_in_themes": ["電源", "一般電源"],
+        "recovery_sensitive": True,
+    },
+    "AI_SERVER_PCB_HIGH_VISIBILITY": {
+        "base_pe": 34.0, "floor_pe": 20.0, "soft_ceiling_pe": 55.0, "hard_ceiling_pe": 70.0,
+        "max_growth_factor": 1.20, "max_quality_factor": 1.16, "max_theme_factor": 1.08, "max_scale_factor": 1.05,
+        "gross_margin_baseline": 0.22, "gross_margin_good": 0.30, "gross_margin_excellent": 0.38,
+        "baked_in_themes": ["AI伺服器PCB", "高階PCB", "伺服器板"],
+        "recovery_sensitive": True,
+    },
+    "PCB_STANDARD_BOARD": {
+        "base_pe": 22.0, "floor_pe": 12.0, "soft_ceiling_pe": 35.0, "hard_ceiling_pe": 45.0,
+        "max_growth_factor": 1.14, "max_quality_factor": 1.12, "max_theme_factor": 1.04, "max_scale_factor": 1.03,
+        "gross_margin_baseline": 0.16, "gross_margin_good": 0.22, "gross_margin_excellent": 0.30,
+        "baked_in_themes": ["PCB", "伺服器板"],
+        "recovery_sensitive": True,
+    },
+    "HIGH_SPEED_CONNECTOR_CORE": {
+        "base_pe": 34.0, "floor_pe": 20.0, "soft_ceiling_pe": 55.0, "hard_ceiling_pe": 70.0,
+        "max_growth_factor": 1.18, "max_quality_factor": 1.16, "max_theme_factor": 1.08, "max_scale_factor": 1.05,
+        "gross_margin_baseline": 0.26, "gross_margin_good": 0.34, "gross_margin_excellent": 0.42,
+        "baked_in_themes": ["高速連接器", "高速線材", "AI伺服器"],
+        "recovery_sensitive": True,
+    },
+    "CONNECTOR_STANDARD": {
+        "base_pe": 18.0, "floor_pe": 10.0, "soft_ceiling_pe": 30.0, "hard_ceiling_pe": 40.0,
+        "max_growth_factor": 1.10, "max_quality_factor": 1.10, "max_theme_factor": 1.00, "max_scale_factor": 1.03,
+        "gross_margin_baseline": 0.18, "gross_margin_good": 0.25, "gross_margin_excellent": 0.32,
+        "baked_in_themes": ["連接器", "線材"],
+        "recovery_sensitive": True,
+    },
+    "AI_DATACENTER_SWITCH": {
+        "base_pe": 36.0, "floor_pe": 20.0, "soft_ceiling_pe": 58.0, "hard_ceiling_pe": 75.0,
+        "max_growth_factor": 1.20, "max_quality_factor": 1.16, "max_theme_factor": 1.08, "max_scale_factor": 1.05,
+        "gross_margin_baseline": 0.24, "gross_margin_good": 0.32, "gross_margin_excellent": 0.40,
+        "baked_in_themes": ["AI交換器", "資料中心網路", "高速交換器"],
+    },
+    "NETWORK_EQUIPMENT_STANDARD": {
+        "base_pe": 20.0, "floor_pe": 10.0, "soft_ceiling_pe": 32.0, "hard_ceiling_pe": 42.0,
+        "max_growth_factor": 1.12, "max_quality_factor": 1.10, "max_theme_factor": 1.02, "max_scale_factor": 1.03,
+        "gross_margin_baseline": 0.20, "gross_margin_good": 0.28, "gross_margin_excellent": 0.36,
+        "baked_in_themes": ["網通", "通訊設備"],
+        "recovery_sensitive": True,
+    },
+})
+
+CALIBRATION_DEFAULTS["ABF_SUBSTRATE"].update({
+    "pb_high_warning_threshold": 8.0,
+    "extreme_implied_pe_guard": 120.0,
+})
+
+
+# ===== 第 17-C-15：第四批非 AI 主鏈與防禦/循環分類 Dynamic Cap 校準預設 =====
+CALIBRATION_DEFAULTS.update({'FINANCIAL_LIFE_INSURANCE_HOLDCO': {'base_pe': 11.0,
+                                     'floor_pe': 7.0,
+                                     'soft_ceiling_pe': 16.0,
+                                     'hard_ceiling_pe': 22.0,
+                                     'max_growth_factor': 1.04,
+                                     'max_quality_factor': 1.1,
+                                     'max_theme_factor': 1.0,
+                                     'max_scale_factor': 1.03,
+                                     'gross_margin_baseline': None,
+                                     'baked_in_themes': ['金控', '壽險', '保險'],
+                                     'pb_high_warning_threshold': 2.0},
+ 'FINANCIAL_BANK_HOLDCO_QUALITY': {'base_pe': 13.0,
+                                   'floor_pe': 8.0,
+                                   'soft_ceiling_pe': 18.0,
+                                   'hard_ceiling_pe': 24.0,
+                                   'max_growth_factor': 1.05,
+                                   'max_quality_factor': 1.12,
+                                   'max_theme_factor': 1.0,
+                                   'max_scale_factor': 1.03,
+                                   'gross_margin_baseline': None,
+                                   'baked_in_themes': ['金控', '銀行', '官股金控'],
+                                   'pb_high_warning_threshold': 2.4},
+ 'PHARMA_DEFENSIVE_GENERIC': {'base_pe': 16.0,
+                              'floor_pe': 9.0,
+                              'soft_ceiling_pe': 24.0,
+                              'hard_ceiling_pe': 28.0,
+                              'max_growth_factor': 1.08,
+                              'max_quality_factor': 1.1,
+                              'max_theme_factor': 1.0,
+                              'max_scale_factor': 1.02,
+                              'gross_margin_baseline': 0.38,
+                              'gross_margin_good': 0.48,
+                              'gross_margin_excellent': 0.58,
+                              'baked_in_themes': ['成熟製藥', '藥廠'],
+                              'pb_high_warning_threshold': 3.0},
+ 'PHARMA_CDMO_PROFIT': {'base_pe': 24.0,
+                        'floor_pe': 12.0,
+                        'soft_ceiling_pe': 36.0,
+                        'hard_ceiling_pe': 45.0,
+                        'max_growth_factor': 1.16,
+                        'max_quality_factor': 1.14,
+                        'max_theme_factor': 1.04,
+                        'max_scale_factor': 1.04,
+                        'gross_margin_baseline': 0.45,
+                        'gross_margin_good': 0.55,
+                        'gross_margin_excellent': 0.65,
+                        'baked_in_themes': ['藥廠', 'CDMO', '外銷藥'],
+                        'pb_high_warning_threshold': 5.0},
+ 'BIOTECH_NEW_DRUG_EVENT': {'base_pe': 8.0,
+                            'floor_pe': 0.0,
+                            'soft_ceiling_pe': 12.0,
+                            'hard_ceiling_pe': 18.0,
+                            'max_growth_factor': 1.0,
+                            'max_quality_factor': 1.0,
+                            'max_theme_factor': 1.0,
+                            'max_scale_factor': 1.0,
+                            'gross_margin_baseline': None,
+                            'baked_in_themes': ['新藥', '里程碑'],
+                            'event_model_if_eps_unstable': True,
+                            'pb_high_warning_threshold': 3.0},
+ 'BIOTECH_CELL_THERAPY_BIOSIMILAR': {'base_pe': 18.0,
+                                     'floor_pe': 0.0,
+                                     'soft_ceiling_pe': 28.0,
+                                     'hard_ceiling_pe': 35.0,
+                                     'max_growth_factor': 1.1,
+                                     'max_quality_factor': 1.08,
+                                     'max_theme_factor': 1.0,
+                                     'max_scale_factor': 1.02,
+                                     'gross_margin_baseline': None,
+                                     'baked_in_themes': ['細胞治療', '生物相似藥'],
+                                     'event_model_if_eps_unstable': True,
+                                     'pb_high_warning_threshold': 5.0},
+ 'CLOUD_SECURITY_SERVICES': {'base_pe': 26.0,
+                             'floor_pe': 14.0,
+                             'soft_ceiling_pe': 38.0,
+                             'hard_ceiling_pe': 45.0,
+                             'max_growth_factor': 1.16,
+                             'max_quality_factor': 1.16,
+                             'max_theme_factor': 1.06,
+                             'max_scale_factor': 1.04,
+                             'gross_margin_baseline': 0.42,
+                             'gross_margin_good': 0.52,
+                             'gross_margin_excellent': 0.62,
+                             'baked_in_themes': ['資安', '雲端', '軟體'],
+                             'pb_high_warning_threshold': 6.0},
+ 'IT_SERVICES_SYSTEM_INTEGRATION': {'base_pe': 18.0,
+                                    'floor_pe': 9.0,
+                                    'soft_ceiling_pe': 26.0,
+                                    'hard_ceiling_pe': 32.0,
+                                    'max_growth_factor': 1.1,
+                                    'max_quality_factor': 1.12,
+                                    'max_theme_factor': 1.02,
+                                    'max_scale_factor': 1.03,
+                                    'gross_margin_baseline': 0.28,
+                                    'gross_margin_good': 0.36,
+                                    'gross_margin_excellent': 0.46,
+                                    'baked_in_themes': ['系統整合', '資訊服務'],
+                                    'pb_high_warning_threshold': 5.0},
+ 'INDUSTRIAL_AUTOMATION_CORE': {'base_pe': 22.0,
+                                'floor_pe': 12.0,
+                                'soft_ceiling_pe': 34.0,
+                                'hard_ceiling_pe': 42.0,
+                                'max_growth_factor': 1.14,
+                                'max_quality_factor': 1.14,
+                                'max_theme_factor': 1.05,
+                                'max_scale_factor': 1.04,
+                                'gross_margin_baseline': 0.28,
+                                'gross_margin_good': 0.36,
+                                'gross_margin_excellent': 0.45,
+                                'baked_in_themes': ['自動化', '工業自動化'],
+                                'recovery_sensitive': True,
+                                'pb_high_warning_threshold': 6.0},
+ 'ROBOTICS_THEME_EVENT': {'base_pe': 12.0,
+                          'floor_pe': 0.0,
+                          'soft_ceiling_pe': 20.0,
+                          'hard_ceiling_pe': 28.0,
+                          'max_growth_factor': 1.0,
+                          'max_quality_factor': 1.0,
+                          'max_theme_factor': 1.0,
+                          'max_scale_factor': 1.0,
+                          'gross_margin_baseline': None,
+                          'baked_in_themes': ['機器人題材', 'AI視覺'],
+                          'event_model_if_eps_unstable': True,
+                          'pb_high_warning_threshold': 5.0},
+ 'OPTICS_LENS_LEADER': {'base_pe': 24.0,
+                        'floor_pe': 14.0,
+                        'soft_ceiling_pe': 34.0,
+                        'hard_ceiling_pe': 42.0,
+                        'max_growth_factor': 1.12,
+                        'max_quality_factor': 1.18,
+                        'max_theme_factor': 1.04,
+                        'max_scale_factor': 1.04,
+                        'gross_margin_baseline': 0.38,
+                        'gross_margin_good': 0.48,
+                        'gross_margin_excellent': 0.58,
+                        'baked_in_themes': ['高階鏡頭', '光學'],
+                        'recovery_sensitive': True,
+                        'pb_high_warning_threshold': 5.0},
+ 'OPTICS_MODULE_CYCLE': {'base_pe': 16.0,
+                         'floor_pe': 8.0,
+                         'soft_ceiling_pe': 26.0,
+                         'hard_ceiling_pe': 32.0,
+                         'max_growth_factor': 1.1,
+                         'max_quality_factor': 1.1,
+                         'max_theme_factor': 1.0,
+                         'max_scale_factor': 1.03,
+                         'gross_margin_baseline': 0.22,
+                         'gross_margin_good': 0.3,
+                         'gross_margin_excellent': 0.4,
+                         'baked_in_themes': ['光學模組', '鏡頭'],
+                         'recovery_sensitive': True,
+                         'pb_high_warning_threshold': 4.0},
+ 'GRID_EQUIPMENT_CORE': {'base_pe': 24.0,
+                         'floor_pe': 14.0,
+                         'soft_ceiling_pe': 36.0,
+                         'hard_ceiling_pe': 45.0,
+                         'max_growth_factor': 1.16,
+                         'max_quality_factor': 1.14,
+                         'max_theme_factor': 1.06,
+                         'max_scale_factor': 1.04,
+                         'gross_margin_baseline': 0.18,
+                         'gross_margin_good': 0.24,
+                         'gross_margin_excellent': 0.3,
+                         'baked_in_themes': ['重電', '電網', '儲能'],
+                         'pb_high_warning_threshold': 6.0},
+ 'GRID_TRANSFORMER_HIGH_VISIBILITY': {'base_pe': 30.0,
+                                      'floor_pe': 18.0,
+                                      'soft_ceiling_pe': 45.0,
+                                      'hard_ceiling_pe': 60.0,
+                                      'max_growth_factor': 1.18,
+                                      'max_quality_factor': 1.16,
+                                      'max_theme_factor': 1.08,
+                                      'max_scale_factor': 1.05,
+                                      'gross_margin_baseline': 0.2,
+                                      'gross_margin_good': 0.28,
+                                      'gross_margin_excellent': 0.35,
+                                      'baked_in_themes': ['變壓器', '重電', '電網'],
+                                      'market_momentum_zone_if_above_hard': True,
+                                      'pb_high_warning_threshold': 10.0},
+ 'GRID_ASSET_TURNAROUND': {'base_pe': 10.0,
+                           'floor_pe': 5.0,
+                           'soft_ceiling_pe': 16.0,
+                           'hard_ceiling_pe': 24.0,
+                           'max_growth_factor': 1.06,
+                           'max_quality_factor': 1.06,
+                           'max_theme_factor': 1.0,
+                           'max_scale_factor': 1.02,
+                           'gross_margin_baseline': None,
+                           'baked_in_themes': ['資產', '轉機', '重電'],
+                           'event_model_if_eps_unstable': True,
+                           'pb_high_warning_threshold': 2.0},
+ 'WIND_POWER_INFRA': {'base_pe': 18.0,
+                      'floor_pe': 8.0,
+                      'soft_ceiling_pe': 28.0,
+                      'hard_ceiling_pe': 34.0,
+                      'max_growth_factor': 1.1,
+                      'max_quality_factor': 1.1,
+                      'max_theme_factor': 1.02,
+                      'max_scale_factor': 1.03,
+                      'gross_margin_baseline': 0.15,
+                      'gross_margin_good': 0.22,
+                      'gross_margin_excellent': 0.28,
+                      'baked_in_themes': ['風電', '綠能基建'],
+                      'recovery_sensitive': True,
+                      'pb_high_warning_threshold': 4.0},
+ 'GREEN_ENERGY_PROJECT_EPC': {'base_pe': 12.0,
+                              'floor_pe': 4.0,
+                              'soft_ceiling_pe': 20.0,
+                              'hard_ceiling_pe': 28.0,
+                              'max_growth_factor': 1.06,
+                              'max_quality_factor': 1.06,
+                              'max_theme_factor': 1.0,
+                              'max_scale_factor': 1.02,
+                              'gross_margin_baseline': None,
+                              'baked_in_themes': ['綠能工程', '儲能', 'EPC'],
+                              'event_model_if_eps_unstable': True,
+                              'pb_high_warning_threshold': 5.0}})
+
+
+# ===== 第 17-C-16：第五批尾端總稽核 Dynamic Cap 校準預設 =====
+CALIBRATION_DEFAULTS.update({'CONSUMER_MCU_CONTROL_IC': {'base_pe': 18.0,
+                             'floor_pe': 10.0,
+                             'soft_ceiling_pe': 28.0,
+                             'hard_ceiling_pe': 36.0,
+                             'max_growth_factor': 1.12,
+                             'max_quality_factor': 1.1,
+                             'max_theme_factor': 1.02,
+                             'max_scale_factor': 1.03,
+                             'gross_margin_baseline': 0.28,
+                             'baked_in_themes': ['消費 MCU'],
+                             'event_model_if_eps_unstable': False,
+                             'pb_high_warning_threshold': 4.0,
+                             'recovery_sensitive': True},
+ 'DISPLAY_DRIVER_IC_CYCLE': {'base_pe': 16.0,
+                             'floor_pe': 8.0,
+                             'soft_ceiling_pe': 24.0,
+                             'hard_ceiling_pe': 32.0,
+                             'max_growth_factor': 1.12,
+                             'max_quality_factor': 1.1,
+                             'max_theme_factor': 1.02,
+                             'max_scale_factor': 1.03,
+                             'gross_margin_baseline': 0.34,
+                             'baked_in_themes': ['Display Driver'],
+                             'event_model_if_eps_unstable': False,
+                             'pb_high_warning_threshold': 4.5,
+                             'recovery_sensitive': True,
+                             'gross_margin_good': 0.42,
+                             'gross_margin_excellent': 0.5},
+ 'CONSUMER_INTERFACE_SENSOR_IC': {'base_pe': 20.0,
+                                  'floor_pe': 10.0,
+                                  'soft_ceiling_pe': 32.0,
+                                  'hard_ceiling_pe': 40.0,
+                                  'max_growth_factor': 1.12,
+                                  'max_quality_factor': 1.1,
+                                  'max_theme_factor': 1.02,
+                                  'max_scale_factor': 1.03,
+                                  'gross_margin_baseline': 0.28,
+                                  'baked_in_themes': ['消費介面'],
+                                  'event_model_if_eps_unstable': False,
+                                  'pb_high_warning_threshold': 5.0,
+                                  'recovery_sensitive': True},
+ 'LEGACY_CONSUMER_IC_TURNAROUND': {'base_pe': 10.0,
+                                   'floor_pe': 4.0,
+                                   'soft_ceiling_pe': 16.0,
+                                   'hard_ceiling_pe': 24.0,
+                                   'max_growth_factor': 1.12,
+                                   'max_quality_factor': 1.1,
+                                   'max_theme_factor': 1.0,
+                                   'max_scale_factor': 1.03,
+                                   'gross_margin_baseline': 0.28,
+                                   'baked_in_themes': ['Legacy 消費 IC'],
+                                   'event_model_if_eps_unstable': True,
+                                   'pb_high_warning_threshold': 2.5,
+                                   'recovery_sensitive': True},
+ 'PLATFORM_IC_LEADER': {'base_pe': 28.0,
+                        'floor_pe': 16.0,
+                        'soft_ceiling_pe': 42.0,
+                        'hard_ceiling_pe': 55.0,
+                        'max_growth_factor': 1.18,
+                        'max_quality_factor': 1.16,
+                        'max_theme_factor': 1.06,
+                        'max_scale_factor': 1.03,
+                        'gross_margin_baseline': 0.42,
+                        'baked_in_themes': ['平台型 IC 龍頭'],
+                        'event_model_if_eps_unstable': False,
+                        'pb_high_warning_threshold': 6.0,
+                        'recovery_sensitive': True,
+                        'gross_margin_good': 0.5,
+                        'gross_margin_excellent': 0.58},
+ 'HIGH_SPEED_INTERFACE_IC': {'base_pe': 26.0,
+                             'floor_pe': 14.0,
+                             'soft_ceiling_pe': 40.0,
+                             'hard_ceiling_pe': 50.0,
+                             'max_growth_factor': 1.16,
+                             'max_quality_factor': 1.14,
+                             'max_theme_factor': 1.06,
+                             'max_scale_factor': 1.03,
+                             'gross_margin_baseline': 0.38,
+                             'baked_in_themes': ['高速介面'],
+                             'event_model_if_eps_unstable': False,
+                             'pb_high_warning_threshold': 6.0,
+                             'recovery_sensitive': True,
+                             'gross_margin_good': 0.46,
+                             'gross_margin_excellent': 0.54},
+ 'RF_CONNECTIVITY_IC': {'base_pe': 22.0,
+                        'floor_pe': 12.0,
+                        'soft_ceiling_pe': 34.0,
+                        'hard_ceiling_pe': 45.0,
+                        'max_growth_factor': 1.12,
+                        'max_quality_factor': 1.1,
+                        'max_theme_factor': 1.02,
+                        'max_scale_factor': 1.03,
+                        'gross_margin_baseline': 0.28,
+                        'baked_in_themes': ['RF'],
+                        'event_model_if_eps_unstable': False,
+                        'pb_high_warning_threshold': 5.0,
+                        'recovery_sensitive': True},
+ 'EDGE_AI_SENSOR_SOC': {'base_pe': 24.0,
+                        'floor_pe': 12.0,
+                        'soft_ceiling_pe': 38.0,
+                        'hard_ceiling_pe': 48.0,
+                        'max_growth_factor': 1.12,
+                        'max_quality_factor': 1.1,
+                        'max_theme_factor': 1.0,
+                        'max_scale_factor': 1.03,
+                        'gross_margin_baseline': 0.28,
+                        'baked_in_themes': ['Edge AI'],
+                        'event_model_if_eps_unstable': True,
+                        'pb_high_warning_threshold': 6.0,
+                        'recovery_sensitive': True},
+ 'MEMORY_MANUFACTURING_CYCLE': {'base_pe': 10.0,
+                                'floor_pe': 4.0,
+                                'soft_ceiling_pe': 16.0,
+                                'hard_ceiling_pe': 22.0,
+                                'max_growth_factor': 1.06,
+                                'max_quality_factor': 1.06,
+                                'max_theme_factor': 1.0,
+                                'max_scale_factor': 1.03,
+                                'gross_margin_baseline': None,
+                                'baked_in_themes': ['記憶體製造'],
+                                'event_model_if_eps_unstable': False,
+                                'pb_high_warning_threshold': 2.0,
+                                'recovery_sensitive': True},
+ 'MEMORY_MODULE_STORAGE_BRAND': {'base_pe': 12.0,
+                                 'floor_pe': 6.0,
+                                 'soft_ceiling_pe': 20.0,
+                                 'hard_ceiling_pe': 28.0,
+                                 'max_growth_factor': 1.12,
+                                 'max_quality_factor': 1.1,
+                                 'max_theme_factor': 1.02,
+                                 'max_scale_factor': 1.03,
+                                 'gross_margin_baseline': 0.28,
+                                 'baked_in_themes': ['記憶體模組'],
+                                 'event_model_if_eps_unstable': False,
+                                 'pb_high_warning_threshold': 3.0,
+                                 'recovery_sensitive': True},
+ 'MEMORY_OSAT_CYCLE': {'base_pe': 16.0,
+                       'floor_pe': 8.0,
+                       'soft_ceiling_pe': 26.0,
+                       'hard_ceiling_pe': 35.0,
+                       'max_growth_factor': 1.12,
+                       'max_quality_factor': 1.1,
+                       'max_theme_factor': 1.02,
+                       'max_scale_factor': 1.03,
+                       'gross_margin_baseline': 0.28,
+                       'baked_in_themes': ['記憶體封測週期'],
+                       'event_model_if_eps_unstable': False,
+                       'pb_high_warning_threshold': 3.0,
+                       'recovery_sensitive': True},
+ 'GENERAL_OSAT_TEST_LEADFRAME': {'base_pe': 18.0,
+                                 'floor_pe': 9.0,
+                                 'soft_ceiling_pe': 28.0,
+                                 'hard_ceiling_pe': 38.0,
+                                 'max_growth_factor': 1.12,
+                                 'max_quality_factor': 1.1,
+                                 'max_theme_factor': 1.02,
+                                 'max_scale_factor': 1.03,
+                                 'gross_margin_baseline': 0.28,
+                                 'baked_in_themes': ['一般成熟封測'],
+                                 'event_model_if_eps_unstable': False,
+                                 'pb_high_warning_threshold': 3.5,
+                                 'recovery_sensitive': True},
+ 'DEFENSE_DRONE_EVENT': {'base_pe': 8.0,
+                         'floor_pe': 0.0,
+                         'soft_ceiling_pe': 14.0,
+                         'hard_ceiling_pe': 24.0,
+                         'max_growth_factor': 1.0,
+                         'max_quality_factor': 1.0,
+                         'max_theme_factor': 1.0,
+                         'max_scale_factor': 1.03,
+                         'gross_margin_baseline': None,
+                         'baked_in_themes': ['軍工'],
+                         'event_model_if_eps_unstable': True,
+                         'pb_high_warning_threshold': 6.0,
+                         'recovery_sensitive': False},
+ 'LEGACY_TECH_REVIEW': {'base_pe': 8.0,
+                        'floor_pe': 0.0,
+                        'soft_ceiling_pe': 14.0,
+                        'hard_ceiling_pe': 22.0,
+                        'max_growth_factor': 1.0,
+                        'max_quality_factor': 1.0,
+                        'max_theme_factor': 1.0,
+                        'max_scale_factor': 1.03,
+                        'gross_margin_baseline': None,
+                        'baked_in_themes': ['舊資料'],
+                        'event_model_if_eps_unstable': True,
+                        'pb_high_warning_threshold': 2.0,
+                        'recovery_sensitive': True}})

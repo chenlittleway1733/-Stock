@@ -25,6 +25,18 @@ from google.genai import types
 
 # 從 utils 引入需要的工具
 from utils import s_float, log_data_health, log_exception, validate_ai_financial_json
+try:
+    from industry_taxonomy import INDUSTRY_TAXONOMY
+except Exception:
+    INDUSTRY_TAXONOMY = {}
+
+
+def _google_search_tool():
+    """Gemini Google Search tool：優先使用官方 typed config，舊版 SDK 才退回 dict。"""
+    try:
+        return types.Tool(google_search=types.GoogleSearch())
+    except Exception:
+        return {"google_search": {}}
 
 # ==========================================
 # 3. 外部 API 與模型模組
@@ -787,7 +799,7 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
     """
     AI 財報校對與補齊.
     v7 修正重點：
-    1) 僅允許 Gemini 3 Pro Preview 付費版 + Google Search。
+    1) 僅允許 Gemini 3.1 Pro Preview 付費版 + Google Search。
     2) 不自動降級到 2.5 Pro / 2.5 Flash / 離線保底，避免不準資料進入估值模型。
     3) 尖峰時段採用「同模型 Pro Only Retry」：立即重試、等待 3 秒、等待 8 秒。
     4) 全部失敗時只回傳 error 與 attempts，不產生 AI 財報數據。
@@ -802,6 +814,7 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
 
     current_year = datetime.date.today().year
     target_year = current_year if datetime.date.today().month < 9 else current_year + 1
+    valid_taxon_codes_text = ", ".join(sorted(INDUSTRY_TAXONOMY.keys())) if INDUSTRY_TAXONOMY else "GENERAL"
 
     system_prompt = f"""你是一個精準的財經數據提取機器人。請上網搜尋該台股公司「最新」、「最即時」的財報與市場數據，絕對不要使用過期的舊資料，提取以下指標：
     1. 「歷史本益比 (P/E)」
@@ -832,7 +845,7 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
     20. 「總發行股數或股本大小 (Shares Outstanding / Capital)」
     21. 「industry_classification」：請判斷公司主要營收來源、主要產品、產業鏈位置，並輸出建議產業分類。這是給系統輔助判斷用，不會直接覆蓋正式 stock_mapping.py。
         industry_classification 必須包含：
-        - suggested_primary_taxon：只能從下列代碼選一個，若不確定填 GENERAL。代碼包括 FOUNDRY, IC_DESIGN_ASIC, IP_EDA_DESIGN_SERVICE, OSAT_TESTING, PROBE_TEST_INTERFACE, SEMICAP_COWOS_EQUIPMENT, FAB_FACILITY_MATERIALS, ABF_SUBSTRATE, SERVER_PCB_BOARD, AI_SERVER_ODM, CONNECTOR_CABLE, SERVER_CHASSIS_RAIL, POWER_BBU, THERMAL_LIQUID_COOLING, OPTICAL_COMM_SILICON_PHOTONICS, NETWORK_SWITCH, OPTICS_LENS_MODULE, ROBOTICS_AUTOMATION, SPACE_LEO_SATELLITE, EV_AUTO_ELECTRONICS, GRID_POWER_STORAGE, SOFTWARE_SECURITY_CLOUD, MEMORY_CYCLE, DISPLAY_LED_CYCLE, PASSIVE_COMPONENT_CYCLE, FINANCIAL, TRADITIONAL_CYCLE, SHIPPING_CYCLE, BIOTECH_MEDICAL, CONSUMER_TOURISM, THEME_EVENT, SPECIALTY_CHEM_ELECTRONIC_MATERIALS, CCL_HIGH_SPEED_MATERIALS, SEMICONDUCTOR_MATERIALS_CONSUMABLES, CIS_SEMICONDUCTOR_OPTICS, TEST_AUTOMATION_EQUIPMENT, GREEN_ENERGY_INFRA, AUTO_PARTS_AM, AUTO_PARTS_EV, AUTO_OEM_CYCLE, AI_SERVER_BOARD_SYSTEM, PC_BRAND_AI_PC, PC_NB_ODM, MACHINE_TOOL_CYCLE, MEMORY_CONTROLLER_CYCLE, RF_MODULE_PACKAGING, GENERAL。
+        - suggested_primary_taxon：只能從下列代碼選一個，若不確定填 GENERAL。代碼包括 {valid_taxon_codes_text}。
         - suggested_display_name：中文分類名稱。
         - suggested_themes：題材標籤陣列，例如 ["FOPLP", "玻璃基板", "先進封裝設備"]。
         - confidence：high / medium / low。
@@ -855,7 +868,7 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
     必須嚴格回傳包含上述財務欄位的 JSON 格式。百分比請轉換為小數（例如 25.5% 寫成 0.255，衰退5%寫成 -0.05），數值請直接輸出數字。若查無資料，該欄位請填 null。
     請務必搜尋近期各大券商對該公司的最新目標價。
 
-    重要：除了 18 個財務欄位，請額外回傳「_sources」物件，逐欄標示每個數值的來源。
+    重要：除了上述財務與分類欄位，請額外回傳「_sources」物件，逐欄標示每個數值的來源。
     _sources 內每個欄位必須包含：
     - source：來源名稱，例如 Yahoo股市、Goodinfo、公開資訊觀測站、券商報告、公司法說會、MoneyDJ、鉅亨網等。
     - published_date：該資料發布日期、法說日期、報導日期或財報所屬期間。
@@ -876,7 +889,7 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
             "response_mime_type": "application/json",
         }
         if search_enabled:
-            kwargs["tools"] = [{"google_search": {}}]
+            kwargs["tools"] = [_google_search_tool()]
         return types.GenerateContentConfig(**kwargs)
 
     def _is_non_retryable_error(err_text):
@@ -941,7 +954,7 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
     if response is None or text is None:
         return {
             "error": (
-                "Gemini 3 Pro Preview（付費版）聯網財報校對失敗。"
+                "Gemini 3.1 Pro Preview（付費版）聯網財報校對失敗。"
                 f"系統已用同一付費模型重試 {len(attempts)} 次，仍未成功；"
                 "已禁止降級到 2.5 Pro / 2.5 Flash / 離線保底，以避免不準數據進入極限高空價。"
                 "請稍後再試，或檢查 API 權限、配額與模型可用狀態。"
@@ -952,7 +965,7 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
 
     if not text:
         return {
-            "error": "Gemini 3 Pro Preview（付費版）回傳內容為空；系統不降級，請稍後重試。",
+            "error": "Gemini 3.1 Pro Preview（付費版）回傳內容為空；系統不降級，請稍後重試。",
             "attempts": attempts
         }
 
@@ -989,6 +1002,7 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
                     "fallback_reason": fallback_reason or "無",
                     "retry_policy": "Pro Only same-model retry: delays 0s, 3s, 8s; no downgrade.",
                     "prompt": prompt_text,
+                    "system_instruction": system_prompt,
                 }, ensure_ascii=False, indent=2)
             return parsed
         except json.JSONDecodeError:
@@ -1016,7 +1030,7 @@ def get_peers_from_ai(stock_name, stock_id, api_key):
             contents=f"請尋找 {stock_name} ({stock_id}) 的同業競爭對手",
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
-                tools=[{"google_search": {}}]
+                tools=[_google_search_tool()]
             )
         )
         log_data_health("Gemini", True, 200)
@@ -1040,7 +1054,7 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
                 contents=f"請深度分析台股 {stock_name} ({stock_id})。關鍵數據：\n{context_data}",
                 config=types.GenerateContentConfig(
                     system_instruction=system_prompt,
-                    tools=[{"google_search": {}}]
+                    tools=[_google_search_tool()]
                 )
             )
             log_data_health("Gemini", True, 200)
@@ -1048,7 +1062,7 @@ def get_ai_industry_analysis(stock_name, stock_id, api_key, context_data, model_
             return ans
         except Exception as e:
             log_data_health("Gemini", False, f"ERR:{used_model}:search")
-            return f"⚠️ Gemini 3 Pro Preview（付費版）聯網分析失敗；系統已禁止降級到 2.5 系列，以避免不準資料。細節: {str(e)}"
+            return f"⚠️ Gemini 3.1 Pro Preview（付費版）聯網分析失敗；系統已禁止降級到 2.5 系列，以避免不準資料。細節: {str(e)}"
     except Exception as e: 
         return f"連線異常: {str(e)}"
 
@@ -1066,13 +1080,13 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-3.1-pro-preview"):
                 config=types.GenerateContentConfig(
                     system_instruction=system_prompt,
                     response_mime_type="application/json",
-                    tools=[{"google_search": {}}]
+                    tools=[_google_search_tool()]
                 )
             )
             log_data_health("Gemini", True, 200)
         except Exception as e:
             log_data_health("Gemini", False, f"ERR:{used_model}:search")
-            return f"Gemini 3 Pro Preview（付費版）聯網議題推演失敗；系統已禁止降級到 2.5 系列，以避免不準資料。細節：{str(e)}", []
+            return f"Gemini 3.1 Pro Preview（付費版）聯網議題推演失敗；系統已禁止降級到 2.5 系列，以避免不準資料。細節：{str(e)}", []
 
         clean_json = re.sub(r'```json\n?|```', '', response.text).strip()
         s_idx = clean_json.find('{')
@@ -2155,7 +2169,7 @@ def get_etf_holders_from_ai(stock_id, stock_name, api_key, model_name="gemini-3.
             contents=prompt_text,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
-                tools=[{"google_search": {}}],
+                tools=[_google_search_tool()],
                 response_mime_type="application/json",
             ),
         )
