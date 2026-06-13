@@ -1,5 +1,5 @@
 """
-Dynamic Cap 2.0 係數校準模型（第 17-C-7A 階段）。
+Dynamic Cap 2.0 係數校準模型（目前版本 17-C-17）。
 
 設計原則：
 - 不再採用「產業基準 + 各項絕對倍數」加總，避免倍率連續堆高。
@@ -8,6 +8,7 @@ Dynamic Cap 2.0 係數校準模型（第 17-C-7A 階段）。
 - 毛利率改採相對產業基準，缺少產業基準時保守處理。
 - 台灣關鍵半導體供應鏈加入地緣政治折價，特別避免台積電類超大型晶圓代工龍頭被推到過高 P/E。
 - P/B 週期股與題材 / 事件股仍不輸出 P/E 買進倍率。
+- 版本階段表見 DYNAMIC_CAP_MODEL_VERSION_TABLE。
 """
 from __future__ import annotations
 
@@ -15,6 +16,125 @@ import math
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
+
+DYNAMIC_CAP_MODEL_VERSION = "17-C-17"
+DYNAMIC_CAP_MODEL_BUILD_DATE = "2026-06-09"
+DYNAMIC_CAP_MODEL_ENGINE_VERSION = f"Dynamic Cap 2.0 calibration {DYNAMIC_CAP_MODEL_VERSION}"
+DYNAMIC_CAP_MODEL_VERSION_TABLE = [
+    {
+        "stage": "17-C-4",
+        "order": 1704,
+        "title": "Dynamic Cap 校準覆寫",
+        "scope": "重整產業預設倍率、係數上限、風險折扣與 hard ceiling。",
+        "kind": "calibration",
+    },
+    {
+        "stage": "17-C-5",
+        "order": 1705,
+        "title": "品質係數細緻化",
+        "scope": "將絕對毛利率、相對產業毛利率、ROE 與營益率納入漸進式品質係數。",
+        "kind": "calibration",
+    },
+    {
+        "stage": "17-C-6",
+        "order": 1706,
+        "title": "IC 設計 / ASIC / IP 分層預設校準",
+        "scope": "補強 IC_DESIGN_ASIC、IP/EDA、成熟 IC 與消費型 MCU 的 Dynamic Cap 預設。",
+        "kind": "calibration",
+    },
+    {
+        "stage": "17-C-7A",
+        "order": 1707,
+        "title": "混合產業權重估值引擎",
+        "scope": "支援 stock_mapping.py 的 hybrid_taxons，混合 base/soft/hard 與係數上限。",
+        "kind": "engine",
+    },
+    {
+        "stage": "17-C-9",
+        "order": 1709,
+        "title": "第一批 AI 混合股補充預設校準",
+        "scope": "補上 AI 伺服器、散熱、測試、先進封裝與光通訊等混合股需要的校準值。",
+        "kind": "extension",
+    },
+    {
+        "stage": "17-C-10",
+        "order": 1710,
+        "title": "新增產業 Dynamic Cap 校準補齊",
+        "scope": "為新增分類補齊 base/floor/soft/hard、品質與題材係數。",
+        "kind": "extension",
+    },
+    {
+        "stage": "17-C-11",
+        "order": 1711,
+        "title": "第二批上市半導體缺漏股校準",
+        "scope": "補齊半導體缺漏分類的預設倍率與週期風險邊界。",
+        "kind": "extension",
+    },
+    {
+        "stage": "17-C-11B",
+        "order": 1711.5,
+        "title": "既有 P/B 週期與特殊分類兜底",
+        "scope": "為既有 P/B 週期股與特殊分類補上 Dynamic Cap 兜底設定。",
+        "kind": "safety",
+    },
+    {
+        "stage": "17-C-12",
+        "order": 1712,
+        "title": "高倍率分類拆分校準",
+        "scope": "細分高倍率科技分類，避免題材股共用過寬的估值天花板。",
+        "kind": "calibration",
+    },
+    {
+        "stage": "17-C-13",
+        "order": 1713,
+        "title": "半導體中游 / 週期分類校準",
+        "scope": "補強中游封測、材料、耗材與週期型半導體的 Dynamic Cap 預設。",
+        "kind": "extension",
+    },
+    {
+        "stage": "17-C-14",
+        "order": 1714,
+        "title": "第三批 AI 伺服器 / 電子零組件主鏈校準",
+        "scope": "擴充 AI 伺服器、連接器、散熱、PCB、光通訊與電源鏈的係數邊界。",
+        "kind": "extension",
+    },
+    {
+        "stage": "17-C-15",
+        "order": 1715,
+        "title": "第四批非 AI 主鏈與防禦 / 循環分類校準",
+        "scope": "補強非 AI 電子、傳產、防禦、金融、通路與週期分類的預設倍率。",
+        "kind": "extension",
+    },
+    {
+        "stage": "17-C-16",
+        "order": 1716,
+        "title": "第五批尾端總稽核校準",
+        "scope": "補齊消費 IC、記憶體、舊科技資料審核與尾端缺漏分類，作為目前 Dynamic Cap 版本。",
+        "kind": "extension",
+    },
+    {
+        "stage": "17-C-17",
+        "order": 1717,
+        "title": "base / soft / hard 倍率寬鬆度收斂",
+        "scope": "依 2026-06-09 倍率寬鬆度查核，收斂高 hard ceiling 類別並同步 taxonomy 顯示口徑。",
+        "kind": "calibration",
+    },
+]
+
+
+def get_dynamic_cap_version_table():
+    return [dict(row) for row in DYNAMIC_CAP_MODEL_VERSION_TABLE]
+
+
+def get_dynamic_cap_version_info():
+    return {
+        "version": DYNAMIC_CAP_MODEL_VERSION,
+        "build_date": DYNAMIC_CAP_MODEL_BUILD_DATE,
+        "engine_version": DYNAMIC_CAP_MODEL_ENGINE_VERSION,
+        "latest_stage": DYNAMIC_CAP_MODEL_VERSION_TABLE[-1]["stage"],
+        "stage_count": len(DYNAMIC_CAP_MODEL_VERSION_TABLE),
+        "version_table": get_dynamic_cap_version_table(),
+    }
 
 
 def _sf(x: Any, default: Optional[float] = None) -> Optional[float]:
@@ -1240,7 +1360,7 @@ def calculate_dynamic_cap_v2(
     # 若 TTM 與 Forward 都尚未穩定轉正，全面停用 P/E 估值；若 TTM 為負但有明確正 Forward EPS，可保留 Forward P/E 但列高風險。
     if primary_valuation in {"forward_pe", "pe_pb_crosscheck", "forward_pe_pb_cycle"} and ((adopted_forward_eps is None or adopted_forward_eps <= 0) and (adopted_ttm_eps is None or adopted_ttm_eps <= 0)):
         pack = build_turnaround_event_pack(p, "EPS 尚未穩定轉正，Dynamic Cap 停用 P/E 估值，改用轉機 / 事件模型。")
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "model_version": "Dynamic Cap 2.0 calibration 17-C-9-1"})
+        pack.update({"stock_id": stock_id, "stock_name": stock_name, "model_version": DYNAMIC_CAP_MODEL_ENGINE_VERSION})
         return pack
 
     # 17-B-4：低軌衛星、機器人、生技等條件式 P/E 模型，若 EPS / 訂單未落地，直接切換事件模型。
@@ -1248,16 +1368,16 @@ def calculate_dynamic_cap_v2(
         pack = build_event_theme_pack(p)
         note = p.get("event_switch_note") or "EPS / 訂單未落地，依 17-B-4 校準規則改用事件模型。"
         pack["warnings"] = list(pack.get("warnings") or []) + [note]
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-9-1"})
+        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": DYNAMIC_CAP_MODEL_ENGINE_VERSION})
         return pack
 
     if pe_app is False or primary_valuation in {"event_chip", "theme_event"}:
         pack = build_event_theme_pack(p)
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-9-1"})
+        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": DYNAMIC_CAP_MODEL_ENGINE_VERSION})
         return pack
     if primary_valuation.startswith("pb") or primary_valuation in {"pb", "pb_roe"}:
         pack = build_pb_cycle_pack(current_price, pb_ratio, p)
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": "Dynamic Cap 2.0 calibration 17-C-9-1"})
+        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": DYNAMIC_CAP_MODEL_ENGINE_VERSION})
         return pack
 
     base = _sf(c.get("base_pe"), 20.0) or 20.0
@@ -1404,7 +1524,7 @@ def calculate_dynamic_cap_v2(
     return {
         "available": True,
         "valuation_mode": primary_valuation,
-        "model_version": "Dynamic Cap 2.0 calibration 17-C-9-1",
+        "model_version": DYNAMIC_CAP_MODEL_ENGINE_VERSION,
         "base_multiple": base,
         "growth_premium": g,  # 保留舊 key，實際為 growth factor pack
         "gross_margin_premium": q,  # 保留舊 key，實際為 quality factor pack
@@ -2188,3 +2308,162 @@ CALIBRATION_DEFAULTS.update({'CONSUMER_MCU_CONTROL_IC': {'base_pe': 18.0,
                         'event_model_if_eps_unstable': True,
                         'pb_high_warning_threshold': 2.0,
                         'recovery_sensitive': True}})
+
+
+# ===== 第 17-C-17：base / soft / hard 倍率寬鬆度收斂與 taxonomy 同步 =====
+# 依 2026-06-09 查核，降低高 hard ceiling 與週期型 AI 零組件分類；同時對齊 taxonomy 顯示倍率，避免 UI 與實算不同。
+CALIBRATION_DEFAULTS.update({
+    "PROBE_TEST_INTERFACE": {
+        **CALIBRATION_DEFAULTS["PROBE_TEST_INTERFACE"],
+        "base_pe": 32.0, "floor_pe": 22.0, "soft_ceiling_pe": 45.0, "hard_ceiling_pe": 55.0,
+        "valuation_tightening_note": "17-C-17：同步 taxonomy 較保守口徑。",
+    },
+    "FAB_FACILITY_MATERIALS": {
+        **CALIBRATION_DEFAULTS["FAB_FACILITY_MATERIALS"],
+        "base_pe": 24.0, "floor_pe": 16.0, "soft_ceiling_pe": 36.0, "hard_ceiling_pe": 42.0,
+        "valuation_tightening_note": "17-C-17：同步 taxonomy 較保守口徑。",
+    },
+    "ABF_SUBSTRATE": {
+        **CALIBRATION_DEFAULTS["ABF_SUBSTRATE"],
+        "base_pe": 30.0, "floor_pe": 18.0, "soft_ceiling_pe": 42.0, "hard_ceiling_pe": 55.0,
+        "valuation_tightening_note": "17-C-17：同步 taxonomy 較保守 soft ceiling。",
+    },
+    "SERVER_PCB_BOARD": {
+        **CALIBRATION_DEFAULTS["SERVER_PCB_BOARD"],
+        "base_pe": 28.0, "floor_pe": 16.0, "soft_ceiling_pe": 40.0, "hard_ceiling_pe": 50.0,
+        "valuation_tightening_note": "17-C-17：同步 taxonomy 較保守口徑。",
+    },
+    "CONNECTOR_CABLE": {
+        **CALIBRATION_DEFAULTS["CONNECTOR_CABLE"],
+        "base_pe": 28.0, "floor_pe": 18.0, "soft_ceiling_pe": 42.0, "hard_ceiling_pe": 50.0,
+        "valuation_tightening_note": "17-C-17：同步 taxonomy 較保守口徑。",
+    },
+    "SERVER_CHASSIS_RAIL": {
+        **CALIBRATION_DEFAULTS["SERVER_CHASSIS_RAIL"],
+        "base_pe": 24.0, "floor_pe": 16.0, "soft_ceiling_pe": 34.0, "hard_ceiling_pe": 42.0,
+        "valuation_tightening_note": "17-C-17：同步 taxonomy 較保守口徑。",
+    },
+    "POWER_BBU": {
+        **CALIBRATION_DEFAULTS["POWER_BBU"],
+        "base_pe": 24.0, "floor_pe": 16.0, "soft_ceiling_pe": 36.0, "hard_ceiling_pe": 44.0,
+        "valuation_tightening_note": "17-C-17：同步 taxonomy 較保守口徑。",
+    },
+    "THERMAL_LIQUID_COOLING": {
+        **CALIBRATION_DEFAULTS["THERMAL_LIQUID_COOLING"],
+        "base_pe": 34.0, "floor_pe": 20.0, "soft_ceiling_pe": 48.0, "hard_ceiling_pe": 60.0,
+        "valuation_tightening_note": "17-C-17：同步 taxonomy 較保守口徑；核心液冷另用 THERMAL_LIQUID_CORE。",
+    },
+    "NETWORK_SWITCH": {
+        **CALIBRATION_DEFAULTS["NETWORK_SWITCH"],
+        "base_pe": 26.0, "floor_pe": 16.0, "soft_ceiling_pe": 36.0, "hard_ceiling_pe": 45.0,
+        "valuation_tightening_note": "17-C-17：一般網通交換器同步 taxonomy，避免錯套 AI switch。",
+    },
+    "OPTICS_LENS_MODULE": {
+        **CALIBRATION_DEFAULTS["OPTICS_LENS_MODULE"],
+        "base_pe": 28.0, "floor_pe": 16.0, "soft_ceiling_pe": 40.0, "hard_ceiling_pe": 50.0,
+        "valuation_tightening_note": "17-C-17：同步 taxonomy 較保守口徑。",
+    },
+    "ROBOTICS_AUTOMATION": {
+        **CALIBRATION_DEFAULTS["ROBOTICS_AUTOMATION"],
+        "base_pe": 24.0, "floor_pe": 16.0, "soft_ceiling_pe": 36.0, "hard_ceiling_pe": 45.0,
+        "valuation_tightening_note": "17-C-17：機器人題材需 EPS/訂單落地，Dynamic Cap 同步 taxonomy。",
+    },
+    "SPACE_LEO_SATELLITE": {
+        **CALIBRATION_DEFAULTS["SPACE_LEO_SATELLITE"],
+        "base_pe": 28.0, "floor_pe": 16.0, "soft_ceiling_pe": 34.0, "hard_ceiling_pe": 45.0,
+        "valuation_tightening_note": "17-C-17：低軌衛星題材以事件模型防呆，P/E 輔助倍率收斂。",
+    },
+    "EV_AUTO_ELECTRONICS": {
+        **CALIBRATION_DEFAULTS["EV_AUTO_ELECTRONICS"],
+        "base_pe": 26.0, "floor_pe": 16.0, "soft_ceiling_pe": 36.0, "hard_ceiling_pe": 45.0,
+        "valuation_tightening_note": "17-C-17：同步 taxonomy 較保守口徑。",
+    },
+    "SOFTWARE_SECURITY_CLOUD": {
+        **CALIBRATION_DEFAULTS["SOFTWARE_SECURITY_CLOUD"],
+        "base_pe": 30.0, "floor_pe": 18.0, "soft_ceiling_pe": 42.0, "hard_ceiling_pe": 50.0,
+        "valuation_tightening_note": "17-C-17：台股軟體/資安規模與流動性有限，收斂 hard ceiling。",
+    },
+    "CONSUMER_TOURISM": {
+        "base_pe": 22.0, "floor_pe": 14.0, "soft_ceiling_pe": 32.0, "hard_ceiling_pe": 38.0,
+        "max_growth_factor": 1.12, "max_quality_factor": 1.12, "max_theme_factor": 1.02, "max_scale_factor": 1.03,
+        "gross_margin_baseline": 0.30, "gross_margin_good": 0.38, "gross_margin_excellent": 0.45,
+        "baked_in_themes": ["消費", "觀光", "生活產業"],
+        "recovery_sensitive": True,
+        "valuation_tightening_note": "17-C-17：補齊 Dynamic Cap defaults，避免落回 GENERAL base_pe。",
+    },
+    "IC_DESIGN_IP_ROYALTY": {
+        **CALIBRATION_DEFAULTS["IC_DESIGN_IP_ROYALTY"],
+        "base_pe": 45.0, "floor_pe": 28.0, "soft_ceiling_pe": 68.0, "hard_ceiling_pe": 82.0,
+        "valuation_tightening_note": "17-C-17：Royalty/IP hard 從 90 收斂至 82。",
+    },
+    "IC_DESIGN_ASIC_HIGH_VISIBILITY": {
+        **CALIBRATION_DEFAULTS["IC_DESIGN_ASIC_HIGH_VISIBILITY"],
+        "base_pe": 45.0, "floor_pe": 28.0, "soft_ceiling_pe": 65.0, "hard_ceiling_pe": 80.0,
+        "valuation_tightening_note": "17-C-17：高能見度 ASIC hard 從 85 收斂至 80。",
+    },
+    "OPTICAL_COMM_CPO_HIGH_VISIBILITY": {
+        **CALIBRATION_DEFAULTS["OPTICAL_COMM_CPO_HIGH_VISIBILITY"],
+        "base_pe": 42.0, "floor_pe": 24.0, "soft_ceiling_pe": 65.0, "hard_ceiling_pe": 82.0,
+        "valuation_tightening_note": "17-C-17：CPO/矽光子 hard 從 90 收斂至 82。",
+    },
+    "IC_DESIGN_SERVER_BMC_HIGH_VISIBILITY": {
+        **CALIBRATION_DEFAULTS["IC_DESIGN_SERVER_BMC_HIGH_VISIBILITY"],
+        "base_pe": 40.0, "floor_pe": 24.0, "soft_ceiling_pe": 62.0, "hard_ceiling_pe": 78.0,
+        "valuation_tightening_note": "17-C-17：Server BMC hard 從 90 收斂至 78。",
+    },
+    "SEMICAP_ADV_PACKAGING_CORE": {
+        **CALIBRATION_DEFAULTS["SEMICAP_ADV_PACKAGING_CORE"],
+        "base_pe": 36.0, "floor_pe": 22.0, "soft_ceiling_pe": 55.0, "hard_ceiling_pe": 72.0,
+        "valuation_tightening_note": "17-C-17：先進封裝設備 hard 從 80 收斂至 72。",
+    },
+    "THERMAL_LIQUID_CORE": {
+        **CALIBRATION_DEFAULTS["THERMAL_LIQUID_CORE"],
+        "base_pe": 36.0, "floor_pe": 22.0, "soft_ceiling_pe": 55.0, "hard_ceiling_pe": 70.0,
+        "valuation_tightening_note": "17-C-17：液冷核心 hard 從 80 收斂至 70。",
+    },
+    "SERVER_RAIL_HIGH_VISIBILITY": {
+        **CALIBRATION_DEFAULTS["SERVER_RAIL_HIGH_VISIBILITY"],
+        "base_pe": 36.0, "floor_pe": 22.0, "soft_ceiling_pe": 55.0, "hard_ceiling_pe": 70.0,
+        "valuation_tightening_note": "17-C-17：高階滑軌 hard 從 80 收斂至 70。",
+    },
+    "AI_CCL_HIGH_VISIBILITY": {
+        **CALIBRATION_DEFAULTS["AI_CCL_HIGH_VISIBILITY"],
+        "base_pe": 34.0, "floor_pe": 20.0, "soft_ceiling_pe": 52.0, "hard_ceiling_pe": 65.0,
+        "valuation_tightening_note": "17-C-17：AI CCL hard 從 80 收斂至 65。",
+    },
+    "MEMORY_IP_AI": {
+        **CALIBRATION_DEFAULTS["MEMORY_IP_AI"],
+        "base_pe": 30.0, "floor_pe": 16.0, "soft_ceiling_pe": 48.0, "hard_ceiling_pe": 60.0,
+        "valuation_tightening_note": "17-C-17：Memory IP/AI hard 從 75 收斂至 60。",
+    },
+    "AI_SERVER_PCB_HIGH_VISIBILITY": {
+        **CALIBRATION_DEFAULTS["AI_SERVER_PCB_HIGH_VISIBILITY"],
+        "base_pe": 32.0, "floor_pe": 18.0, "soft_ceiling_pe": 48.0, "hard_ceiling_pe": 62.0,
+        "valuation_tightening_note": "17-C-17：AI Server PCB hard 從 70 收斂至 62。",
+    },
+    "HIGH_SPEED_CONNECTOR_CORE": {
+        **CALIBRATION_DEFAULTS["HIGH_SPEED_CONNECTOR_CORE"],
+        "base_pe": 32.0, "floor_pe": 18.0, "soft_ceiling_pe": 48.0, "hard_ceiling_pe": 62.0,
+        "valuation_tightening_note": "17-C-17：高速連接器 hard 從 70 收斂至 62。",
+    },
+    "SEMIMAT_ADVANCED_CONSUMABLES": {
+        **CALIBRATION_DEFAULTS["SEMIMAT_ADVANCED_CONSUMABLES"],
+        "base_pe": 32.0, "floor_pe": 18.0, "soft_ceiling_pe": 48.0, "hard_ceiling_pe": 60.0,
+        "valuation_tightening_note": "17-C-17：先進耗材 hard 從 70 收斂至 60。",
+    },
+    "POWER_MANAGEMENT_IC_DESIGN": {
+        **CALIBRATION_DEFAULTS["POWER_MANAGEMENT_IC_DESIGN"],
+        "base_pe": 24.0, "floor_pe": 14.0, "soft_ceiling_pe": 36.0, "hard_ceiling_pe": 48.0,
+        "valuation_tightening_note": "17-C-17：PMIC/類比 IC hard 從 58 收斂至 48。",
+    },
+    "OSAT_AI_HPC_TESTING": {
+        **CALIBRATION_DEFAULTS["OSAT_AI_HPC_TESTING"],
+        "base_pe": 26.0, "floor_pe": 14.0, "soft_ceiling_pe": 40.0, "hard_ceiling_pe": 52.0,
+        "valuation_tightening_note": "17-C-17：AI/HPC 封測 hard 從 58 收斂至 52。",
+    },
+    "AI_DATACENTER_SWITCH": {
+        **CALIBRATION_DEFAULTS["AI_DATACENTER_SWITCH"],
+        "base_pe": 34.0, "floor_pe": 18.0, "soft_ceiling_pe": 52.0, "hard_ceiling_pe": 68.0,
+        "valuation_tightening_note": "17-C-17：AI Data Center Switch hard 從 75 收斂至 68。",
+    },
+})

@@ -1,5 +1,5 @@
 """
-產業估值模型模組（第 17-C-9 階段）。
+產業估值模型模組（目前版本 17-C-17）。
 
 資料流：
 1. stock_mapping.py 明確指定：股票 → primary_taxon + themes
@@ -14,10 +14,10 @@ from industry_taxonomy import INDUSTRY_TAXONOMY, get_taxonomy
 from stock_mapping import STOCK_MAPPING
 
 
-# ===== 第 17-C-9：產業估值模型維護資訊 =====
-INDUSTRY_MODEL_BUILD_VERSION = "17-C-16"
-INDUSTRY_MODEL_BUILT_AT = "2026-06-08"
-INDUSTRY_MODEL_BUILD_NOTE = "17-C-16 產業分類、倍率與 hybrid 權重擴充；已完成第六批混合型企業調整。"
+# ===== 第 17-C-17：產業估值模型維護資訊 =====
+INDUSTRY_MODEL_BUILD_VERSION = "17-C-17"
+INDUSTRY_MODEL_BUILT_AT = "2026-06-09"
+INDUSTRY_MODEL_BUILD_NOTE = "17-C-17 已完成 base/soft/hard 倍率寬鬆度收斂，並同步 taxonomy 與 Dynamic Cap 實算口徑。"
 INDUSTRY_MODEL_REVIEW_SUGGESTION = "建議每月做 mapping/hybrid 小檢查，每季檢查產業 base/soft/hard；本系統目前未啟用歷史紀錄。"
 
 
@@ -306,6 +306,7 @@ def get_industry_valuation_profile(stock_id, stock_name="", sector="", industry=
     profile["hybrid_taxons"] = hybrid_taxons
     hybrid_cap_display = _compute_hybrid_cap_display(profile)
     profile.update({
+        "primary_taxon": taxon_key,
         "model_key": taxon_key,
         "taxon_key": taxon_key,
         "model_label": tax.get("display_name", "一般產業 / 尚未分類"),

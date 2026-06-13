@@ -200,6 +200,290 @@ def build_ai_source_trace_report(ai_fin):
     return pd.DataFrame(rows)
 
 
+FIELD_SOURCE_PRIORITY_TABLE = [
+    {
+        "field": "現價",
+        "code": "current_price",
+        "aliases": ["current_price", "price", "股價", "收盤價", "最新收盤價"],
+        "priority": ["Fugle API 即時/延遲行情", "Yahoo Finance/yfinance", "Yahoo Finance CSV fallback", "FinMind 股價備援"],
+        "adoption_rule": "以可連線且時間最新的系統行情為準；AI 不得覆蓋現價。",
+        "validation_rule": "若股價為 0、負值或缺值，估值相關欄位不得產生買進燈號。",
+    },
+    {
+        "field": "P/E",
+        "code": "pe",
+        "aliases": ["pe", "trailing_pe", "歷史本益比", "本益比"],
+        "priority": ["Yahoo Finance/yfinance trailing PE", "FinMind TaiwanStockPER PER 備援", "AI 聯網查證", "現價 / TTM EPS 反推"],
+        "adoption_rule": "系統 PE 優先；系統缺值或明顯異常時才採 FinMind 或 AI 查證，反推值需標示。",
+        "validation_rule": "PE <= 0 或 EPS <= 0 時不可作一般 P/E 估值，應改看 P/B、現金流或週期指標。",
+    },
+    {
+        "field": "Forward P/E",
+        "code": "forward_pe",
+        "aliases": ["forward_pe", "forwardpe", "前瞻本益比"],
+        "priority": ["yfinance forwardPE", "系統 Forward EPS 反推", "法人 FY1 EPS 反推", "AI 聯網查證"],
+        "adoption_rule": "優先用系統 forwardPE；缺值才用 Forward EPS 反推，並需標示 EPS 年期。",
+        "validation_rule": "若 Forward EPS 疑似 FY2 年期錯位，公式估值需降權採 FY1 EPS。",
+    },
+    {
+        "field": "PEG",
+        "code": "peg",
+        "aliases": ["peg", "目標peg"],
+        "priority": ["Forward P/E / 法人 FY1 成長率", "Forward P/E / 月營收 YoY 備援", "AI CAGR 查證"],
+        "adoption_rule": "PEG 是衍生值，不直接採單一網站值；需先確認 Forward P/E 與成長率口徑。",
+        "validation_rule": "成長率為負時 PEG 無意義，需標示 NULL 或觀望。",
+    },
+    {
+        "field": "P/B",
+        "code": "pb",
+        "aliases": ["pb", "pbr", "股價淨值比"],
+        "priority": ["Yahoo Finance/yfinance P/B", "FinMind TaiwanStockPER PBR 備援", "AI 聯網查證"],
+        "adoption_rule": "系統 P/B 優先；P/E 不適用、EPS 為負或週期股時，P/B 權重提高。",
+        "validation_rule": "P/B 與 ROE、產業週期需一起看；不可單靠低 P/B 判斷便宜。",
+    },
+    {
+        "field": "最新單季 EPS",
+        "code": "latest_quarter_eps",
+        "aliases": ["latest_quarter_eps", "單季eps", "最新eps", "目前eps"],
+        "priority": ["公開資訊觀測站 / 最新財報", "AI 聯網查證最新季度 EPS", "系統欄位若能明確提供單季 EPS"],
+        "adoption_rule": "不得用 TTM EPS 冒充單季 EPS；缺值時目前估值改用 TTM EPS 備援。",
+        "validation_rule": "需標示季度，例如 2026Q1；年化估值需清楚寫成單季 EPS x4。",
+    },
+    {
+        "field": "TTM EPS",
+        "code": "ttm_eps",
+        "aliases": ["ttm_eps", "trailing_eps", "近四季eps", "ttmeps"],
+        "priority": ["yfinance trailingEps", "近四季財報 EPS 合計", "現價 / P/E 反推", "AI 聯網查證"],
+        "adoption_rule": "TTM EPS 用於歷史獲利支撐，不可與 Forward EPS 混用。",
+        "validation_rule": "反推值需標示為反推；若 PE 異常，反推 TTM EPS 不可採用。",
+    },
+    {
+        "field": "完整年度 EPS",
+        "code": "fiscal_year_eps",
+        "aliases": ["fiscal_year_eps", "年度eps", "完整年度eps"],
+        "priority": ["公開資訊觀測站 / 年報", "公司財報 / 法說資料", "AI 聯網查證"],
+        "adoption_rule": "年度 EPS 只作年度基準，不得覆蓋 TTM EPS 或 Forward EPS。",
+        "validation_rule": "需標示會計年度；若年期不明，降為資料待確認。",
+    },
+    {
+        "field": "Forward EPS－系統",
+        "code": "forward_eps_system",
+        "aliases": ["forward_eps_system", "系統forwardeps", "forwardeps系統"],
+        "priority": ["yfinance forwardEps", "TTM EPS x 預估成長率推估"],
+        "adoption_rule": "只代表系統估值原始口徑；不得用 AI/FY1 冒充系統 Forward EPS。",
+        "validation_rule": "需與 FY1/FY2 EPS 交叉檢查，疑似 FY2 時公式估值降權。",
+    },
+    {
+        "field": "Forward EPS－AI/共識",
+        "code": "forward_eps_consensus",
+        "aliases": ["forward_eps_consensus", "forward_eps_ai", "法人共識eps", "ai forward eps", "forward eps ai"],
+        "priority": ["多家法人共識 EPS", "券商目標價/研究報告引用 EPS", "公司法說會指引", "AI 依成長率推估"],
+        "adoption_rule": "共識 EPS 優先；單一券商或 AI 推估需降權，並與系統 Forward EPS 分開比較。",
+        "validation_rule": "必須標示來源日期、FY 年度與是否為共識；年期不明不得直接進公式買點。",
+    },
+    {
+        "field": "Forward EPS－FY1",
+        "code": "forward_eps_fy1",
+        "aliases": ["forward_eps_fy1", "fy1 eps", "fy1eps", "forward eps fy1"],
+        "priority": ["法人 FY1 年度共識 EPS", "多家券商最新 FY1 EPS", "單一券商 FY1 EPS", "AI 推估 FY1 EPS"],
+        "adoption_rule": "FY1 是前瞻 PEG 年度估值與手動情境預設基準；缺值不可用 FY2/FY3 自動代替。",
+        "validation_rule": "必須標示 FY1 對應年度；若來源非共識，資料分級至少為待確認。",
+    },
+    {
+        "field": "Forward EPS－FY2",
+        "code": "forward_eps_fy2",
+        "aliases": ["forward_eps_fy2", "fy2 eps", "fy2eps", "forward eps fy2"],
+        "priority": ["法人 FY2 年度共識 EPS", "多家券商最新 FY2 EPS", "單一券商 FY2 EPS", "AI 推估 FY2 EPS"],
+        "adoption_rule": "FY2 只作市場先行定價與樂觀年度情境，不直接當買點。",
+        "validation_rule": "若現價只能靠 FY2 解釋，需明確標示估值先行與風險。",
+    },
+    {
+        "field": "Forward EPS－FY3",
+        "code": "forward_eps_fy3",
+        "aliases": ["forward_eps_fy3", "fy3 eps", "fy3eps", "forward eps fy3"],
+        "priority": ["法人 FY3 年度共識 EPS", "長期法人情境", "公司長期指引", "AI 推估 FY3 EPS"],
+        "adoption_rule": "FY3 是高風險遠期情境，只能作壓力測試或題材先行情境。",
+        "validation_rule": "不得用 FY3 支撐一般買進燈號；需列為極限或高風險情境。",
+    },
+    {
+        "field": "營收 YoY",
+        "code": "revenue_yoy",
+        "aliases": ["revenue_yoy", "rev_growth", "yoy", "營收年增", "月營收yoy"],
+        "priority": ["FinMind TaiwanStockMonthRevenue 單月 YoY", "Yahoo 股市月營收單月 YoY", "公開資訊觀測站月營收", "AI 查證公告月份"],
+        "adoption_rule": "以實際公告月份的單月 YoY 為準；yfinance revenueGrowth 只作診斷備註，不進月營收 YoY 採用值。",
+        "validation_rule": "若 AI 抓到累計 YoY、季度 YoY、不同月份或 yfinance revenueGrowth，需列口徑差異並降權。",
+    },
+    {
+        "field": "營收 MoM",
+        "code": "revenue_mom",
+        "aliases": ["mom", "revenue_mom", "營收月增", "月營收mom"],
+        "priority": ["FinMind TaiwanStockMonthRevenue 單月 MoM", "Yahoo 股市月營收單月 MoM", "公開資訊觀測站月營收", "AI 查證公告月份"],
+        "adoption_rule": "以實際公告月份單月 MoM 為準；缺值才採 AI 查證。",
+        "validation_rule": "不可用查詢當月推定最新公告月份。",
+    },
+    {
+        "field": "毛利率",
+        "code": "gross_margin",
+        "aliases": ["gross_margin", "毛利率", "gm"],
+        "priority": ["yfinance grossMargins", "FinMind 財報健康度", "公開資訊觀測站 / 最新財報", "AI 聯網查證"],
+        "adoption_rule": "系統值優先；AI 只在缺值或校驗時補齊，需標示季度/年度口徑。",
+        "validation_rule": "需標準化成小數；毛利率不合理或低於營益率時列資料異常。",
+    },
+    {
+        "field": "營益率",
+        "code": "operating_margin",
+        "aliases": ["operating_margin", "營益率", "op_margin", "om"],
+        "priority": ["yfinance operatingMargins", "FinMind 財報健康度", "公開資訊觀測站 / 最新財報", "AI 聯網查證"],
+        "adoption_rule": "系統值優先；AI 只在缺值或校驗時補齊，需標示季度/年度口徑。",
+        "validation_rule": "營益率高於毛利率超過容忍值時，視為硬性資料矛盾。",
+    },
+    {
+        "field": "ROE",
+        "code": "roe",
+        "aliases": ["roe", "股東權益報酬率"],
+        "priority": ["yfinance returnOnEquity", "P/B ÷ P/E 恆等式校正", "公開資訊觀測站 / 最新財報", "AI 聯網查證"],
+        "adoption_rule": "系統值優先；P/B/P/E 可作交叉校正，不可在 PE 或 PB 異常時強行反推。",
+        "validation_rule": "需標準化成小數；極端值需確認是否百分比/倍數口徑錯置。",
+    },
+    {
+        "field": "D/E",
+        "code": "debt_to_equity",
+        "aliases": ["debt_to_equity", "de", "d/e", "負債權益比"],
+        "priority": ["yfinance debtToEquity", "FinMind 財報健康度", "公開資訊觀測站 / 最新財報", "AI 聯網查證"],
+        "adoption_rule": "採用前一律標準化成倍數；例如 132.1% 轉為 1.321 倍。",
+        "validation_rule": "D/E > 8 倍視為單位疑似錯置或極端財務風險，需停用買賣判斷。",
+    },
+    {
+        "field": "法人目標價",
+        "code": "target_price",
+        "aliases": ["target_price", "target_price_avg", "目標價", "法人目標價"],
+        "priority": ["多家法人目標價彙整", "券商最新目標價與報告日期", "yfinance targetMeanPrice/High/Low", "AI 聯網查證"],
+        "adoption_rule": "法人目標價面板同源值優先；需同步高/均/低與分析師人數。",
+        "validation_rule": "分析師人數少於 3 或高低標分歧過大時，目標價可信度降權。",
+    },
+    {
+        "field": "自由現金流",
+        "code": "free_cash_flow",
+        "aliases": ["free_cash_flow", "fcf", "自由現金流"],
+        "priority": ["yfinance freeCashflow", "FinMind 現金流量表", "公開資訊觀測站 / 最新財報", "AI 聯網查證"],
+        "adoption_rule": "系統值優先；AI 只補缺值，並需標示期間。",
+        "validation_rule": "FCF 為負需與成長投資、庫存與營運現金流一起解讀。",
+    },
+    {
+        "field": "流動比率",
+        "code": "current_ratio",
+        "aliases": ["current_ratio", "流動比率"],
+        "priority": ["yfinance currentRatio", "公開資訊觀測站 / 最新財報", "AI 聯網查證"],
+        "adoption_rule": "系統值優先；AI 只補缺值。",
+        "validation_rule": "流動比率低於 1 需列短期流動性風險。",
+    },
+    {
+        "field": "融資融券",
+        "code": "margin_credit",
+        "aliases": ["margin_credit", "融資", "融券", "信用交易"],
+        "priority": ["FinMind TaiwanStockMarginPurchaseShortSale", "TWSE/TPEx 信用交易官方資料", "AI 查證"],
+        "adoption_rule": "以最近交易日官方/FinMind 信用交易資料為準，AI 不覆蓋系統值。",
+        "validation_rule": "融資使用率或融資餘額變化偏高時，只作籌碼風險，不直接改 EPS/估值。",
+    },
+    {
+        "field": "ETF 持有",
+        "code": "etf_holders",
+        "aliases": ["etf_holders", "etf持有", "etf曝險"],
+        "priority": ["投信官網/PCF/投資組合明細", "MoneyDJ / Yahoo ETF 持股頁", "Pocket / CMoney", "AI 補查"],
+        "adoption_rule": "系統掃描與投信官方資料優先；AI 只補主動式 ETF 或缺漏來源。",
+        "validation_rule": "需標示資料日期；來源未揭露時不可視為完整持股證據。",
+    },
+    {
+        "field": "產業分類",
+        "code": "industry_classification",
+        "aliases": ["industry_classification", "primary_taxon", "產業分類", "stock_mapping"],
+        "priority": ["stock_mapping.py 正式對應", "industry_taxonomy.py 模型分類", "stocklist/keyword fallback", "AI 建議分類"],
+        "adoption_rule": "正式 stock_mapping.py 優先；AI 建議分類一律待人工確認，不直接覆蓋模型庫。",
+        "validation_rule": "分類調整需有產品、營收結構或獲利來源轉變證據。",
+    },
+]
+
+
+def _normalize_source_priority_key(value):
+    text = str(value or "").strip().lower()
+    text = text.replace("－", "-").replace("—", "-")
+    text = re.sub(r"[\s_/\-()（）]+", "", text)
+    return text
+
+
+def get_field_source_priority(field):
+    """依資料欄位名稱取得來源優先規則。"""
+    needle = _normalize_source_priority_key(field)
+    if not needle:
+        return None
+    for item in FIELD_SOURCE_PRIORITY_TABLE:
+        candidates = [item.get("field"), item.get("code")] + list(item.get("aliases") or [])
+        if needle in {_normalize_source_priority_key(x) for x in candidates}:
+            return item
+    for item in FIELD_SOURCE_PRIORITY_TABLE:
+        candidates = [item.get("field"), item.get("code")] + list(item.get("aliases") or [])
+        for candidate in candidates:
+            key = _normalize_source_priority_key(candidate)
+            if key and (key in needle or needle in key):
+                return item
+    return None
+
+
+def source_priority_summary_for_field(field, include_rule=True):
+    """回傳單一欄位的來源優先序摘要，供資料品質表與提示詞使用。"""
+    item = get_field_source_priority(field)
+    if not item:
+        return ""
+    priority_text = " > ".join([f"{idx + 1}.{name}" for idx, name in enumerate(item.get("priority") or [])])
+    if include_rule:
+        rule = item.get("adoption_rule") or ""
+        if rule:
+            return f"{priority_text}；規則：{rule}"
+    return priority_text
+
+
+def build_field_source_priority_report(fields=None):
+    """建立欄位來源優先表。fields 可指定顯示欄位；不指定則回傳完整表。"""
+    selected = []
+    if fields:
+        seen = set()
+        for field in fields:
+            item = get_field_source_priority(field)
+            if item and item.get("code") not in seen:
+                selected.append(item)
+                seen.add(item.get("code"))
+    else:
+        selected = FIELD_SOURCE_PRIORITY_TABLE
+
+    rows = []
+    for item in selected:
+        rows.append({
+            "資料欄位": item.get("field", ""),
+            "欄位代碼": item.get("code", ""),
+            "來源優先序": " > ".join([f"{idx + 1}.{name}" for idx, name in enumerate(item.get("priority") or [])]),
+            "採用規則": item.get("adoption_rule", ""),
+            "校驗/降權規則": item.get("validation_rule", ""),
+        })
+    return pd.DataFrame(rows)
+
+
+def format_field_source_priority_for_prompt(fields=None, max_rows=18):
+    """將欄位來源優先表壓成適合打包給外部 AI 的文字。"""
+    df = build_field_source_priority_report(fields)
+    if df is None or df.empty:
+        return "NULL"
+    rows = []
+    for _, row in df.head(max_rows).iterrows():
+        rows.append(
+            "- "
+            f"欄位={row.get('資料欄位', '')}；"
+            f"優先序={row.get('來源優先序', '')}；"
+            f"採用規則={row.get('採用規則', '')}；"
+            f"校驗={row.get('校驗/降權規則', '')}"
+        )
+    return "\n".join(rows) if rows else "NULL"
+
+
 
 # ==========================================
 # 1.0.1 系統 / AI 分歧警告層
@@ -226,6 +510,46 @@ def _relative_gap(a, b, denominator="min"):
 
 def _fmt_gap_pct(gap):
     return "N/A" if gap is None else f"{gap * 100:.1f}%"
+
+
+def detect_forward_eps_period_mismatch(system_forward_eps=None, fy1_eps=None, fy2_eps=None, threshold=0.30):
+    """Detect when system Forward EPS likely reflects FY2 instead of FY1."""
+    sys_eps = s_float(system_forward_eps)
+    fy1 = s_float(fy1_eps)
+    fy2 = s_float(fy2_eps)
+    result = {
+        "has_mismatch": False,
+        "severity": "none",
+        "system_forward_eps": sys_eps,
+        "fy1_eps": fy1,
+        "fy2_eps": fy2,
+        "fy1_gap": None,
+        "fy2_gap": None,
+        "recommended_eps": sys_eps,
+        "recommended_eps_source": "系統 Forward EPS",
+        "note": "未偵測到 Forward EPS 年期錯位。",
+    }
+    if sys_eps is None or sys_eps <= 0 or fy1 is None or fy1 <= 0 or fy2 is None or fy2 <= 0:
+        result["note"] = "Forward EPS / FY1 / FY2 EPS 資料不足，無法檢查年期錯位。"
+        return result
+
+    fy1_gap = abs(sys_eps - fy1) / fy1
+    fy2_gap = abs(sys_eps - fy2) / fy2
+    result["fy1_gap"] = fy1_gap
+    result["fy2_gap"] = fy2_gap
+
+    if fy1_gap > threshold and fy2_gap < fy1_gap:
+        result.update({
+            "has_mismatch": True,
+            "severity": "warning",
+            "recommended_eps": fy1,
+            "recommended_eps_source": "FY1 EPS（系統 Forward EPS 疑似 FY2，已降權）",
+            "note": (
+                f"系統 Forward EPS={sys_eps:.2f} 與 FY1 EPS={fy1:.2f} 差距 {_fmt_gap_pct(fy1_gap)}，"
+                f"且更接近 FY2 EPS={fy2:.2f}；公式合理估值應降權採 FY1 EPS，FY2 僅用於市場先行定價判斷。"
+            ),
+        })
+    return result
 
 
 def build_divergence_warnings(
@@ -440,6 +764,7 @@ def build_financial_quality_report(rows):
             "AI值": format_quality_value(ai_value, fmt),
             "採用值": format_quality_value(adopted_value, fmt),
             "採用來源": r.get("adopted_source", "系統優先/AI備援"),
+            "來源優先序": r.get("source_priority") or source_priority_summary_for_field(r.get("field", ""), include_rule=True) or "—",
             "最新日期/期間": r.get("period", "未揭露"),
             "品質狀態": infer_quality_status(adopted_value, system_value, ai_value, r.get("is_stale", False), notes),
             "備註": notes or "—",
@@ -649,12 +974,8 @@ def validate_and_correct_financial_metrics(system_vals, ai_vals=None, monthly_re
             if "Month" in monthly_rev_df.columns:
                 monthly_period = normalize_revenue_month(monthly_rev_df["Month"].iloc[-1])
             if monthly_yoy is not None and -1.0 <= monthly_yoy <= 10.0:
-                old_sys_yoy = corrected.get("rev_growth")
-                if old_sys_yoy is not None and abs(old_sys_yoy - monthly_yoy) >= 0.10:
-                    period_text = f"({monthly_period})" if monthly_period else ""
-                    warnings.append(
-                        f"{label} 的 yfinance revenueGrowth={to_val_str(old_sys_yoy, 'pct')}，系統月營收快取{period_text} YoY={to_val_str(monthly_yoy, 'pct')}；已先以月營收快取取代 yfinance 值。若 AI 同月份交叉校對不一致，畫面與打包提示詞會再改用 AI 同月份值。"
-                    )
+                # yfinance revenueGrowth 多半不是台股最新單月營收 YoY 口徑；
+                # 兩者差異屬正常資料源期間差異，不應常駐成黃色資料品質警告。
                 corrected["rev_growth"] = monthly_yoy
                 corrected["revenue_yoy"] = monthly_yoy
     except Exception:
@@ -951,7 +1272,7 @@ def validate_ai_financial_json(ai_fin, stock_id="", stock_name=""):
 
 
 # ==========================================
-# 1.0.3 最終操作燈號：可買 / 觀望 / 不建議 / 資料異常
+# 1.0.3 最終操作燈號：可買 / 觀望 / 不建議 / 資料分歧 / 資料異常
 # ==========================================
 def _confidence_label_from_score(score):
     """將 0-100 分轉成文字可信度。"""
@@ -968,6 +1289,83 @@ def _confidence_label_from_score(score):
     if v >= 35:
         return "偏低"
     return "低"
+
+
+def data_signal_grading(
+    *,
+    critical_reasons=None,
+    downgrade_reasons=None,
+    watch_reasons=None,
+    warning_count=0,
+    danger_count=0,
+    data_score=None,
+    valuation_score=None,
+    operation_score=None,
+    target_rank=1,
+):
+    """將資料問題分級，避免把一般分歧全部視為不可判斷。"""
+    critical_reasons = [str(x) for x in (critical_reasons or []) if str(x).strip()]
+    downgrade_reasons = [str(x) for x in (downgrade_reasons or []) if str(x).strip()]
+    watch_reasons = [str(x) for x in (watch_reasons or []) if str(x).strip()]
+    warning_count = int(warning_count or 0)
+    danger_count = int(danger_count or 0)
+    data_score = s_float(data_score, 0) or 0
+    valuation_score = s_float(valuation_score, 0) or 0
+    operation_score = s_float(operation_score, 0) or 0
+    target_rank = int(target_rank or 1)
+
+    if critical_reasons:
+        return {
+            "grade": "資料異常-不可判斷",
+            "color": "#ff4d4d",
+            "advice": "核心資料無法建立或出現硬性矛盾，先修正資料，不做買賣判斷。",
+            "reasons": critical_reasons,
+            "can_use_conservative_valuation": False,
+            "position_limit": "停止判斷",
+        }
+
+    if danger_count >= 1 or warning_count >= 3 or downgrade_reasons or data_score < 50:
+        reasons = list(downgrade_reasons)
+        if danger_count >= 1:
+            reasons.append(f"重大分歧警告 {danger_count} 項")
+        if warning_count >= 3:
+            reasons.append(f"分歧警告 {warning_count} 項")
+        if data_score < 50:
+            reasons.append("資料可信度偏低，需使用保守值")
+        return {
+            "grade": "資料分歧-降權判斷",
+            "color": "#ff8c00",
+            "advice": "資料有分歧但仍可判斷較可靠來源；可用保守估值觀察，不宜重倉或追價。",
+            "reasons": reasons,
+            "can_use_conservative_valuation": True,
+            "position_limit": "小量 / 降權",
+        }
+
+    if warning_count > 0 or watch_reasons or target_rank <= 2 or data_score < 65:
+        reasons = list(watch_reasons)
+        if warning_count > 0:
+            reasons.append(f"輕度分歧警告 {warning_count} 項")
+        if target_rank <= 2:
+            reasons.append("法人目標價樣本數偏低")
+        if data_score < 65:
+            reasons.append("資料可信度尚未達中高")
+        return {
+            "grade": "觀望-資料待確認",
+            "color": "#FFD700",
+            "advice": "資料方向可判斷，但仍有欄位待確認；先觀察或小量試單，不宜一次買滿。",
+            "reasons": reasons,
+            "can_use_conservative_valuation": True,
+            "position_limit": "觀望 / 小量試單",
+        }
+
+    return {
+        "grade": "資料可用",
+        "color": "#00cc66" if operation_score >= 65 and valuation_score >= 65 else "#FFD700",
+        "advice": "資料分歧可控，可依估值區間與操作規則判斷。",
+        "reasons": [],
+        "can_use_conservative_valuation": True,
+        "position_limit": "依估值區間",
+    }
 
 
 def build_final_operation_signal(
@@ -995,7 +1393,9 @@ def build_final_operation_signal(
     - 可買：資料一致、估值落在可操作區間下緣附近、基本面未明顯轉弱。
     - 觀望：基本面可，但估值未到買點，或資料有輕度分歧。
     - 不建議：價格高於可操作區間、估值偏高、產業模型不適合純 P/E 買進，或基本面不支撐。
-    - 資料異常：關鍵欄位嚴重分歧、可操作區間無法建立、AI / 系統資料矛盾嚴重。
+    - 資料異常-不可判斷：核心欄位無法建立或硬性矛盾，停止買賣判斷。
+    - 資料分歧-降權判斷：有分歧但可採較可靠來源或保守值，可保守估值但不可重倉。
+    - 觀望-資料待確認：方向可判斷，但關鍵欄位仍需等待確認。
 
     回傳 dict，含 signal、scores、reason、report。
     """
@@ -1014,8 +1414,10 @@ def build_final_operation_signal(
     pe_model_suitable = bool(industry_profile.get("pe_model_suitable", True))
     target_rank = int(target_confidence.get("rank", 1) or 1)
 
-    # 異常值防呆
-    abnormal_reasons = []
+    # 資料分級防呆：把硬性不可判斷與可降權判斷的分歧拆開。
+    critical_reasons = []
+    downgrade_reasons = []
+    watch_reasons = []
     fy = s_float(forward_pe)
     pe_v = s_float(pe)
     peg_v = s_float(peg)
@@ -1027,17 +1429,17 @@ def build_final_operation_signal(
     om_v = s_float(operating_margin)
 
     if danger_count >= 2:
-        abnormal_reasons.append("重大分歧警告達 2 項以上")
+        downgrade_reasons.append("重大分歧警告達 2 項以上，需採保守估值")
     if warning_count >= 4:
-        abnormal_reasons.append("系統 / AI 分歧警告過多")
+        downgrade_reasons.append("系統 / AI 分歧警告較多，需降權判斷")
     if op_low is None or op_high is None:
-        abnormal_reasons.append("可操作估值區間無法建立")
+        critical_reasons.append("可操作估值區間無法建立")
     if om_v is not None and gm_v is not None and om_v > gm_v + 0.05:
-        abnormal_reasons.append("營益率高於毛利率，財報口徑疑似異常")
+        critical_reasons.append("營益率高於毛利率，財報口徑疑似異常")
     if de_v is not None and de_v > 8:
-        abnormal_reasons.append("D/E 異常偏高，需確認單位")
+        critical_reasons.append("D/E 異常偏高，需確認單位")
     if peg_v is not None and peg_v < 0:
-        abnormal_reasons.append("PEG 為負值，成長估值不可直接使用")
+        watch_reasons.append("PEG 為負值，成長估值不可直接使用")
 
     # 三個可信度分數：資料、估值、操作。
     data_score = 85
@@ -1047,7 +1449,7 @@ def build_final_operation_signal(
         data_score += 5
     if target_rank <= 2:
         data_score -= 8
-    if abnormal_reasons:
+    if critical_reasons or downgrade_reasons or watch_reasons:
         data_score -= 18
     data_score = max(0, min(100, data_score))
 
@@ -1087,16 +1489,28 @@ def build_final_operation_signal(
         operation_score -= 6
     operation_score = max(0, min(100, operation_score))
 
+    data_grade = data_signal_grading(
+        critical_reasons=critical_reasons,
+        downgrade_reasons=downgrade_reasons,
+        watch_reasons=watch_reasons,
+        warning_count=warning_count,
+        danger_count=danger_count,
+        data_score=data_score,
+        valuation_score=valuation_score,
+        operation_score=operation_score,
+        target_rank=target_rank,
+    )
+
     # 燈號決策
     reasons = []
     color = "#FFD700"
     signal = "觀望"
 
-    if abnormal_reasons:
-        signal = "資料異常"
-        color = "#ff4d4d"
-        reasons.extend(abnormal_reasons)
-        advice = "先修正資料與口徑，不做買賣判斷。"
+    if data_grade["grade"] == "資料異常-不可判斷":
+        signal = data_grade["grade"]
+        color = data_grade["color"]
+        reasons.extend(data_grade["reasons"])
+        advice = data_grade["advice"]
     elif not pe_model_suitable:
         signal = "不建議"
         color = "#ff8c00"
@@ -1104,28 +1518,30 @@ def build_final_operation_signal(
         advice = "若屬題材 / 事件驅動股，請改用題材、籌碼、訂單與技術面人工確認。"
     elif cp is not None and op_low is not None and op_high is not None:
         if cp <= op_low and data_score >= 65 and valuation_score >= 65 and danger_count == 0:
-            signal = "可買"
-            color = "#00cc66"
+            signal = "可買-小量分批" if data_grade["grade"] in {"資料可用", "觀望-資料待確認"} else data_grade["grade"]
+            color = "#00cc66" if data_grade["grade"] == "資料可用" else data_grade["color"]
             reasons.append("現價低於或接近可操作估值區間下緣，且資料分歧不嚴重")
-            advice = "可考慮分批，仍需搭配技術面、籌碼與停損。"
+            reasons.extend(data_grade["reasons"])
+            advice = "可考慮小量分批，仍需搭配技術面、籌碼與停損；不可一次買滿。" if signal == "可買-小量分批" else data_grade["advice"]
         elif cp <= op_high and operation_score >= 50:
-            signal = "觀望"
-            color = "#FFD700"
+            signal = data_grade["grade"] if data_grade["grade"] in {"資料分歧-降權判斷", "觀望-資料待確認"} else "觀望"
+            color = data_grade["color"] if data_grade["grade"] != "資料可用" else "#FFD700"
             reasons.append("現價位於可操作估值區間內，尚未形成明確便宜買點")
-            advice = "不追高，等待回檔或右側確認。"
+            reasons.extend(data_grade["reasons"])
+            advice = data_grade["advice"] if data_grade["grade"] != "資料可用" else "不追高，等待回檔或右側確認。"
         else:
             signal = "不建議"
             color = "#ff8c00"
             reasons.append("現價高於可操作估值區間，追價風險偏高")
             advice = "不把公式極限價當作買進目標。"
     else:
-        signal = "觀望"
+        signal = "觀望-資料待確認"
         color = "#FFD700"
         reasons.append("關鍵資料不足，無法產生明確買進燈號")
         advice = "補齊 EPS、月營收、法人目標價與分歧檢查後再判斷。"
 
-    if signal == "可買" and target_rank <= 2:
-        signal = "觀望"
+    if signal == "可買-小量分批" and target_rank <= 2:
+        signal = "觀望-資料待確認"
         color = "#FFD700"
         reasons.append("法人目標價樣本數偏低，可買燈號降為觀望")
         advice = "可列入觀察，不宜直接重倉。"
@@ -1135,6 +1551,7 @@ def build_final_operation_signal(
         {"項目": "資料可信度", "結果": f"{data_score:.0f} / 100（{_confidence_label_from_score(data_score)}）", "說明": f"分歧警告 {warning_count} 項，重大 {danger_count} 項。"},
         {"項目": "估值可信度", "結果": f"{valuation_score:.0f} / 100（{_confidence_label_from_score(valuation_score)}）", "說明": "依 Forward P/E、PEG、P/B、產業模型與可操作區間判斷。"},
         {"項目": "操作可信度", "結果": f"{operation_score:.0f} / 100（{_confidence_label_from_score(operation_score)}）", "說明": "取資料與估值可信度後，再納入 ROE、營收 YoY、D/E 與法人樣本數。"},
+        {"項目": "資料分級", "結果": data_grade["grade"], "說明": f"{data_grade['advice']}｜倉位限制：{data_grade['position_limit']}"},
         {"項目": "可操作估值區間", "結果": "NULL" if op_low is None else f"{op_low:,.2f}～{op_high:,.2f}", "說明": "用保守 EPS、法人樣本數、分歧警告與產業模型折減。"},
         {"項目": "主要原因", "結果": "；".join(reasons) if reasons else "—", "說明": industry_profile.get("warning_note", "—")},
     ])
@@ -1150,6 +1567,8 @@ def build_final_operation_signal(
         "data_confidence": _confidence_label_from_score(data_score),
         "valuation_confidence": _confidence_label_from_score(valuation_score),
         "operation_confidence": _confidence_label_from_score(operation_score),
+        "data_grade": data_grade,
+        "data_grade_label": data_grade["grade"],
         "report": report,
     }
 
@@ -1523,6 +1942,9 @@ def build_valuation_separation_report(
     industry_discount = max(0.50, min(industry_discount, 1.05))
     pe_model_suitable = bool(industry_profile.get("pe_model_suitable", True))
     dynamic_cap_pack = dynamic_cap_pack or {}
+    eps_mismatch = dynamic_cap_pack.get("forward_eps_period_mismatch") if isinstance(dynamic_cap_pack.get("forward_eps_period_mismatch"), dict) else {}
+    formula_eps_source = dynamic_cap_pack.get("formula_eps_source") or "系統 Forward EPS"
+    raw_system_formula_fair_value = dynamic_cap_pack.get("system_formula_fair_value_raw")
     primary_valuation = str(industry_profile.get("primary_valuation") or "")
     pb_range = industry_profile.get("pb_range")
     pb_model_active = primary_valuation.startswith("pb_cycle") or (dynamic_cap_pack.get("valuation_mode") == "pb_cycle")
@@ -1585,8 +2007,10 @@ def build_valuation_separation_report(
         action_hint = "P/B 週期模型已建立，P/E 僅作輔助，請搭配週期位置與報價/運價判斷"
     elif not pe_model_suitable:
         action_hint = "產業模型不適合純 P/E 買進判斷，請改看題材、籌碼、訂單與現金流"
-    elif operable_low is None or operable_high is None or warning_count >= 3 or danger_count >= 2:
-        action_hint = "資料異常 / 先確認資料"
+    elif operable_low is None or operable_high is None:
+        action_hint = "資料異常-不可判斷 / 先補資料"
+    elif warning_count >= 3 or danger_count >= 2:
+        action_hint = "資料分歧-降權判斷 / 保守確認"
     elif cp is not None and cp <= operable_low:
         action_hint = "接近可操作區間下緣，可進一步人工確認"
     elif cp is not None and cp <= operable_high:
@@ -1601,7 +2025,14 @@ def build_valuation_separation_report(
             "估值類型": "系統公式合理估值",
             "數值": format_quality_value(system_formula_fair_value, "price"),
             "用途": "純公式輸出，用於觀察估值中樞，不直接作買賣依據。",
-            "可信度/限制": "第 17-C-6a 後採 Forward EPS × 公式倍率；PEG 僅作輔助檢查，不直接推公式價。",
+            "可信度/限制": (
+                f"採用 {formula_eps_source} × 公式倍率。"
+                + (
+                    f" 系統原始公式價 {format_quality_value(raw_system_formula_fair_value, 'price')}；{eps_mismatch.get('note')}"
+                    if eps_mismatch.get("has_mismatch") else
+                    " 第 17-C-6a 後 PEG 僅作輔助檢查，不直接推公式價。"
+                )
+            ),
         },
         {
             "估值類型": "系統公式極限價",

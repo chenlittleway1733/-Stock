@@ -1,10 +1,122 @@
 """
-台股 2.1 產業估值分類表（第 17-C 全股票分類稽核修正版）。
+台股 2.1 產業估值分類表（目前版本 17-C-17）。
 
 用途：
 - 定義各產業主要估值模型、P/E 或 P/B 適用性、循環股警示與風險旗標。
 - 第 17-C 新增材料、CCL、半導體耗材、CIS、車用零件、AI PC、工具機、綠能基建等分類，避免把題材當主分類。
+- 版本階段表見 INDUSTRY_TAXONOMY_VERSION_TABLE。
 """
+
+INDUSTRY_TAXONOMY_VERSION = "17-C-17"
+INDUSTRY_TAXONOMY_BUILD_DATE = "2026-06-09"
+INDUSTRY_TAXONOMY_VERSION_TABLE = [
+    {
+        "stage": "17-B-2",
+        "order": 1702,
+        "title": "全產業校準表",
+        "scope": "建立核心產業倍率、P/B 區間、風險旗標與 Dynamic Cap 可用欄位。",
+        "kind": "base",
+    },
+    {
+        "stage": "17-C",
+        "order": 1703,
+        "title": "全股票分類稽核修正版",
+        "scope": "補齊台股上市櫃分類基礎，新增材料、CCL、半導體耗材、CIS、車用零件、AI PC、工具機與綠能基建等分類。",
+        "kind": "taxonomy",
+    },
+    {
+        "stage": "17-C-4",
+        "order": 1704,
+        "title": "產業基準倍率重構覆寫",
+        "scope": "重整 base/floor/soft/hard、週期股警示與題材溢價邊界。",
+        "kind": "calibration",
+    },
+    {
+        "stage": "17-C-6",
+        "order": 1706,
+        "title": "IC 設計 / ASIC / IP 估值分層校準",
+        "scope": "拆分 IC 設計、ASIC、IP/EDA 與消費型 MCU 控制 IC 的倍率口徑。",
+        "kind": "calibration",
+    },
+    {
+        "stage": "17-C-7B",
+        "order": 1707,
+        "title": "第一批高確定性 AI 混合股分類",
+        "scope": "補充 AI 伺服器、ASIC、散熱、測試與光通訊等混合分類需求。",
+        "kind": "extension",
+    },
+    {
+        "stage": "17-C-10",
+        "order": 1710,
+        "title": "矽晶圓 / 晶圓再生薄化 / IPC Edge AI / 電信分類補齊",
+        "scope": "補齊矽晶圓、晶圓再生薄化、IPC Edge AI 與電信防禦型分類。",
+        "kind": "extension",
+    },
+    {
+        "stage": "17-C-11",
+        "order": 1711,
+        "title": "第二批上市半導體缺漏股分類",
+        "scope": "補齊第二批上市半導體缺漏股需要的產業分類。",
+        "kind": "extension",
+    },
+    {
+        "stage": "17-C-12",
+        "order": 1712,
+        "title": "法人 / 估值現況查核後高倍率分類拆分",
+        "scope": "依法人與估值現況查核，拆分高倍率科技分類與題材邊界。",
+        "kind": "calibration",
+    },
+    {
+        "stage": "17-C-13",
+        "order": 1713,
+        "title": "第二批半導體中游 / 週期分類拆分",
+        "scope": "拆分半導體中游、週期型與材料相關分類。",
+        "kind": "extension",
+    },
+    {
+        "stage": "17-C-14",
+        "order": 1714,
+        "title": "第三批 AI 伺服器 / 電子零組件主鏈",
+        "scope": "擴充 AI 伺服器、連接器、散熱、PCB、光通訊與電源鏈相關分類。",
+        "kind": "extension",
+    },
+    {
+        "stage": "17-C-15",
+        "order": 1715,
+        "title": "第四批非 AI 主鏈與防禦 / 循環分類拆分",
+        "scope": "補強非 AI 電子、傳產、金融、通路、防禦型與週期型分類。",
+        "kind": "extension",
+    },
+    {
+        "stage": "17-C-16",
+        "order": 1716,
+        "title": "第五批尾端總稽核分類補齊",
+        "scope": "補齊消費 IC、記憶體、舊科技資料審核與尾端缺漏分類，作為目前分類版本。",
+        "kind": "extension",
+    },
+    {
+        "stage": "17-C-17",
+        "order": 1717,
+        "title": "base / soft / hard 倍率寬鬆度收斂",
+        "scope": "依 2026-06-09 倍率寬鬆度查核，收斂高 hard ceiling 類別並同步 Dynamic Cap 實算口徑。",
+        "kind": "calibration",
+    },
+]
+
+
+def get_taxonomy_version_table():
+    return [dict(row) for row in INDUSTRY_TAXONOMY_VERSION_TABLE]
+
+
+def get_taxonomy_version_info():
+    return {
+        "version": INDUSTRY_TAXONOMY_VERSION,
+        "build_date": INDUSTRY_TAXONOMY_BUILD_DATE,
+        "latest_stage": INDUSTRY_TAXONOMY_VERSION_TABLE[-1]["stage"],
+        "stage_count": len(INDUSTRY_TAXONOMY_VERSION_TABLE),
+        "version_table": get_taxonomy_version_table(),
+    }
+
 
 INDUSTRY_TAXONOMY = {'FOUNDRY': {'display_name': '晶圓代工 / HPC / 先進製程',
              'parent': '半導體核心',
@@ -2906,6 +3018,171 @@ INDUSTRY_TAXONOMY["ABF_SUBSTRATE"].update({
     "extreme_implied_pe_guard": 120,
     "note": "ABF 載板具循環復甦與 AI/HPC 題材，但 PE/PB 高檔時應列市場重估/動能區，不上修買進倍率。",
     "calibration_source": "17-C-14 ABF 高檔週期防護"
+})
+
+
+# ===== 第 17-C-17：base / soft / hard 倍率寬鬆度收斂 =====
+# 依 2026-06-09 倍率寬鬆度查核，保留 AI 成長溢價，但降低硬體週期與高 hard ceiling 分類的極限倍率。
+INDUSTRY_TAXONOMY.update({
+    "IC_DESIGN_IP_ROYALTY": {
+        **INDUSTRY_TAXONOMY["IC_DESIGN_IP_ROYALTY"],
+        "pe_range": (30, 82),
+        "base_pe": 45,
+        "floor_pe": 28,
+        "soft_ceiling_pe": 68,
+        "hard_ceiling_pe": 82,
+        "valuation_tightening_note": "17-C-17：Royalty/IP 仍可給高溢價，但 hard 從 90 收斂至 82；需有授權案與 EPS 上修能見度才可接近 hard。",
+        "calibration_source": "17-C-17 倍率寬鬆度收斂",
+    },
+    "IC_DESIGN_ASIC_HIGH_VISIBILITY": {
+        **INDUSTRY_TAXONOMY["IC_DESIGN_ASIC_HIGH_VISIBILITY"],
+        "pe_range": (30, 80),
+        "base_pe": 45,
+        "floor_pe": 28,
+        "soft_ceiling_pe": 65,
+        "hard_ceiling_pe": 80,
+        "valuation_tightening_note": "17-C-17：高能見度 ASIC hard 從 85 收斂至 80；只有量產與 Forward EPS 高可信時才接近 hard。",
+        "calibration_source": "17-C-17 倍率寬鬆度收斂",
+    },
+    "OPTICAL_COMM_CPO_HIGH_VISIBILITY": {
+        **INDUSTRY_TAXONOMY["OPTICAL_COMM_CPO_HIGH_VISIBILITY"],
+        "pe_range": (28, 82),
+        "base_pe": 42,
+        "floor_pe": 24,
+        "soft_ceiling_pe": 65,
+        "hard_ceiling_pe": 82,
+        "valuation_tightening_note": "17-C-17：CPO/矽光子仍保留高溢價，但 hard 從 90 收斂至 82；EPS 未落地時切回事件/PB 輔助。",
+        "calibration_source": "17-C-17 倍率寬鬆度收斂",
+    },
+    "IC_DESIGN_SERVER_BMC_HIGH_VISIBILITY": {
+        **INDUSTRY_TAXONOMY["IC_DESIGN_SERVER_BMC_HIGH_VISIBILITY"],
+        "pe_range": (28, 78),
+        "base_pe": 40,
+        "floor_pe": 24,
+        "soft_ceiling_pe": 62,
+        "hard_ceiling_pe": 78,
+        "valuation_tightening_note": "17-C-17：Server BMC hard 從 90 收斂至 78，避免單一高毛利 IC 分類過度放寬。",
+        "calibration_source": "17-C-17 倍率寬鬆度收斂",
+    },
+    "SEMICAP_ADV_PACKAGING_CORE": {
+        **INDUSTRY_TAXONOMY["SEMICAP_ADV_PACKAGING_CORE"],
+        "pe_range": (24, 72),
+        "base_pe": 36,
+        "floor_pe": 22,
+        "soft_ceiling_pe": 55,
+        "hard_ceiling_pe": 72,
+        "valuation_tightening_note": "17-C-17：先進封裝設備受 capex 循環影響，hard 從 80 收斂至 72。",
+        "calibration_source": "17-C-17 倍率寬鬆度收斂",
+    },
+    "THERMAL_LIQUID_CORE": {
+        **INDUSTRY_TAXONOMY["THERMAL_LIQUID_CORE"],
+        "pe_range": (24, 70),
+        "base_pe": 36,
+        "floor_pe": 22,
+        "soft_ceiling_pe": 55,
+        "hard_ceiling_pe": 70,
+        "valuation_tightening_note": "17-C-17：液冷核心 hard 從 80 收斂至 70，避免硬體零組件題材過度放寬。",
+        "calibration_source": "17-C-17 倍率寬鬆度收斂",
+    },
+    "SERVER_RAIL_HIGH_VISIBILITY": {
+        **INDUSTRY_TAXONOMY["SERVER_RAIL_HIGH_VISIBILITY"],
+        "pe_range": (24, 70),
+        "base_pe": 36,
+        "floor_pe": 22,
+        "soft_ceiling_pe": 55,
+        "hard_ceiling_pe": 70,
+        "valuation_tightening_note": "17-C-17：高階滑軌 hard 從 80 收斂至 70；高 P/B 時仍需動能區警示。",
+        "calibration_source": "17-C-17 倍率寬鬆度收斂",
+    },
+    "AI_CCL_HIGH_VISIBILITY": {
+        **INDUSTRY_TAXONOMY["AI_CCL_HIGH_VISIBILITY"],
+        "pe_range": (22, 65),
+        "base_pe": 34,
+        "floor_pe": 20,
+        "soft_ceiling_pe": 52,
+        "hard_ceiling_pe": 65,
+        "valuation_tightening_note": "17-C-17：AI CCL 具週期材料屬性，hard 從 80 收斂至 65，需搭配 P/B/庫存週期防呆。",
+        "calibration_source": "17-C-17 倍率寬鬆度收斂",
+    },
+    "MEMORY_IP_AI": {
+        **INDUSTRY_TAXONOMY["MEMORY_IP_AI"],
+        "pe_range": (20, 60),
+        "base_pe": 30,
+        "floor_pe": 16,
+        "soft_ceiling_pe": 48,
+        "hard_ceiling_pe": 60,
+        "valuation_tightening_note": "17-C-17：記憶體 IP/AI 題材仍受記憶體循環影響，hard 從 75 收斂至 60。",
+        "calibration_source": "17-C-17 倍率寬鬆度收斂",
+    },
+    "AI_SERVER_PCB_HIGH_VISIBILITY": {
+        **INDUSTRY_TAXONOMY["AI_SERVER_PCB_HIGH_VISIBILITY"],
+        "pe_range": (20, 62),
+        "base_pe": 32,
+        "floor_pe": 18,
+        "soft_ceiling_pe": 48,
+        "hard_ceiling_pe": 62,
+        "valuation_tightening_note": "17-C-17：AI Server PCB 具週期屬性，hard 從 70 收斂至 62。",
+        "calibration_source": "17-C-17 倍率寬鬆度收斂",
+    },
+    "HIGH_SPEED_CONNECTOR_CORE": {
+        **INDUSTRY_TAXONOMY["HIGH_SPEED_CONNECTOR_CORE"],
+        "pe_range": (20, 62),
+        "base_pe": 32,
+        "floor_pe": 18,
+        "soft_ceiling_pe": 48,
+        "hard_ceiling_pe": 62,
+        "valuation_tightening_note": "17-C-17：高速連接器 hard 從 70 收斂至 62，避免 AI 純度不足時估值過寬。",
+        "calibration_source": "17-C-17 倍率寬鬆度收斂",
+    },
+    "SEMIMAT_ADVANCED_CONSUMABLES": {
+        **INDUSTRY_TAXONOMY["SEMIMAT_ADVANCED_CONSUMABLES"],
+        "pe_range": (20, 60),
+        "base_pe": 32,
+        "floor_pe": 18,
+        "soft_ceiling_pe": 48,
+        "hard_ceiling_pe": 60,
+        "valuation_tightening_note": "17-C-17：先進製程耗材雖有高毛利與先進製程題材，但仍受 capex / 稼動率循環影響。",
+        "calibration_source": "17-C-17 倍率寬鬆度收斂",
+    },
+    "POWER_MANAGEMENT_IC_DESIGN": {
+        **INDUSTRY_TAXONOMY["POWER_MANAGEMENT_IC_DESIGN"],
+        "pe_range": (14, 48),
+        "base_pe": 24,
+        "floor_pe": 14,
+        "soft_ceiling_pe": 36,
+        "hard_ceiling_pe": 48,
+        "valuation_tightening_note": "17-C-17：PMIC/類比 IC 週期屬性強，hard 從 58 收斂至 48。",
+        "calibration_source": "17-C-17 倍率寬鬆度收斂",
+    },
+    "OSAT_AI_HPC_TESTING": {
+        **INDUSTRY_TAXONOMY["OSAT_AI_HPC_TESTING"],
+        "pe_range": (16, 52),
+        "base_pe": 26,
+        "floor_pe": 14,
+        "soft_ceiling_pe": 40,
+        "hard_ceiling_pe": 52,
+        "valuation_tightening_note": "17-C-17：AI/HPC 封測仍受稼動率與封測循環影響，hard 從 58 收斂至 52。",
+        "calibration_source": "17-C-17 倍率寬鬆度收斂",
+    },
+    "AI_DATACENTER_SWITCH": {
+        **INDUSTRY_TAXONOMY["AI_DATACENTER_SWITCH"],
+        "pe_range": (20, 68),
+        "base_pe": 34,
+        "floor_pe": 18,
+        "soft_ceiling_pe": 52,
+        "hard_ceiling_pe": 68,
+        "valuation_tightening_note": "17-C-17：AI Data Center Switch hard 從 75 收斂至 68；需確認資料中心交換器營收占比與毛利率。",
+        "calibration_source": "17-C-17 倍率寬鬆度收斂",
+    },
+})
+
+INDUSTRY_TAXONOMY["CONSUMER_TOURISM"].update({
+    "base_pe": 22,
+    "floor_pe": 14,
+    "soft_ceiling_pe": 32,
+    "hard_ceiling_pe": 38,
+    "valuation_tightening_note": "17-C-17：taxonomy 倍率維持原口徑，補齊 Dynamic Cap defaults 以避免實算落回 GENERAL。",
+    "calibration_source": "17-C-17 倍率寬鬆度收斂",
 })
 
 def get_taxonomy(taxon_key: str):
