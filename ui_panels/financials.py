@@ -11,6 +11,144 @@ def _nullize_text_local(value):
     return text.strip() if text.strip() else "NULL"
 
 
+def _format_pct_local(value):
+    try:
+        x = s_float(value)
+    except Exception:
+        x = None
+    if x is None:
+        return "NULL"
+    if abs(x) <= 3:
+        x *= 100
+    return f"{x:.1f}%"
+
+
+def _build_m10_margin_benchmark_report(summary):
+    if not isinstance(summary, dict) or not summary.get("available"):
+        return None
+    rows = [
+        {"項目": "M10 分類", "內容": _nullize_text_local(summary.get("category_name"))},
+        {"項目": "狀態", "內容": _nullize_text_local(summary.get("status_label"))},
+        {"項目": "品質 / 規則", "內容": f"{_nullize_text_local(summary.get('margin_quality'))} / {_nullize_text_local(summary.get('margin_rule_label'))}"},
+        {
+            "項目": "毛利率 base / low / high",
+            "內容": f"{_format_pct_local(summary.get('base_gross_margin_pct'))} / {_format_pct_local(summary.get('gross_margin_low_pct'))} / {_format_pct_local(summary.get('gross_margin_high_pct'))}",
+        },
+        {
+            "項目": "營益率 base / low / high",
+            "內容": f"{_format_pct_local(summary.get('base_operating_margin_pct'))} / {_format_pct_local(summary.get('operating_margin_low_pct'))} / {_format_pct_local(summary.get('operating_margin_high_pct'))}",
+        },
+        {"項目": "估值用途", "內容": _nullize_text_local(summary.get("usage_label"))},
+    ]
+    if _nullize_text_local(summary.get("margin_reference_stocks")) != "NULL":
+        rows.append({"項目": "參考公司", "內容": _nullize_text_local(summary.get("margin_reference_stocks"))})
+    if _nullize_text_local(summary.get("warning")) != "NULL":
+        rows.append({"項目": "提醒", "內容": _nullize_text_local(summary.get("warning"))})
+    return pd.DataFrame(rows)
+
+
+def _render_m10_margin_benchmark_summary(summary):
+    if not isinstance(summary, dict):
+        return
+    status = str(summary.get("status") or "")
+    color_map = {
+        "usable": "#10B981",
+        "tracking_only": "#F59E0B",
+        "stock_not_valuation_ready": "#F97316",
+        "not_applicable": "#94A3B8",
+        "missing_stock_model_data": "#64748B",
+    }
+    color = color_map.get(status, "#94A3B8")
+    if not summary.get("available"):
+        st.caption("M10 margin benchmark：本股尚未建立分類毛利率 / 營益率 benchmark，Dynamic Cap 沿用既有品質係數設定。")
+        return
+    st.markdown(
+        "<div style='background:#0F172A;color:#E5E7EB;border-left:6px solid "
+        f"{color};padding:12px 14px;border-radius:8px;margin-bottom:10px;line-height:1.7;'>"
+        f"<div style='font-weight:bold;color:{color};'>M10 margin benchmark：{_nullize_text_local(summary.get('status_label'))}</div>"
+        f"<div>分類：{_nullize_text_local(summary.get('category_name'))}｜品質：{_nullize_text_local(summary.get('margin_quality'))}｜規則：{_nullize_text_local(summary.get('margin_rule_label'))}</div>"
+        f"<div>毛利率 base/low/high：{_format_pct_local(summary.get('base_gross_margin_pct'))} / {_format_pct_local(summary.get('gross_margin_low_pct'))} / {_format_pct_local(summary.get('gross_margin_high_pct'))}</div>"
+        f"<div>營益率 base/low/high：{_format_pct_local(summary.get('base_operating_margin_pct'))} / {_format_pct_local(summary.get('operating_margin_low_pct'))} / {_format_pct_local(summary.get('operating_margin_high_pct'))}</div>"
+        f"<div style='color:#FCD34D;'>估值用途：{_nullize_text_local(summary.get('usage_label'))}</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_candidate_review_panel(*, curr_id, temp_ai_fin):
+    candidate_data = temp_ai_fin.get("_candidate_data") or []
+    if not candidate_data:
+        return []
+
+    if "financial_candidate_reviews" not in st.session_state:
+        st.session_state.financial_candidate_reviews = load_financial_candidate_review_cache().get("reviews", {})
+    cached_reviews = load_financial_candidate_review_cache()
+    session_reviews = st.session_state.get("financial_candidate_reviews", {})
+    merged_candidates = apply_financial_candidate_reviews(candidate_data, cached_reviews, stock_id=curr_id)
+    merged_candidates = apply_financial_candidate_reviews(merged_candidates, {"reviews": session_reviews}, stock_id=curr_id)
+    temp_ai_fin["_candidate_data"] = merged_candidates
+    if isinstance(st.session_state.get("ai_fetched_financials"), dict) and curr_id in st.session_state.ai_fetched_financials:
+        st.session_state.ai_fetched_financials[curr_id]["_candidate_data"] = merged_candidates
+
+    candidate_df = build_candidate_data_report(merged_candidates)
+    if candidate_df is None or candidate_df.empty:
+        return merged_candidates
+
+    st.markdown("##### 🧾 AI 候選資料與審核狀態")
+    st.caption("審核狀態會寫入本機 JSON cache；目前不會自動覆蓋正式採用值。")
+    st_dataframe(candidate_df, hide_index=True)
+
+    with st.expander("逐欄候選資料審核", expanded=False):
+        visible_candidates = merged_candidates[:20]
+        for item in visible_candidates:
+            if not isinstance(item, dict):
+                continue
+            candidate_id = item.get("candidate_id", "")
+            if not candidate_id:
+                continue
+            field_label = item.get("field_label") or item.get("field_name") or "未命名欄位"
+            status = normalize_candidate_review_status(item.get("review_status"))
+            status_label = REVIEW_STATUS_LABELS.get(status, status)
+            source_tier = item.get("source_tier", "—")
+            source_name = item.get("source_name", "—")
+            st.markdown(
+                f"**{field_label}**｜候選值 `{_nullize_text_local(item.get('value'))}`｜來源 Level {source_tier} `{source_name}`｜狀態 `{status_label}`"
+            )
+            safe_key = re.sub(r"[^A-Za-z0-9_]+", "_", str(candidate_id))
+            action_cols = st.columns(4)
+            actions = [
+                ("採用 AI", "accepted", "使用者採用 AI 候選值"),
+                ("保留原值", "kept_original", "使用者保留系統原值"),
+                ("拒絕", "rejected", "使用者拒絕 AI 候選值"),
+                ("需追查", "needs_followup", "使用者標示需追查"),
+            ]
+            for col, (label, next_status, note) in zip(action_cols, actions):
+                with col:
+                    if st.button(label, key=f"candidate_review_{curr_id}_{safe_key}_{next_status}", use_container_width=True):
+                        record = update_financial_candidate_review(
+                            stock_id=curr_id,
+                            candidate_id=candidate_id,
+                            review_status=next_status,
+                            decision_note=note,
+                            candidate_snapshot=item,
+                        )
+                        review_key = financial_candidate_review_key(record["stock_id"], record["candidate_id"])
+                        st.session_state.financial_candidate_reviews[review_key] = record
+                        refreshed = apply_financial_candidate_reviews(
+                            merged_candidates,
+                            {"reviews": st.session_state.financial_candidate_reviews},
+                            stock_id=curr_id,
+                        )
+                        temp_ai_fin["_candidate_data"] = refreshed
+                        st.session_state.ai_fetched_financials[curr_id]["_candidate_data"] = refreshed
+                        st.success(f"{field_label} 已更新為：{REVIEW_STATUS_LABELS.get(next_status, next_status)}")
+                        st.rerun()
+        if len(merged_candidates) > len(visible_candidates):
+            st.caption(f"尚有 {len(merged_candidates) - len(visible_candidates)} 筆候選資料未展開；可先處理前 20 筆核心欄位。")
+
+    return merged_candidates
+
+
 def render_ai_financial_audit_control(*, curr_id, stock_name):
     """Render the AI financial audit control and return current AI financial state."""
     col_fin_title, col_fin_btn = st.columns([0.6, 0.4])
@@ -32,7 +170,10 @@ def render_ai_financial_audit_control(*, curr_id, stock_name):
                         "pe",
                         "trailing_eps",
                         "ttm_eps",
+                        "latest_month_eps",
                         "latest_quarter_eps",
+                        "previous_quarter_eps",
+                        "last_two_quarter_eps",
                         "forward_eps",
                         "forward_eps_ai",
                         "forward_eps_consensus",
@@ -115,7 +256,8 @@ def render_ai_financial_audit_control(*, curr_id, stock_name):
                 ai_source_df = build_ai_source_trace_report(temp_ai_fin)
                 if ai_source_df is not None and not ai_source_df.empty:
                     st.markdown("##### 🔗 AI 逐欄來源追蹤")
-                    st.dataframe(ai_source_df, use_container_width=True, hide_index=True)
+                    st_dataframe(ai_source_df, hide_index=True)
+                _render_candidate_review_panel(curr_id=curr_id, temp_ai_fin=temp_ai_fin)
                 ai_validation_warnings = temp_ai_fin.get("_ai_validation_warnings") or []
                 if ai_validation_warnings:
                     st.markdown("##### 🧪 AI JSON 合理性驗證")
@@ -131,13 +273,13 @@ def render_ai_financial_audit_control(*, curr_id, stock_name):
 def render_eps_breakdown_panel(eps_report_df):
     with st.expander("🧾 EPS 口徑拆欄（單季 / TTM / 年度 / Forward）", expanded=False):
         st.caption("避免把最新單季 EPS、TTM EPS、完整年度 EPS、Forward EPS 混稱為『目前 EPS』。目前估值仍以系統 Forward EPS 優先，AI EPS 作為補齊與交叉校對。")
-        st.dataframe(eps_report_df, use_container_width=True, hide_index=True)
+        st_dataframe(eps_report_df, hide_index=True)
 
 
 def render_financial_quality_report_panel(dq_report_df):
     with st.expander("🩺 統一資料品質報告（系統 / AI / 採用值）", expanded=False):
         st.caption("此表用來檢查每個估值欄位的來源、採用值、來源優先序、期間、AI來源網址與品質狀態。估值模型依欄位優先表取捨，AI 作為補齊與交叉校對。")
-        st.dataframe(dq_report_df, use_container_width=True, hide_index=True)
+        st_dataframe(dq_report_df, hide_index=True)
 
 
 def render_valuation_detail_panel(
@@ -171,7 +313,7 @@ def render_valuation_detail_panel(
             unsafe_allow_html=True,
         )
         st.caption("公式合理估值與公式極限價只顯示模型輸出；可操作估值區間會額外考慮保守 EPS、法人樣本數、系統/AI 分歧警告與產業估值模型。")
-        st.dataframe(valuation_separation.get("report"), use_container_width=True, hide_index=True)
+        st_dataframe(valuation_separation.get("report"), hide_index=True)
 
         with st.expander("📆 17-C-9c-hotfix44 Forward EPS 年期分層估值", expanded=True):
             ft_summary = forward_eps_tier_pack.get("summary", {}) if isinstance(forward_eps_tier_pack, dict) else {}
@@ -194,7 +336,7 @@ def render_valuation_detail_panel(
             )
             ft_report = forward_eps_tier_pack.get("report") if isinstance(forward_eps_tier_pack, dict) else None
             if ft_report is not None:
-                st.dataframe(ft_report, use_container_width=True, hide_index=True)
+                st_dataframe(ft_report, hide_index=True)
             else:
                 st.caption("Forward EPS 年期分層估值資料不足。")
 
@@ -211,7 +353,7 @@ def render_valuation_detail_panel(
                 "</div>",
                 unsafe_allow_html=True,
             )
-            st.dataframe(build_industry_valuation_model_report(industry_profile), use_container_width=True, hide_index=True)
+            st_dataframe(build_industry_valuation_model_report(industry_profile), hide_index=True)
 
         with st.expander("🧪 17-C-9c-hotfix44 產業模型單次快照稽核表", expanded=True):
             audit_summary = snapshot_audit.get("summary", {}) if isinstance(snapshot_audit, dict) else {}
@@ -235,7 +377,7 @@ def render_valuation_detail_panel(
                 unsafe_allow_html=True,
             )
             st.caption("此表只做本次快照稽核，不會自動更新產業分類、hybrid 權重或產業倍率；若要判斷連續幾次，需等雲端歷史資料庫功能。")
-            st.dataframe(snapshot_audit.get("report"), use_container_width=True, hide_index=True)
+            st_dataframe(snapshot_audit.get("report"), hide_index=True)
 
         if isinstance(dynamic_cap_pack, dict) and dynamic_cap_pack.get("report") is not None:
             with st.expander("⚙️ Dynamic Cap 2.0 倍率拆解", expanded=True):
@@ -243,15 +385,19 @@ def render_valuation_detail_panel(
                     st.warning("本分類採 P/B 週期模型：P/E Cap 僅作輔助，不直接作買進倍率。")
                 else:
                     st.caption("17-C-9c-hotfix44：已修正估值 EPS 口徑，並保留循環復甦判斷、分歧折扣校準、公式/可操作/樂觀倍率分離，最後才套用產業 hard ceiling。")
-                st.dataframe(dynamic_cap_pack.get("report"), use_container_width=True, hide_index=True)
+                m10_margin_summary = dynamic_cap_pack.get("m10_margin_benchmark") or {}
+                _render_m10_margin_benchmark_summary(m10_margin_summary)
+                m10_margin_report = _build_m10_margin_benchmark_report(m10_margin_summary)
+                if m10_margin_report is not None:
+                    st_dataframe(m10_margin_report, hide_index=True)
+                st_dataframe(dynamic_cap_pack.get("report"), hide_index=True)
                 dc_warnings = dynamic_cap_pack.get("warnings") or []
                 if dc_warnings:
                     st.warning("Dynamic Cap 模型提醒：" + "；".join(str(x) for x in dc_warnings))
 
         with st.expander("法人目標價可信度明細", expanded=False):
-            st.dataframe(
+            st_dataframe(
                 build_target_price_confidence_report(ai_analyst_count, ai_hi_val, ai_me_val, ai_lo_val, ai_target_rationale),
-                use_container_width=True,
                 hide_index=True,
             )
 
@@ -269,7 +415,7 @@ def render_final_signal_panel(final_signal):
             unsafe_allow_html=True,
         )
         st.caption("燈號會綜合資料分歧、可操作估值區間、法人樣本數、產業估值模型與基本面防呆；只有資料異常-不可判斷才停用買賣判斷，資料分歧則採降權與小量限制。")
-        st.dataframe(final_signal.get("report"), use_container_width=True, hide_index=True)
+        st_dataframe(final_signal.get("report"), hide_index=True)
 
 
 def render_financial_metric_cards(

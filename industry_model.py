@@ -1,5 +1,5 @@
 """
-產業估值模型模組（目前版本 17-C-17）。
+產業估值模型模組（目前版本 17-C-22）。
 
 資料流：
 1. stock_mapping.py 明確指定：股票 → primary_taxon + themes
@@ -11,13 +11,14 @@ import re
 import pandas as pd
 
 from industry_taxonomy import INDUSTRY_TAXONOMY, get_taxonomy
+from model_data_loader import merge_margin_benchmark_into_profile
 from stock_mapping import STOCK_MAPPING
 
 
-# ===== 第 17-C-17：產業估值模型維護資訊 =====
-INDUSTRY_MODEL_BUILD_VERSION = "17-C-17"
-INDUSTRY_MODEL_BUILT_AT = "2026-06-09"
-INDUSTRY_MODEL_BUILD_NOTE = "17-C-17 已完成 base/soft/hard 倍率寬鬆度收斂，並同步 taxonomy 與 Dynamic Cap 實算口徑。"
+# ===== 第 17-C-22：產業估值模型維護資訊 =====
+INDUSTRY_MODEL_BUILD_VERSION = "17-C-22"
+INDUSTRY_MODEL_BUILT_AT = "2026-06-20"
+INDUSTRY_MODEL_BUILD_NOTE = "17-C-22 導入 M10 margin benchmark metadata；base/soft/hard 倍率不改，Dynamic Cap 只用毛利率 / 營益率 benchmark 作品質係數守門與風險提示。"
 INDUSTRY_MODEL_REVIEW_SUGGESTION = "建議每月做 mapping/hybrid 小檢查，每季檢查產業 base/soft/hard；本系統目前未啟用歷史紀錄。"
 
 
@@ -355,7 +356,7 @@ def get_industry_valuation_profile(stock_id, stock_name="", sector="", industry=
         "ai_classification_reason": ai_ic.get("reason") if ai_ic else "",
         "ai_classification_evidence": ai_ic.get("evidence") if ai_ic else "",
     })
-    return profile
+    return merge_margin_benchmark_into_profile(profile, sid)
 
 
 def build_industry_valuation_model_report(profile):

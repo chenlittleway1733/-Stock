@@ -2,7 +2,10 @@
 側邊欄 UI 模組：
 包含個股查詢、自選股管理器、策略漏斗掃描器。
 """
+import io
+
 from ui_common import *
+from validators.stock_dataset_batch import read_stock_dataset_file, validate_stock_dataset_frame
 
 def render_sidebar():
     """渲染左側欄，並回傳主畫面需要共用的 sidebar 狀態。"""
@@ -111,6 +114,75 @@ def render_sidebar():
                                     if ok: st.rerun()
                 else:
                     st.info("目前尚無股票資料，可先新增分類或股票。")
+
+        with st.expander("🧪 模型資料驗證閘門", expanded=False):
+            st.caption("上傳 M03/M06/M07 類型 Excel 或 CSV；只產出驗證結果，不寫入 stock_mapping.py 或倍率檔。")
+            uploaded_model_file = st.file_uploader(
+                "上傳模型資料檔",
+                type=["xlsx", "xlsm", "xls", "csv"],
+                key="stock_dataset_validation_upload",
+            )
+            sheet_name = st.text_input(
+                "指定工作表（可留空）",
+                value="",
+                key="stock_dataset_validation_sheet",
+                placeholder="例如：M03模型主表_clean",
+            )
+            if uploaded_model_file is not None:
+                try:
+                    raw_df, source_meta = read_stock_dataset_file(
+                        io.BytesIO(uploaded_model_file.getvalue()),
+                        filename=uploaded_model_file.name,
+                        preferred_sheet=sheet_name.strip() or None,
+                    )
+                    validation_result = validate_stock_dataset_frame(raw_df, source_meta=source_meta)
+                    summary = validation_result["summary"]
+                    report_df = validation_result["report"]
+                    issues_df = validation_result["issues"]
+                    status_counts = summary.get("status_counts", {})
+
+                    st.caption(
+                        f"讀取來源：{source_meta.get('file_name', '—')}"
+                        f"{' / ' + source_meta.get('sheet_name') if source_meta.get('sheet_name') else ''}"
+                    )
+                    m1, m2, m3, m4 = st.columns(4)
+                    with m1:
+                        st.metric("總筆數", int(summary.get("total", 0)))
+                    with m2:
+                        st.metric("PASS", int(status_counts.get("PASS", 0)))
+                    with m3:
+                        st.metric("需修正", int(status_counts.get("FIX_REQUIRED", 0)))
+                    with m4:
+                        st.metric("排除/映射", int(status_counts.get("EXCLUDE_OR_MAPPING", 0)))
+
+                    if not issues_df.empty:
+                        st.warning(f"偵測到 {len(issues_df)} 筆異常規則命中，請先處理 FIX_REQUIRED / EXCLUDE_OR_MAPPING。")
+                        st_dataframe(issues_df.head(200), hide_index=True)
+                    else:
+                        st.success("驗證通過，沒有資料異常。")
+
+                    with st.expander("完整驗證清單", expanded=False):
+                        st_dataframe(report_df.head(300), hide_index=True)
+
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        st.download_button(
+                            "下載驗證清單 CSV",
+                            data=report_df.to_csv(index=False).encode("utf-8-sig"),
+                            file_name="stock_dataset_validation_report.csv",
+                            mime="text/csv",
+                            use_container_width=True,
+                        )
+                    with c2:
+                        st.download_button(
+                            "下載異常清單 CSV",
+                            data=issues_df.to_csv(index=False).encode("utf-8-sig"),
+                            file_name="stock_dataset_validation_issues.csv",
+                            mime="text/csv",
+                            use_container_width=True,
+                        )
+                except Exception as e:
+                    st.error(f"模型資料驗證失敗：{str(e)[:180]}")
         st.markdown("---")
         st.markdown("### 🎯 策略漏斗掃描器")
         st.caption("多因子評分卡（可調權重）：估值 / 成長 / 籌碼 / 營收動能")
@@ -325,4 +397,3 @@ def render_sidebar():
         "f_ok": locals().get("f_ok", None),
         "m_ok": locals().get("m_ok", None),
     }
-

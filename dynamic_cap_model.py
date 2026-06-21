@@ -1,11 +1,11 @@
 """
-Dynamic Cap 2.0 係數校準模型（目前版本 17-C-17）。
+Dynamic Cap 2.0 係數校準模型（目前版本 17-C-22）。
 
 設計原則：
 - 不再採用「產業基準 + 各項絕對倍數」加總，避免倍率連續堆高。
 - 改為「產業基準 × 成長係數 × 品質係數 × 題材係數 × 規模係數 × 風險折扣」。
 - 每一個係數有單項上限，最終倍率再套用產業 hard ceiling。
-- 毛利率改採相對產業基準，缺少產業基準時保守處理。
+- 毛利率改採相對產業基準；M10 margin benchmark 已納入品質係數守門與 UI / prompt 摘要。
 - 台灣關鍵半導體供應鏈加入地緣政治折價，特別避免台積電類超大型晶圓代工龍頭被推到過高 P/E。
 - P/B 週期股與題材 / 事件股仍不輸出 P/E 買進倍率。
 - 版本階段表見 DYNAMIC_CAP_MODEL_VERSION_TABLE。
@@ -17,8 +17,8 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-DYNAMIC_CAP_MODEL_VERSION = "17-C-17"
-DYNAMIC_CAP_MODEL_BUILD_DATE = "2026-06-09"
+DYNAMIC_CAP_MODEL_VERSION = "17-C-22"
+DYNAMIC_CAP_MODEL_BUILD_DATE = "2026-06-20"
 DYNAMIC_CAP_MODEL_ENGINE_VERSION = f"Dynamic Cap 2.0 calibration {DYNAMIC_CAP_MODEL_VERSION}"
 DYNAMIC_CAP_MODEL_VERSION_TABLE = [
     {
@@ -119,6 +119,41 @@ DYNAMIC_CAP_MODEL_VERSION_TABLE = [
         "scope": "依 2026-06-09 倍率寬鬆度查核，收斂高 hard ceiling 類別並同步 taxonomy 顯示口徑。",
         "kind": "calibration",
     },
+    {
+        "stage": "17-C-18",
+        "order": 1718,
+        "title": "ABF 載板與公式 cap 風控收斂",
+        "scope": "收斂 ABF_SUBSTRATE base/soft/hard，並讓公式合理價採用資料可信度折扣後的 cap。",
+        "kind": "calibration",
+    },
+    {
+        "stage": "17-C-19",
+        "order": 1719,
+        "title": "ABF 法人目標價情境校準",
+        "scope": "ABF_SUBSTRATE 維持 base 保守，但 soft/hard 回補至可解釋法人平均與最高目標價的 FY2 先行定價區間。",
+        "kind": "calibration",
+    },
+    {
+        "stage": "17-C-20",
+        "order": 1720,
+        "title": "使用者收集 FY2026E / 目標價倍率校準",
+        "scope": "依 tw_stock_90_category_tasks_T86_T90_done.xlsx 已完成樣本，校準 base/soft/hard；base 不追現價，soft/hard 反映法人目標與市場先行定價。",
+        "kind": "calibration",
+    },
+    {
+        "stage": "17-C-21",
+        "order": 1721,
+        "title": "市場狀況 hard ceiling overlay",
+        "scope": "保留產業結構 hard，實算時依現價隱含 Forward P/E、成長、資料品質與流動性產生市場調整 hard。",
+        "kind": "engine",
+    },
+    {
+        "stage": "17-C-22",
+        "order": 1722,
+        "title": "M10 margin benchmark 品質係數守門",
+        "scope": "導入 M10 毛利率 / 營益率 benchmark，區分可納入、只追蹤與不適用狀態；同步 Dynamic Cap 拆解、UI 與提示詞。",
+        "kind": "engine",
+    },
 ]
 
 
@@ -187,6 +222,136 @@ def _add_factor(rows: List[Dict[str, Any]], name: str, factor: float, reason: st
 
 def _add_discount(rows: List[Dict[str, Any]], name: str, factor: float, reason: str) -> None:
     _add_row(rows, "折扣項", name, f"×{factor:.3f}", reason)
+
+
+M10_MARGIN_STATUS_LABELS = {
+    "usable": "可納入品質係數",
+    "tracking_only": "只作追蹤 / 不給正向加分",
+    "stock_not_valuation_ready": "背景參考 / 樣本未達估值就緒",
+    "not_applicable": "不適用 margin 模型",
+    "missing_stock_model_data": "未建立 M10 margin benchmark",
+}
+
+M10_MARGIN_RULE_LABELS = {
+    "standard_margin_benchmark": "一般 margin benchmark",
+    "high_operating_margin_cap": "高營益率 cap",
+    "high_gross_margin_profile": "高毛利 profile",
+    "low_operating_margin_cap": "低營益率 cap",
+    "cycle_margin_sensitive": "循環敏感 margin",
+    "event_or_cycle_tracking_only": "事件 / 循環追蹤用",
+    "margin_not_applicable": "不適用 margin 模型",
+}
+
+
+def _first_defined(*values: Any) -> Any:
+    for value in values:
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "y"}:
+        return True
+    if text in {"false", "0", "no", "n"}:
+        return False
+    return bool(value)
+
+
+def _pct_value_for_summary(*values: Any) -> Optional[float]:
+    raw = _first_defined(*values)
+    ratio = _pct01(raw)
+    return None if ratio is None else round(ratio * 100.0, 4)
+
+
+def build_m10_margin_benchmark_summary(
+    industry_profile: Dict[str, Any] = None,
+    calibration: Dict[str, Any] = None,
+) -> Dict[str, Any]:
+    """Return structured M10 margin benchmark metadata for UI and prompt packs."""
+    profile = industry_profile if isinstance(industry_profile, dict) else {}
+    c = calibration if isinstance(calibration, dict) else {}
+
+    def get_value(key: str, default: Any = None) -> Any:
+        return _first_defined(profile.get(key), c.get(key), default)
+
+    quality = str(get_value("margin_quality", "") or "").strip().upper()
+    rule = str(get_value("margin_rule", "") or "").strip()
+    status = str(get_value("m10_margin_status", "") or "").strip()
+    available = _as_bool(get_value("m10_margin_available"), False) or bool(quality or rule or status)
+
+    model_applicable = get_value("margin_model_applicable")
+    if model_applicable is None:
+        model_applicable = not (available and (quality == "N/A" or rule == "margin_not_applicable"))
+    else:
+        model_applicable = _as_bool(model_applicable, False)
+
+    can_affect = get_value("margin_can_affect_valuation")
+    if can_affect is None:
+        can_affect = bool(model_applicable) and not (
+            available and (quality == "C" or rule == "event_or_cycle_tracking_only")
+        )
+    else:
+        can_affect = _as_bool(can_affect, False)
+
+    if not available:
+        status = status or "missing_stock_model_data"
+    elif not status:
+        if not model_applicable:
+            status = "not_applicable"
+        elif not can_affect:
+            status = "tracking_only"
+        else:
+            status = "usable"
+
+    if not model_applicable:
+        usage_label = "不適用製造業毛利率 / 營益率模型；品質係數只採 ROE 與財務風險"
+    elif not can_affect:
+        usage_label = "只作追蹤或風險背景；正向 margin 加分歸零，只保留負向折扣"
+    else:
+        usage_label = "可納入 Dynamic Cap 品質係數，但仍受產業 max_quality_factor 與 hard ceiling 限制"
+
+    gross_base = _pct_value_for_summary(get_value("base_gross_margin_pct"), get_value("base_gross_margin_ratio"))
+    gross_low = _pct_value_for_summary(get_value("gross_margin_low_pct"), get_value("gross_margin_low_ratio"))
+    gross_high = _pct_value_for_summary(get_value("gross_margin_high_pct"), get_value("gross_margin_high_ratio"))
+    op_base = _pct_value_for_summary(get_value("base_operating_margin_pct"), get_value("base_operating_margin_ratio"))
+    op_low = _pct_value_for_summary(get_value("operating_margin_low_pct"), get_value("operating_margin_low_ratio"))
+    op_high = _pct_value_for_summary(get_value("operating_margin_high_pct"), get_value("operating_margin_high_ratio"))
+
+    return {
+        "available": bool(available),
+        "source": "M10 model_data",
+        "task_id": get_value("m10_task_id"),
+        "category_name": get_value("m10_category_name"),
+        "taxonomy_key": get_value("m10_taxonomy_key"),
+        "status": status,
+        "status_label": M10_MARGIN_STATUS_LABELS.get(status, status or "未分類"),
+        "margin_quality": quality or "N/A",
+        "margin_rule": rule or "N/A",
+        "margin_rule_label": M10_MARGIN_RULE_LABELS.get(rule, rule or "N/A"),
+        "model_applicable": bool(model_applicable),
+        "can_affect_valuation": bool(can_affect),
+        "usage_label": usage_label,
+        "base_gross_margin_pct": gross_base,
+        "gross_margin_low_pct": gross_low,
+        "gross_margin_high_pct": gross_high,
+        "base_operating_margin_pct": op_base,
+        "operating_margin_low_pct": op_low,
+        "operating_margin_high_pct": op_high,
+        "margin_profile": get_value("margin_profile"),
+        "margin_model_usage": get_value("margin_model_usage"),
+        "margin_reference_stocks": get_value("margin_reference_stocks"),
+        "margin_notes": get_value("margin_notes"),
+        "warning": get_value("m10_margin_warning"),
+        "data_quality_grade": get_value("m10_data_quality_grade"),
+        "valuation_ready_flag": get_value("m10_valuation_ready_flag"),
+        "discount_factor": get_value("m10_discount_factor"),
+    }
 
 
 # 未在 taxonomy.py 明確設定時，由此表提供保守校準。
@@ -574,9 +739,6 @@ CALIBRATION_DEFAULTS.update({
     },
 })
 
-
-
-
 # ===== 第 17-C-9：第一批 AI 混合股補充預設校準 =====
 CALIBRATION_DEFAULTS.update({
     "EMS_PLATFORM_CONTRACT_MANUFACTURING": {
@@ -705,6 +867,10 @@ def _calibration(industry_profile: Dict[str, Any]) -> Dict[str, Any]:
         "max_growth_factor", "max_quality_factor", "max_theme_factor", "max_scale_factor",
         "gross_margin_baseline", "gross_margin_good", "gross_margin_excellent",
         "baked_in_themes", "geopolitical_factor", "geopolitical_note",
+        "m10_margin_available", "m10_margin_status", "m10_task_id", "m10_category_name",
+        "base_gross_margin_ratio", "gross_margin_low_ratio", "gross_margin_high_ratio",
+        "base_operating_margin_ratio", "operating_margin_low_ratio", "operating_margin_high_ratio",
+        "margin_quality", "margin_rule", "margin_model_applicable", "margin_can_affect_valuation",
     ]:
         if industry_profile.get(k) is not None:
             c[k] = industry_profile.get(k)
@@ -913,6 +1079,38 @@ def _operating_margin_adjustment(opm: Optional[float]) -> tuple[float, str]:
     return 0.07, f"營益率 {_fmt_pct(opm)} 極佳，獲利轉換率明確"
 
 
+def _relative_operating_margin_adjustment(
+    opm: Optional[float],
+    op_base: Optional[float],
+    op_low: Optional[float] = None,
+    op_high: Optional[float] = None,
+) -> tuple[float, str]:
+    """M10：營益率相對分類 benchmark 的小幅調整。"""
+    if opm is None:
+        return 0.0, "M10 營益率相對 benchmark 缺公司營益率"
+    if op_base is None:
+        return 0.0, "M10 營益率 benchmark 缺值"
+
+    gap = opm - op_base
+    if op_low is not None and opm < op_low:
+        return -0.05, f"營益率 {_fmt_pct(opm)} 低於 M10 分類下緣 {_fmt_pct(op_low)}"
+    if gap <= -0.10:
+        return -0.05, f"營益率 {_fmt_pct(opm)} 較 M10 分類基準 {_fmt_pct(op_base)} 低超過 10 個百分點"
+    if gap <= -0.05:
+        return -0.03, f"營益率 {_fmt_pct(opm)} 較 M10 分類基準 {_fmt_pct(op_base)} 低 5～10 個百分點"
+    if gap < -0.02:
+        return -0.01, f"營益率 {_fmt_pct(opm)} 略低於 M10 分類基準 {_fmt_pct(op_base)}"
+    if op_high is not None and opm > op_high:
+        return 0.04, f"營益率 {_fmt_pct(opm)} 高於 M10 分類上緣 {_fmt_pct(op_high)}，小幅品質加分"
+    if gap >= 0.10:
+        return 0.04, f"營益率 {_fmt_pct(opm)} 較 M10 分類基準 {_fmt_pct(op_base)} 高超過 10 個百分點"
+    if gap >= 0.05:
+        return 0.025, f"營益率 {_fmt_pct(opm)} 較 M10 分類基準 {_fmt_pct(op_base)} 高 5～10 個百分點"
+    if gap > 0.02:
+        return 0.01, f"營益率 {_fmt_pct(opm)} 略高於 M10 分類基準 {_fmt_pct(op_base)}"
+    return 0.0, f"營益率 {_fmt_pct(opm)} 接近 M10 分類基準 {_fmt_pct(op_base)}"
+
+
 def _operating_margin_guard(
     opm: Optional[float],
     gm: Optional[float],
@@ -967,6 +1165,21 @@ def quality_factor_relative(
     gm_base = _sf(calibration.get("gross_margin_baseline"))
     gm_good = _sf(calibration.get("gross_margin_good"))
     gm_excellent = _sf(calibration.get("gross_margin_excellent"))
+    margin_quality = str(calibration.get("margin_quality") or "").strip().upper()
+    margin_rule = str(calibration.get("margin_rule") or "").strip()
+    margin_status = str(calibration.get("m10_margin_status") or "").strip()
+    has_m10_margin = bool(calibration.get("m10_margin_available")) or bool(margin_quality) or bool(margin_rule)
+    margin_model_applicable = calibration.get("margin_model_applicable")
+    if margin_model_applicable is None:
+        margin_model_applicable = not (has_m10_margin and (margin_quality == "N/A" or margin_rule == "margin_not_applicable"))
+    margin_can_affect = calibration.get("margin_can_affect_valuation")
+    if margin_can_affect is None:
+        margin_can_affect = bool(margin_model_applicable) and not (
+            has_m10_margin and (margin_quality == "C" or margin_rule == "event_or_cycle_tracking_only")
+        )
+    op_base = _sf(calibration.get("base_operating_margin_ratio"))
+    op_low = _sf(calibration.get("operating_margin_low_ratio"))
+    op_high = _sf(calibration.get("operating_margin_high_ratio"))
 
     if not eps_positive:
         return {"factor": 1.00, "reason": "EPS 不穩或為負，不給品質係數溢價"}
@@ -978,17 +1191,45 @@ def quality_factor_relative(
     rel_adj, rel_note = _relative_margin_adjustment(gm, gm_base, gm_good, gm_excellent)
     roe_adj, roe_note = _roe_adjustment(roev)
     op_adj, op_note = _operating_margin_adjustment(opm)
+    if has_m10_margin and op_base is not None:
+        op_rel_adj, op_rel_note = _relative_operating_margin_adjustment(opm, op_base, op_low, op_high)
+    else:
+        op_rel_adj, op_rel_note = 0.0, ""
 
-    adjustment += abs_adj + rel_adj + roe_adj + op_adj
-    notes.extend([abs_note, rel_note, roe_note, op_note])
+    margin_adj = abs_adj + rel_adj + op_adj + op_rel_adj
+    margin_notes = [x for x in [abs_note, rel_note, op_note, op_rel_note] if x]
+
+    if not margin_model_applicable:
+        margin_adj = 0.0
+        notes.append(
+            f"M10 margin_rule={margin_rule or 'N/A'} / margin_quality={margin_quality or 'N/A'}，"
+            "不適用製造業毛利率 / 營益率模型，品質係數只採 ROE 與財務風險"
+        )
+    elif not margin_can_affect:
+        raw_margin_adj = margin_adj
+        margin_adj = min(0.0, margin_adj)
+        notes.extend(margin_notes)
+        if raw_margin_adj > 0:
+            notes.append(
+                f"M10 margin_status={margin_status or 'tracking_only'} / margin_quality={margin_quality or 'N/A'}，"
+                "正向 margin 加分歸零，只保留風險折扣"
+            )
+    else:
+        notes.extend(margin_notes)
+
+    adjustment += margin_adj + roe_adj
+    notes.append(roe_note)
 
     factor = 1.0 + adjustment
 
-    # 營益率輔助判斷。
-    before_op = factor
-    factor = _operating_margin_guard(opm, gm, factor, notes)
-    if opm is not None and before_op == factor:
-        notes.append(f"營益率 {_fmt_pct(opm)} 已納入品質係數，未觸發額外折扣")
+    # 營益率輔助判斷；M10 標示不適用 margin 模型者不可再用營益率防呆扣分。
+    if margin_model_applicable:
+        before_op = factor
+        factor = _operating_margin_guard(opm, gm, factor, notes)
+        if opm is not None and before_op == factor:
+            notes.append(f"營益率 {_fmt_pct(opm)} 已納入品質係數，未觸發額外折扣")
+    else:
+        notes.append("M10 margin 不適用，跳過營益率防呆")
 
     # 營收、負債、FCF、防呆。
     rev = _pct01(revenue_yoy)
@@ -1235,6 +1476,97 @@ def pe_floor_ceiling(industry_profile: Dict[str, Any], calibration: Dict[str, An
     return {"floor": float(floor), "soft_ceiling": float(soft), "hard_ceiling": float(hard), "ceiling": float(hard)}
 
 
+def market_condition_hard_overlay(
+    floor_ceiling: Dict[str, Any],
+    *,
+    current_price: Any = None,
+    adopted_forward_eps: Any = None,
+    growth_pack: Dict[str, Any] = None,
+    revenue_yoy: Any = None,
+    industry_profile: Dict[str, Any] = None,
+    data_confidence_pack: Dict[str, Any] = None,
+    liquidity_pack: Dict[str, Any] = None,
+    warning_count: int = 0,
+) -> Dict[str, Any]:
+    """17-C-21：依市場狀況調整 hard ceiling，但不直接推高 base/soft。"""
+    fc = dict(floor_ceiling or {})
+    hard = _sf(fc.get("hard_ceiling"))
+    soft = _sf(fc.get("soft_ceiling"))
+    cp = _sf(current_price)
+    eps = _sf(adopted_forward_eps)
+    p = industry_profile or {}
+    growth_pack = growth_pack or {}
+    dc = data_confidence_pack or {}
+    liq = liquidity_pack or {}
+    fc["structural_hard_ceiling"] = hard
+    fc["market_condition_adjusted"] = False
+    fc["market_condition_hard_factor"] = 1.0
+    fc["market_condition_reason"] = "市場 hard overlay 未啟用"
+    fc["market_implied_forward_pe_for_hard"] = None
+
+    if hard is None or soft is None:
+        fc["market_condition_reason"] = "hard / soft ceiling 缺值，無法做市場 overlay"
+        return fc
+    if cp is None or cp <= 0 or eps is None or eps <= 0:
+        fc["market_condition_reason"] = "現價或 Forward EPS 缺值，維持產業結構 hard"
+        return fc
+
+    implied = cp / eps
+    fc["market_implied_forward_pe_for_hard"] = implied
+    if implied <= hard:
+        fc["market_condition_reason"] = f"現價隱含 Forward P/E {implied:.1f}x 未高於產業結構 hard {hard:.1f}x"
+        return fc
+
+    data_factor = float(dc.get("factor", 1.0) or 1.0)
+    liquidity_factor_value = float(liq.get("factor", 1.0) or 1.0)
+    if data_factor < 0.90 or warning_count >= 3:
+        fc["market_condition_reason"] = f"現價隱含 {implied:.1f}x 高於結構 hard，但資料分歧/可信度不足，維持 {hard:.1f}x"
+        return fc
+    if liquidity_factor_value < 0.85:
+        fc["market_condition_reason"] = f"現價隱含 {implied:.1f}x 高於結構 hard，但流動性偏低，維持 {hard:.1f}x"
+        return fc
+
+    growth = growth_pack.get("growth") if isinstance(growth_pack, dict) else None
+    growth = _pct01(growth)
+    if growth is None:
+        growth = _pct01(revenue_yoy)
+    theme_or_momentum = bool(p.get("market_momentum_zone_if_above_hard") or p.get("theme_premium_allowed"))
+
+    if growth is not None and growth >= 0.60 and theme_or_momentum:
+        expansion_limit = 1.30
+        regime = "強成長 + 市場動能"
+    elif growth is not None and growth >= 0.35 and theme_or_momentum:
+        expansion_limit = 1.22
+        regime = "中高成長 + 市場動能"
+    elif growth is not None and growth >= 0.20:
+        expansion_limit = 1.12
+        regime = "成長支撐"
+    elif theme_or_momentum:
+        expansion_limit = 1.08
+        regime = "市場動能但基本面成長證據不足"
+    else:
+        fc["market_condition_reason"] = f"現價隱含 {implied:.1f}x 高於結構 hard，但缺少成長或市場動能條件，維持 {hard:.1f}x"
+        return fc
+
+    adjusted_hard = min(implied * 1.03, hard * expansion_limit)
+    adjusted_hard = max(hard, adjusted_hard)
+    if adjusted_hard <= hard + 1e-9:
+        fc["market_condition_reason"] = f"市場 overlay 後仍未高於結構 hard {hard:.1f}x"
+        return fc
+
+    fc["hard_ceiling"] = round(adjusted_hard, 1)
+    fc["ceiling"] = round(adjusted_hard, 1)
+    fc["market_condition_adjusted"] = True
+    fc["market_condition_hard_factor"] = round(fc["hard_ceiling"] / hard, 4)
+    growth_text = "成長缺值" if growth is None else f"成長 {_fmt_pct(growth)}"
+    fc["market_condition_reason"] = (
+        f"{regime}：現價隱含 Forward P/E {implied:.1f}x 高於產業結構 hard {hard:.1f}x；"
+        f"{growth_text}、資料可信度 {data_factor:.2f}、流動性係數 {liquidity_factor_value:.2f}，"
+        f"市場調整 hard 至 {fc['hard_ceiling']:.1f}x"
+    )
+    return fc
+
+
 def build_pb_cycle_pack(current_price: Any, pb_ratio: Any, industry_profile: Dict[str, Any]) -> Dict[str, Any]:
     pb = _sf(pb_ratio)
     cp = _sf(current_price)
@@ -1343,6 +1675,7 @@ def calculate_dynamic_cap_v2(
     info = info or {}
     p = industry_profile or {}
     c = _calibration(p)
+    m10_margin_benchmark = build_m10_margin_benchmark_summary(p, c)
     warnings: List[str] = []
     themes = list(p.get("themes") or [])
     primary_valuation = str(p.get("primary_valuation") or "forward_pe")
@@ -1360,7 +1693,12 @@ def calculate_dynamic_cap_v2(
     # 若 TTM 與 Forward 都尚未穩定轉正，全面停用 P/E 估值；若 TTM 為負但有明確正 Forward EPS，可保留 Forward P/E 但列高風險。
     if primary_valuation in {"forward_pe", "pe_pb_crosscheck", "forward_pe_pb_cycle"} and ((adopted_forward_eps is None or adopted_forward_eps <= 0) and (adopted_ttm_eps is None or adopted_ttm_eps <= 0)):
         pack = build_turnaround_event_pack(p, "EPS 尚未穩定轉正，Dynamic Cap 停用 P/E 估值，改用轉機 / 事件模型。")
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "model_version": DYNAMIC_CAP_MODEL_ENGINE_VERSION})
+        pack.update({
+            "stock_id": stock_id,
+            "stock_name": stock_name,
+            "model_version": DYNAMIC_CAP_MODEL_ENGINE_VERSION,
+            "m10_margin_benchmark": m10_margin_benchmark,
+        })
         return pack
 
     # 17-B-4：低軌衛星、機器人、生技等條件式 P/E 模型，若 EPS / 訂單未落地，直接切換事件模型。
@@ -1368,21 +1706,57 @@ def calculate_dynamic_cap_v2(
         pack = build_event_theme_pack(p)
         note = p.get("event_switch_note") or "EPS / 訂單未落地，依 17-B-4 校準規則改用事件模型。"
         pack["warnings"] = list(pack.get("warnings") or []) + [note]
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": DYNAMIC_CAP_MODEL_ENGINE_VERSION})
+        pack.update({
+            "stock_id": stock_id,
+            "stock_name": stock_name,
+            "industry_profile": p,
+            "model_version": DYNAMIC_CAP_MODEL_ENGINE_VERSION,
+            "m10_margin_benchmark": m10_margin_benchmark,
+        })
         return pack
 
     if pe_app is False or primary_valuation in {"event_chip", "theme_event"}:
         pack = build_event_theme_pack(p)
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": DYNAMIC_CAP_MODEL_ENGINE_VERSION})
+        pack.update({
+            "stock_id": stock_id,
+            "stock_name": stock_name,
+            "industry_profile": p,
+            "model_version": DYNAMIC_CAP_MODEL_ENGINE_VERSION,
+            "m10_margin_benchmark": m10_margin_benchmark,
+        })
         return pack
     if primary_valuation.startswith("pb") or primary_valuation in {"pb", "pb_roe"}:
         pack = build_pb_cycle_pack(current_price, pb_ratio, p)
-        pack.update({"stock_id": stock_id, "stock_name": stock_name, "industry_profile": p, "model_version": DYNAMIC_CAP_MODEL_ENGINE_VERSION})
+        pack.update({
+            "stock_id": stock_id,
+            "stock_name": stock_name,
+            "industry_profile": p,
+            "model_version": DYNAMIC_CAP_MODEL_ENGINE_VERSION,
+            "m10_margin_benchmark": m10_margin_benchmark,
+        })
         return pack
 
     base = _sf(c.get("base_pe"), 20.0) or 20.0
     rows: List[Dict[str, Any]] = []
     _add_row(rows, "基準", "產業基準倍率", f"{base:.1f}x", f"{p.get('model_label', p.get('display_name', '一般產業'))} 17-C-9 校準後 base_pe；非買進追價倍率")
+    if m10_margin_benchmark.get("available"):
+        gross_text = f"毛利率 base/low/high {_fmt_pct(m10_margin_benchmark.get('base_gross_margin_pct'))}/{_fmt_pct(m10_margin_benchmark.get('gross_margin_low_pct'))}/{_fmt_pct(m10_margin_benchmark.get('gross_margin_high_pct'))}"
+        op_text = f"營益率 base/low/high {_fmt_pct(m10_margin_benchmark.get('base_operating_margin_pct'))}/{_fmt_pct(m10_margin_benchmark.get('operating_margin_low_pct'))}/{_fmt_pct(m10_margin_benchmark.get('operating_margin_high_pct'))}"
+        _add_row(
+            rows,
+            "品質基準",
+            "M10 margin benchmark",
+            f"{m10_margin_benchmark.get('status_label')}｜品質 {m10_margin_benchmark.get('margin_quality')}",
+            f"{m10_margin_benchmark.get('category_name') or '未標示分類'}；規則 {m10_margin_benchmark.get('margin_rule_label')}；{gross_text}；{op_text}；{m10_margin_benchmark.get('usage_label')}",
+        )
+    else:
+        _add_row(
+            rows,
+            "品質基準",
+            "M10 margin benchmark",
+            "未建立",
+            "本股尚未匯入 M10 margin benchmark；Dynamic Cap 沿用既有產業品質係數設定。",
+        )
     hybrid_summary = c.get("hybrid_summary") or {}
     if hybrid_summary.get("enabled"):
         _add_row(rows, "基準", "混合產業權重", f"base {hybrid_summary.get('mixed_base_pe'):.1f}x / soft {hybrid_summary.get('mixed_soft_ceiling_pe'):.1f}x / hard {hybrid_summary.get('mixed_hard_ceiling_pe'):.1f}x", hybrid_summary.get("reason", ""))
@@ -1456,6 +1830,30 @@ def calculate_dynamic_cap_v2(
     _add_discount(rows, "估值風險折扣", vr["factor"], f"{vr['label']}；{vr['reason']}")
     _add_discount(rows, "流動性折扣", liq["factor"], f"{liq['label']}；{liq['reason']}")
 
+    fc = market_condition_hard_overlay(
+        fc,
+        current_price=current_price,
+        adopted_forward_eps=adopted_forward_eps,
+        growth_pack=g,
+        revenue_yoy=revenue_yoy,
+        industry_profile=p,
+        data_confidence_pack=dc,
+        liquidity_pack=liq,
+        warning_count=warn_count,
+    )
+    structural_hard = _sf(fc.get("structural_hard_ceiling"), fc.get("hard_ceiling"))
+    if fc.get("market_condition_adjusted"):
+        warnings.append("市場狀況已上調 hard ceiling；此為市場先行定價 / 極限情境，不等於可操作買點")
+        _add_row(
+            rows,
+            "風控",
+            "市場調整 hard ceiling",
+            f"{structural_hard:.1f}x → {fc['hard_ceiling']:.1f}x",
+            fc.get("market_condition_reason", ""),
+        )
+    else:
+        _add_row(rows, "風控", "市場 hard overlay", "未調整", fc.get("market_condition_reason", ""))
+
     pre_clip_cap = raw_cap * dc["factor"] * vr["factor"] * liq["factor"]
     final_cap = _clip(pre_clip_cap, fc["floor"], fc["hard_ceiling"])
     hit_floor = final_cap <= fc["floor"] + 1e-9 and pre_clip_cap < fc["floor"]
@@ -1467,16 +1865,21 @@ def calculate_dynamic_cap_v2(
     if hit_floor:
         warnings.append("Dynamic Cap 低於產業 floor，已套用最低樓地板避免倍率失真")
 
+    hard_ceiling_text = f"hard ceiling {fc['hard_ceiling']:.0f}x"
+    if fc.get("market_condition_adjusted"):
+        hard_ceiling_text += f"（市場調整；原產業 hard {structural_hard:.0f}x）"
+
     _add_row(
         rows,
         "結果",
         "最終建議倍率",
         f"{final_cap:.1f}x",
-        f"折扣前 {pre_clip_cap:.1f}x；floor {fc['floor']:.0f}x / soft ceiling {fc['soft_ceiling']:.0f}x / hard ceiling {fc['hard_ceiling']:.0f}x",
+        f"折扣前 {pre_clip_cap:.1f}x；floor {fc['floor']:.0f}x / soft ceiling {fc['soft_ceiling']:.0f}x / {hard_ceiling_text}",
     )
 
-    # 17-B-4：倍率分層。final_cap 是可操作中性倍率；raw/soft/hard 分別作公式合理、樂觀與極限參考。
-    formula_cap = min(raw_cap, fc["soft_ceiling"])
+    # 17-C-18：公式合理價需採用資料可信度與估值風險折扣後的 cap；
+    # raw cap 只保留在報告中作「折扣前」參考，避免重大分歧時仍輸出樂觀合理價。
+    formula_cap = min(final_cap, fc["soft_ceiling"])
     optimistic_cap = fc["soft_ceiling"]
     hard_cap = fc["hard_ceiling"]
     operable_cap_low = max(fc["floor"], final_cap * 0.95)
@@ -1498,7 +1901,7 @@ def calculate_dynamic_cap_v2(
         warnings.append("流動性偏低，已套用流動性折扣")
 
     # 17-C-4：市場隱含倍率。這不是買進倍率，而是用來解釋「現價為何高於系統估值」。
-    adopted_forward_eps_for_implied = _sf(consensus_forward_eps) or _sf(system_forward_eps) or _sf(ai_forward_eps)
+    adopted_forward_eps_for_implied = adopted_forward_eps
     market_implied_forward_pe = None
     market_implied_status = "Forward EPS 缺值或 <= 0，無法反推現價隱含 Forward P/E。"
     cp_for_implied = _sf(current_price)
@@ -1509,6 +1912,8 @@ def calculate_dynamic_cap_v2(
             warnings.append("現價隱含 Forward P/E 已高於產業 hard ceiling：列為市場重估 / 題材動能區，不上修買進倍率")
             if p.get("market_momentum_zone_if_above_hard"):
                 _add_row(rows, "風控", "市場重估 / 動能區", f"{market_implied_forward_pe:.1f}x", "現價隱含倍率已超過 hard ceiling；模型保留風控上限，不追高上修可操作倍率。")
+        elif structural_hard is not None and fc.get("market_condition_adjusted") and market_implied_forward_pe > structural_hard:
+            market_implied_status = "現價隱含 Forward P/E 高於原產業 hard，但仍在市場調整 hard 內；屬市場先行定價，不等於可操作買點。"
         elif market_implied_forward_pe > fc["soft_ceiling"]:
             market_implied_status = "現價隱含 Forward P/E 高於 soft ceiling，屬偏樂觀估值區。"
             if p.get("market_momentum_zone_if_above_hard"):
@@ -1540,6 +1945,7 @@ def calculate_dynamic_cap_v2(
         "formula_cap": formula_cap,
         "optimistic_cap": optimistic_cap,
         "hard_cap": hard_cap,
+        "structural_hard_cap": structural_hard,
         "operable_cap_low": operable_cap_low,
         "operable_cap_high": operable_cap_high,
         "cycle_recovery_state": recovery,
@@ -1549,14 +1955,22 @@ def calculate_dynamic_cap_v2(
         "soft_ceiling_cap": fc["soft_ceiling"],
         "ceiling_cap": fc["hard_ceiling"],
         "hard_ceiling_cap": fc["hard_ceiling"],
+        "structural_hard_ceiling_cap": structural_hard,
+        "market_condition_hard_adjustment": {
+            "adjusted": bool(fc.get("market_condition_adjusted")),
+            "factor": fc.get("market_condition_hard_factor"),
+            "reason": fc.get("market_condition_reason"),
+            "market_implied_forward_pe": fc.get("market_implied_forward_pe_for_hard"),
+        },
         "adopted_forward_eps_for_implied": adopted_forward_eps_for_implied,
         "market_implied_forward_pe": market_implied_forward_pe,
         "market_implied_status": market_implied_status,
         "hit_hard_ceiling": hit_hard_ceiling,
         "warnings": warnings,
         "industry_profile": p,
+        "m10_margin_benchmark": m10_margin_benchmark,
         "report": pd.DataFrame(rows),
-        "explanation": "Dynamic Cap 2.0 17-B-4：已加入循環復甦判斷、分歧折扣校準、公式/可操作/極限倍率分離與 hard ceiling 顯示修正。",
+        "explanation": "Dynamic Cap 2.0 17-C-22：保留產業結構 hard，並依市場狀況產生市場調整 hard；M10 margin benchmark 只作品質係數守門與風險提示，不直接改 base/soft/hard。",
     }
 
 # ===== 第 17-C-4：Dynamic Cap 校準覆寫 =====
@@ -2325,8 +2739,8 @@ CALIBRATION_DEFAULTS.update({
     },
     "ABF_SUBSTRATE": {
         **CALIBRATION_DEFAULTS["ABF_SUBSTRATE"],
-        "base_pe": 30.0, "floor_pe": 18.0, "soft_ceiling_pe": 42.0, "hard_ceiling_pe": 55.0,
-        "valuation_tightening_note": "17-C-17：同步 taxonomy 較保守 soft ceiling。",
+        "base_pe": 24.0, "floor_pe": 12.0, "soft_ceiling_pe": 42.0, "hard_ceiling_pe": 55.0,
+        "valuation_tightening_note": "17-C-19：ABF 載板 base 維持 24x；soft/hard 回補至 42/55，以 FY2 樂觀/極限情境容納法人平均與最高目標價。",
     },
     "SERVER_PCB_BOARD": {
         **CALIBRATION_DEFAULTS["SERVER_PCB_BOARD"],
@@ -2465,5 +2879,131 @@ CALIBRATION_DEFAULTS.update({
         **CALIBRATION_DEFAULTS["AI_DATACENTER_SWITCH"],
         "base_pe": 34.0, "floor_pe": 18.0, "soft_ceiling_pe": 52.0, "hard_ceiling_pe": 68.0,
         "valuation_tightening_note": "17-C-17：AI Data Center Switch hard 從 75 收斂至 68。",
+    },
+})
+
+# ===== 第 17-C-20：使用者收集 FY2026E / 目標價倍率校準 =====
+# 依 tw_stock_90_category_tasks_T86_T90_done.xlsx 中已完成且具 FY EPS / 目標價樣本校準。
+# 原則：base 不直接追現價；soft/hard 才容納法人平均目標價與市場 FY2/極限先行定價。
+CALIBRATION_DEFAULTS.update({
+    "ABF_SUBSTRATE": {
+        **CALIBRATION_DEFAULTS["ABF_SUBSTRATE"],
+        "base_pe": 24.0, "floor_pe": 12.0, "soft_ceiling_pe": 55.0, "hard_ceiling_pe": 82.0,
+        "valuation_tightening_note": "17-C-20：3037/3189/8046 樣本顯示法人目標與現價多落在 FY2 soft/hard；base 維持保守，soft/hard 上修至 55/82。",
+    },
+    "PROBE_AI_ASIC": {
+        **CALIBRATION_DEFAULTS["PROBE_AI_ASIC"],
+        "base_pe": 50.0, "floor_pe": 28.0, "soft_ceiling_pe": 85.0, "hard_ceiling_pe": 115.0,
+        "valuation_tightening_note": "17-C-20：6223/6510/6515 FactSet 樣本顯示探針卡現價與目標價已高於舊 hard，soft/hard 上修但仍保留極限風控。",
+    },
+    "SEMICAP_ADV_PACKAGING_CORE": {
+        **CALIBRATION_DEFAULTS["SEMICAP_ADV_PACKAGING_CORE"],
+        "base_pe": 38.0, "floor_pe": 22.0, "soft_ceiling_pe": 60.0, "hard_ceiling_pe": 82.0,
+        "valuation_tightening_note": "17-C-20：先進封裝設備樣本顯示 CoWoS/濕製程設備可容納較高 soft/hard；base 僅小幅上修。",
+    },
+    "THERMAL_LIQUID_CORE": {
+        **CALIBRATION_DEFAULTS["THERMAL_LIQUID_CORE"],
+        "base_pe": 40.0, "floor_pe": 22.0, "soft_ceiling_pe": 60.0, "hard_ceiling_pe": 78.0,
+        "valuation_tightening_note": "17-C-20：3017/3653/8996 樣本顯示液冷核心法人目標與市場定價高於舊 soft，base 小幅上修、hard 回補至 78。",
+    },
+    "TEST_AUTOMATION_EQUIPMENT": {
+        **CALIBRATION_DEFAULTS["TEST_AUTOMATION_EQUIPMENT"],
+        "base_pe": 34.0, "floor_pe": 20.0, "soft_ceiling_pe": 55.0, "hard_ceiling_pe": 65.0,
+        "valuation_tightening_note": "17-C-20：2360/3563/5443/7769 樣本支持測試/AOI設備 soft 上修；單一來源與舊目標價仍不拉高 hard 過度。",
+    },
+    "INDUSTRIAL_AUTOMATION_CORE": {
+        **CALIBRATION_DEFAULTS["INDUSTRIAL_AUTOMATION_CORE"],
+        "base_pe": 24.0, "floor_pe": 16.0, "soft_ceiling_pe": 40.0, "hard_ceiling_pe": 55.0,
+        "valuation_tightening_note": "17-C-20：1590/2049 高品質樣本支持工業自動化 base/soft 小幅上修；低品質高倍數樣本只反映 hard 邊界。",
+    },
+    "OSAT_AI_HPC_TESTING": {
+        **CALIBRATION_DEFAULTS["OSAT_AI_HPC_TESTING"],
+        "base_pe": 30.0, "floor_pe": 14.0, "soft_ceiling_pe": 40.0, "hard_ceiling_pe": 52.0,
+        "valuation_tightening_note": "17-C-20：2449/3264/3711 樣本顯示 FY2026E 法人目標約 30-38x，base 上修至 30，soft/hard 維持。",
+    },
+    "DATACENTER_POWER_LEADER": {
+        **CALIBRATION_DEFAULTS["DATACENTER_POWER_LEADER"],
+        "base_pe": 36.0, "floor_pe": 20.0, "soft_ceiling_pe": 55.0, "hard_ceiling_pe": 70.0,
+        "valuation_tightening_note": "17-C-20：2301/2308 樣本支持資料中心電源龍頭 base 小幅上修，soft/hard 維持 AI 主鏈邊界。",
+    },
+    "PLATFORM_IC_LEADER": {
+        **CALIBRATION_DEFAULTS["PLATFORM_IC_LEADER"],
+        "base_pe": 30.0, "floor_pe": 18.0, "soft_ceiling_pe": 45.0, "hard_ceiling_pe": 60.0,
+        "valuation_tightening_note": "17-C-20：2454/2379 樣本顯示平台型 IC 現價可高於舊 soft；base/soft/hard 小幅回補。",
+    },
+    "AI_CCL_HIGH_VISIBILITY": {
+        **CALIBRATION_DEFAULTS["AI_CCL_HIGH_VISIBILITY"],
+        "base_pe": 36.0, "floor_pe": 20.0, "soft_ceiling_pe": 55.0, "hard_ceiling_pe": 70.0,
+        "valuation_tightening_note": "17-C-20：2383/6274 樣本支持 AI CCL hard 回補至 70；仍保留材料週期與 P/B 防呆。",
+    },
+    "FOUNDRY_MATURE": {
+        **CALIBRATION_DEFAULTS["FOUNDRY_MATURE"],
+        "base_pe": 14.0, "floor_pe": 8.0, "soft_ceiling_pe": 22.0, "hard_ceiling_pe": 30.0,
+        "valuation_tightening_note": "17-C-20：2303/5347/6770 法人目標隱含 P/E 高於舊上限，但成熟製程不追現價，僅提高 soft/hard 週期邊界。",
+    },
+    "FINANCIAL_BANK_HOLDCO_QUALITY": {
+        **CALIBRATION_DEFAULTS["FINANCIAL_BANK_HOLDCO_QUALITY"],
+        "base_pe": 14.0, "floor_pe": 9.0, "soft_ceiling_pe": 18.0, "hard_ceiling_pe": 24.0,
+        "valuation_tightening_note": "17-C-20：2884/2886/2891/2892 FY2026E 樣本顯示銀行型金控合理區間約 14-18x，base 小幅上修。",
+    },
+    "AI_SERVER_ODM": {
+        **CALIBRATION_DEFAULTS["AI_SERVER_ODM"],
+        "base_pe": 20.0, "floor_pe": 12.0, "soft_ceiling_pe": 30.0, "hard_ceiling_pe": 38.0,
+        "valuation_tightening_note": "17-C-20：3706/6669 樣本顯示 AI ODM 低毛利平台不應套過高 P/E，base/soft/hard 下修。",
+    },
+    "AI_SERVER_BOARD_SYSTEM": {
+        **CALIBRATION_DEFAULTS["AI_SERVER_BOARD_SYSTEM"],
+        "base_pe": 22.0, "floor_pe": 14.0, "soft_ceiling_pe": 32.0, "hard_ceiling_pe": 40.0,
+        "valuation_tightening_note": "17-C-20：2376/2377 樣本顯示主板/系統品牌 FY2026E 目標價倍數低於舊模型，整體收斂。",
+    },
+    "THERMAL_AI_COMPONENTS": {
+        **CALIBRATION_DEFAULTS["THERMAL_AI_COMPONENTS"],
+        "base_pe": 24.0, "floor_pe": 14.0, "soft_ceiling_pe": 36.0, "hard_ceiling_pe": 48.0,
+        "valuation_tightening_note": "17-C-20：一般 AI 散熱零組件樣本低於液冷核心，避免與 THERMAL_LIQUID_CORE 共用高倍率。",
+    },
+    "HIGH_SPEED_INTERFACE_IC": {
+        **CALIBRATION_DEFAULTS["HIGH_SPEED_INTERFACE_IC"],
+        "base_pe": 22.0, "floor_pe": 14.0, "soft_ceiling_pe": 34.0, "hard_ceiling_pe": 44.0,
+        "valuation_tightening_note": "17-C-20：3014/4966/6756 樣本顯示高速介面 IC FY2026E 合理倍數低於舊模型，收斂 soft/hard。",
+    },
+    "OPTICS_LENS_LEADER": {
+        **CALIBRATION_DEFAULTS["OPTICS_LENS_LEADER"],
+        "base_pe": 22.0, "floor_pe": 14.0, "soft_ceiling_pe": 32.0, "hard_ceiling_pe": 40.0,
+        "valuation_tightening_note": "17-C-20：3008/3406 樣本顯示傳統光學鏡頭 FY2026E 目標倍數偏低；CPO/AI 光學需另走題材重評價，不直接拉高 base。",
+    },
+    "PHARMA_CDMO_PROFIT": {
+        **CALIBRATION_DEFAULTS["PHARMA_CDMO_PROFIT"],
+        "base_pe": 20.0, "floor_pe": 12.0, "soft_ceiling_pe": 30.0, "hard_ceiling_pe": 38.0,
+        "valuation_tightening_note": "17-C-20：1795/6472 樣本顯示獲利型藥廠/CDMO 倍率低於舊模型，收斂為防禦成長區間。",
+    },
+    "AI_SERVER_CHASSIS_CORE": {
+        **CALIBRATION_DEFAULTS["AI_SERVER_CHASSIS_CORE"],
+        "base_pe": 26.0, "floor_pe": 16.0, "soft_ceiling_pe": 38.0, "hard_ceiling_pe": 50.0,
+        "valuation_tightening_note": "17-C-20：3013/3693/8210 樣本顯示機殼類 AI 主鏈低於舊高倍率，收斂但保留訂單落地 soft。",
+    },
+    "FAB_FACILITY_MATERIALS": {
+        **CALIBRATION_DEFAULTS["FAB_FACILITY_MATERIALS"],
+        "base_pe": 22.0, "floor_pe": 14.0, "soft_ceiling_pe": 32.0, "hard_ceiling_pe": 40.0,
+        "valuation_tightening_note": "17-C-20：2404/6139/6196 樣本顯示廠務/材料 FY2026E 倍率低於舊模型，收斂 capex 週期邊界。",
+    },
+    "SEMICAP_GENERAL_EQUIPMENT": {
+        **CALIBRATION_DEFAULTS["SEMICAP_GENERAL_EQUIPMENT"],
+        "base_pe": 24.0, "floor_pe": 14.0, "soft_ceiling_pe": 38.0, "hard_ceiling_pe": 50.0,
+        "valuation_tightening_note": "17-C-20：一般半導體設備樣本目標倍數低於先進封裝核心，與 SEMICAP_ADV_PACKAGING_CORE 拉開。",
+    },
+    "POWER_SUPPLY_STANDARD": {
+        **CALIBRATION_DEFAULTS["POWER_SUPPLY_STANDARD"],
+        "base_pe": 16.0, "floor_pe": 10.0, "soft_ceiling_pe": 26.0, "hard_ceiling_pe": 34.0,
+        "valuation_tightening_note": "17-C-20：一般電源樣本顯示不應套資料中心電源龍頭倍率，收斂 base/soft/hard。",
+    },
+    "NETWORK_EQUIPMENT_STANDARD": {
+        **CALIBRATION_DEFAULTS["NETWORK_EQUIPMENT_STANDARD"],
+        "base_pe": 18.0, "floor_pe": 10.0, "soft_ceiling_pe": 28.0, "hard_ceiling_pe": 36.0,
+        "valuation_tightening_note": "17-C-20：一般網通樣本低於 AI data center switch，收斂一般網通倍率。",
+    },
+    "PC_BRAND_AI_PC": {
+        **CALIBRATION_DEFAULTS["PC_BRAND_AI_PC"],
+        "base_pe": 16.0, "floor_pe": 10.0, "soft_ceiling_pe": 24.0, "hard_ceiling_pe": 32.0,
+        "valuation_tightening_note": "17-C-20：2353/2357 樣本顯示 PC 品牌 AI PC 題材不應套高 AI 伺服器倍率。",
     },
 })

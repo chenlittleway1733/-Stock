@@ -1,5 +1,5 @@
 """
-台股 2.1 產業估值分類表（目前版本 17-C-17）。
+台股 2.1 產業估值分類表（目前版本 17-C-22）。
 
 用途：
 - 定義各產業主要估值模型、P/E 或 P/B 適用性、循環股警示與風險旗標。
@@ -7,8 +7,8 @@
 - 版本階段表見 INDUSTRY_TAXONOMY_VERSION_TABLE。
 """
 
-INDUSTRY_TAXONOMY_VERSION = "17-C-17"
-INDUSTRY_TAXONOMY_BUILD_DATE = "2026-06-09"
+INDUSTRY_TAXONOMY_VERSION = "17-C-22"
+INDUSTRY_TAXONOMY_BUILD_DATE = "2026-06-20"
 INDUSTRY_TAXONOMY_VERSION_TABLE = [
     {
         "stage": "17-B-2",
@@ -100,6 +100,41 @@ INDUSTRY_TAXONOMY_VERSION_TABLE = [
         "title": "base / soft / hard 倍率寬鬆度收斂",
         "scope": "依 2026-06-09 倍率寬鬆度查核，收斂高 hard ceiling 類別並同步 Dynamic Cap 實算口徑。",
         "kind": "calibration",
+    },
+    {
+        "stage": "17-C-18",
+        "order": 1718,
+        "title": "ABF 載板估值口徑收斂",
+        "scope": "收斂 ABF_SUBSTRATE base/soft/hard，避免循環載板股因 AI/HPC 題材直接套高成長倍率。",
+        "kind": "calibration",
+    },
+    {
+        "stage": "17-C-19",
+        "order": 1719,
+        "title": "ABF 法人目標價情境校準",
+        "scope": "ABF_SUBSTRATE 維持 FY1 base 保守，但回補 FY2 soft/hard，讓法人平均與最高目標價落在樂觀/極限情境。",
+        "kind": "calibration",
+    },
+    {
+        "stage": "17-C-20",
+        "order": 1720,
+        "title": "使用者收集 FY2026E / 目標價倍率校準",
+        "scope": "依 tw_stock_90_category_tasks_T86_T90_done.xlsx 已完成樣本，同步 base/soft/hard 顯示口徑。",
+        "kind": "calibration",
+    },
+    {
+        "stage": "17-C-21",
+        "order": 1721,
+        "title": "市場狀況 hard ceiling overlay",
+        "scope": "taxonomy 保留產業結構 hard；Dynamic Cap 實算時另依市場狀況產生調整後 hard。",
+        "kind": "engine",
+    },
+    {
+        "stage": "17-C-22",
+        "order": 1722,
+        "title": "M10 margin benchmark metadata 同步",
+        "scope": "taxonomy 倍率不改；industry_profile 可掛載 M10 毛利率 / 營益率 benchmark，供 Dynamic Cap 品質係數與提示詞使用。",
+        "kind": "metadata",
     },
 ]
 
@@ -3184,6 +3219,60 @@ INDUSTRY_TAXONOMY["CONSUMER_TOURISM"].update({
     "valuation_tightening_note": "17-C-17：taxonomy 倍率維持原口徑，補齊 Dynamic Cap defaults 以避免實算落回 GENERAL。",
     "calibration_source": "17-C-17 倍率寬鬆度收斂",
 })
+
+
+# ===== 第 17-C-19：ABF 法人目標價情境校準 =====
+INDUSTRY_TAXONOMY["ABF_SUBSTRATE"].update({
+    "pe_range": (12, 55),
+    "base_pe": 24,
+    "floor_pe": 12,
+    "soft_ceiling_pe": 42,
+    "hard_ceiling_pe": 55,
+    "pb_high_warning_threshold": 5.0,
+    "extreme_implied_pe_guard": 80,
+    "valuation_tightening_note": "17-C-19：ABF 載板 base 維持 24x；soft/hard 回補至 42/55，以 FY2 樂觀/極限情境容納法人平均與最高目標價。",
+    "calibration_source": "17-C-19 ABF 法人目標價情境校準",
+})
+
+# ===== 第 17-C-20：使用者收集 FY2026E / 目標價倍率校準 =====
+_USER_FY2026_MULTIPLIER_CALIBRATION_17C20 = {
+    "ABF_SUBSTRATE": (24, 12, 55, 82, "3037/3189/8046 樣本顯示法人目標與現價多落在 FY2 soft/hard；base 維持保守，soft/hard 上修至 55/82。"),
+    "PROBE_AI_ASIC": (50, 28, 85, 115, "6223/6510/6515 FactSet 樣本顯示探針卡現價與目標價已高於舊 hard，soft/hard 上修但仍保留極限風控。"),
+    "SEMICAP_ADV_PACKAGING_CORE": (38, 22, 60, 82, "先進封裝設備樣本顯示 CoWoS/濕製程設備可容納較高 soft/hard；base 僅小幅上修。"),
+    "THERMAL_LIQUID_CORE": (40, 22, 60, 78, "3017/3653/8996 樣本顯示液冷核心法人目標與市場定價高於舊 soft，base 小幅上修、hard 回補至 78。"),
+    "TEST_AUTOMATION_EQUIPMENT": (34, 20, 55, 65, "2360/3563/5443/7769 樣本支持測試/AOI設備 soft 上修；單一來源與舊目標價仍不拉高 hard 過度。"),
+    "INDUSTRIAL_AUTOMATION_CORE": (24, 16, 40, 55, "1590/2049 高品質樣本支持工業自動化 base/soft 小幅上修；低品質高倍數樣本只反映 hard 邊界。"),
+    "OSAT_AI_HPC_TESTING": (30, 14, 40, 52, "2449/3264/3711 樣本顯示 FY2026E 法人目標約 30-38x，base 上修至 30，soft/hard 維持。"),
+    "DATACENTER_POWER_LEADER": (36, 20, 55, 70, "2301/2308 樣本支持資料中心電源龍頭 base 小幅上修，soft/hard 維持 AI 主鏈邊界。"),
+    "PLATFORM_IC_LEADER": (30, 18, 45, 60, "2454/2379 樣本顯示平台型 IC 現價可高於舊 soft；base/soft/hard 小幅回補。"),
+    "AI_CCL_HIGH_VISIBILITY": (36, 20, 55, 70, "2383/6274 樣本支持 AI CCL hard 回補至 70；仍保留材料週期與 P/B 防呆。"),
+    "FOUNDRY_MATURE": (14, 8, 22, 30, "2303/5347/6770 法人目標隱含 P/E 高於舊上限，但成熟製程不追現價，僅提高 soft/hard 週期邊界。"),
+    "FINANCIAL_BANK_HOLDCO_QUALITY": (14, 9, 18, 24, "2884/2886/2891/2892 FY2026E 樣本顯示銀行型金控合理區間約 14-18x，base 小幅上修。"),
+    "AI_SERVER_ODM": (20, 12, 30, 38, "3706/6669 樣本顯示 AI ODM 低毛利平台不應套過高 P/E，base/soft/hard 下修。"),
+    "AI_SERVER_BOARD_SYSTEM": (22, 14, 32, 40, "2376/2377 樣本顯示主板/系統品牌 FY2026E 目標價倍數低於舊模型，整體收斂。"),
+    "THERMAL_AI_COMPONENTS": (24, 14, 36, 48, "一般 AI 散熱零組件樣本低於液冷核心，避免與 THERMAL_LIQUID_CORE 共用高倍率。"),
+    "HIGH_SPEED_INTERFACE_IC": (22, 14, 34, 44, "3014/4966/6756 樣本顯示高速介面 IC FY2026E 合理倍數低於舊模型，收斂 soft/hard。"),
+    "OPTICS_LENS_LEADER": (22, 14, 32, 40, "3008/3406 樣本顯示傳統光學鏡頭 FY2026E 目標倍數偏低；CPO/AI 光學需另走題材重評價。"),
+    "PHARMA_CDMO_PROFIT": (20, 12, 30, 38, "1795/6472 樣本顯示獲利型藥廠/CDMO 倍率低於舊模型，收斂為防禦成長區間。"),
+    "AI_SERVER_CHASSIS_CORE": (26, 16, 38, 50, "3013/3693/8210 樣本顯示機殼類 AI 主鏈低於舊高倍率，收斂但保留訂單落地 soft。"),
+    "FAB_FACILITY_MATERIALS": (22, 14, 32, 40, "2404/6139/6196 樣本顯示廠務/材料 FY2026E 倍率低於舊模型，收斂 capex 週期邊界。"),
+    "SEMICAP_GENERAL_EQUIPMENT": (24, 14, 38, 50, "一般半導體設備樣本目標倍數低於先進封裝核心，與 SEMICAP_ADV_PACKAGING_CORE 拉開。"),
+    "POWER_SUPPLY_STANDARD": (16, 10, 26, 34, "一般電源樣本顯示不應套資料中心電源龍頭倍率，收斂 base/soft/hard。"),
+    "NETWORK_EQUIPMENT_STANDARD": (18, 10, 28, 36, "一般網通樣本低於 AI data center switch，收斂一般網通倍率。"),
+    "PC_BRAND_AI_PC": (16, 10, 24, 32, "2353/2357 樣本顯示 PC 品牌 AI PC 題材不應套高 AI 伺服器倍率。"),
+}
+
+for _taxon, (_base, _floor, _soft, _hard, _note) in _USER_FY2026_MULTIPLIER_CALIBRATION_17C20.items():
+    if _taxon in INDUSTRY_TAXONOMY:
+        INDUSTRY_TAXONOMY[_taxon].update({
+            "pe_range": (_floor, _hard),
+            "base_pe": _base,
+            "floor_pe": _floor,
+            "soft_ceiling_pe": _soft,
+            "hard_ceiling_pe": _hard,
+            "valuation_tightening_note": f"17-C-20：{_note}",
+            "calibration_source": "17-C-20 使用者收集 FY2026E / 目標價倍率校準",
+        })
 
 def get_taxonomy(taxon_key: str):
     """安全取得產業分類設定。"""

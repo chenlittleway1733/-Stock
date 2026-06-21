@@ -5,7 +5,9 @@
 import os
 import re
 import math
+import hashlib
 import datetime
+import json
 import pandas as pd
 import streamlit as st
 
@@ -200,6 +202,420 @@ def build_ai_source_trace_report(ai_fin):
     return pd.DataFrame(rows)
 
 
+REVIEW_STATUS_LABELS = {
+    "pending": "待審核",
+    "accepted": "已採用AI候選值",
+    "rejected": "已拒絕AI候選值",
+    "kept_original": "保留系統原值",
+    "needs_followup": "需追查",
+    "ignored": "已忽略",
+}
+
+FINANCIAL_CANDIDATE_FIELD_LABELS = {
+    "pe": "歷史本益比 P/E",
+    "trailing_eps": "近四季 EPS（legacy）",
+    "forward_eps": "法人預估 EPS（legacy）",
+    "latest_month_eps": "最新單月 / 自結 EPS",
+    "latest_quarter_eps": "最新單季 EPS",
+    "previous_quarter_eps": "前一季 EPS",
+    "last_two_quarter_eps": "近二季 EPS 合計",
+    "ttm_eps": "近四季 TTM EPS",
+    "fiscal_year_eps": "最近完整年度 EPS",
+    "forward_eps_system": "系統預估 Forward EPS",
+    "forward_eps_ai": "AI 抓取/推估 Forward EPS",
+    "forward_eps_consensus": "法人共識 Forward EPS",
+    "forward_eps_fy1": "FY1 Forward EPS",
+    "forward_eps_fy2": "FY2 Forward EPS",
+    "forward_eps_fy3": "FY3 Forward EPS",
+    "forward_eps_fy1_year": "FY1 EPS 年份",
+    "forward_eps_fy2_year": "FY2 EPS 年份",
+    "forward_eps_fy3_year": "FY3 EPS 年份",
+    "pb": "股價淨值比 P/B",
+    "gross_margin": "毛利率",
+    "operating_margin": "營益率",
+    "roe": "ROE",
+    "yoy": "營收/獲利成長率 YoY/CAGR",
+    "target_price": "目標價",
+    "target_price_high": "目標價高標",
+    "target_price_avg": "目標價均值",
+    "target_price_low": "目標價低標",
+    "target_price_analyst_count": "目標價分析師人數",
+    "debt_to_equity": "負債權益比 D/E",
+    "mom": "最新單月營收 MoM",
+    "dividend_yield": "預估現金殖利率",
+    "free_cash_flow": "自由現金流",
+    "current_ratio": "流動比率",
+    "shares_outstanding": "總發行股數/股本",
+}
+
+FINANCIAL_CANDIDATE_FIELD_UNITS = {
+    "pe": "x",
+    "pb": "x",
+    "forward_pe": "x",
+    "latest_month_eps": "NTD/share",
+    "latest_quarter_eps": "NTD/share",
+    "previous_quarter_eps": "NTD/share",
+    "last_two_quarter_eps": "NTD/share",
+    "trailing_eps": "NTD/share",
+    "ttm_eps": "NTD/share",
+    "fiscal_year_eps": "NTD/share",
+    "forward_eps": "NTD/share",
+    "forward_eps_system": "NTD/share",
+    "forward_eps_ai": "NTD/share",
+    "forward_eps_consensus": "NTD/share",
+    "forward_eps_fy1": "NTD/share",
+    "forward_eps_fy2": "NTD/share",
+    "forward_eps_fy3": "NTD/share",
+    "target_price": "NTD/share",
+    "target_price_high": "NTD/share",
+    "target_price_avg": "NTD/share",
+    "target_price_low": "NTD/share",
+    "target_price_analyst_count": "count",
+    "gross_margin": "ratio_decimal",
+    "operating_margin": "ratio_decimal",
+    "roe": "ratio_decimal",
+    "yoy": "ratio_decimal",
+    "mom": "ratio_decimal",
+    "dividend_yield": "ratio_decimal",
+    "debt_to_equity": "x",
+    "free_cash_flow": "NTD",
+    "current_ratio": "x",
+    "shares_outstanding": "shares",
+}
+
+FINANCIAL_CANDIDATE_PERIOD_TYPES = {
+    "latest_month_eps": "single_month",
+    "latest_quarter_eps": "single_quarter",
+    "previous_quarter_eps": "single_quarter",
+    "last_two_quarter_eps": "two_quarter_sum",
+    "ttm_eps": "ttm",
+    "trailing_eps": "ttm",
+    "fiscal_year_eps": "annual",
+    "forward_eps": "forward_year",
+    "forward_eps_ai": "forward_year",
+    "forward_eps_consensus": "forward_year",
+    "forward_eps_fy1": "forward_year",
+    "forward_eps_fy2": "forward_year",
+    "forward_eps_fy3": "forward_year",
+    "forward_eps_fy1_year": "forward_year_label",
+    "forward_eps_fy2_year": "forward_year_label",
+    "forward_eps_fy3_year": "forward_year_label",
+    "yoy": "monthly_or_growth",
+    "mom": "monthly_or_growth",
+}
+
+
+def normalize_candidate_review_status(status):
+    """標準化候選資料審核狀態，避免 UI / cache 使用不同字串。"""
+    text = str(status or "pending").strip().lower()
+    aliases = {
+        "待審核": "pending",
+        "採用": "accepted",
+        "接受": "accepted",
+        "accepted_ai": "accepted",
+        "拒絕": "rejected",
+        "保留原值": "kept_original",
+        "keep_original": "kept_original",
+        "需追查": "needs_followup",
+        "followup": "needs_followup",
+        "忽略": "ignored",
+    }
+    text = aliases.get(text, text)
+    return text if text in REVIEW_STATUS_LABELS else "pending"
+
+
+def infer_financial_source_tier(meta=None, source_name=""):
+    """依來源名稱推估資料源信任層級；AI 未明確標示時使用保守分層。"""
+    meta = meta if isinstance(meta, dict) else {}
+    raw_tier = meta.get("source_tier") or meta.get("tier")
+    try:
+        tier = int(raw_tier)
+        if 1 <= tier <= 5:
+            return tier
+    except Exception:
+        pass
+
+    text = " ".join([
+        str(source_name or ""),
+        str(meta.get("source") or ""),
+        str(meta.get("publisher") or ""),
+        str(meta.get("note") or ""),
+    ]).lower()
+
+    if any(k.lower() in text for k in ["mops", "twse", "tpex", "公開資訊觀測站", "公司公告", "公司財報", "年報", "季報", "法說", "ir"]):
+        return 1
+    if any(k.lower() in text for k in ["finmind", "fugle", "tej", "證券商 api", "付費資料庫"]):
+        return 2
+    if any(k.lower() in text for k in ["yahoo", "yfinance", "google finance", "goodinfo", "moneydj", "cmoney", "鉅亨"]):
+        return 3
+    if any(k.lower() in text for k in ["ai推估", "ai依", "推估", "推論", "inferred"]):
+        return 5
+    return 4
+
+
+def _candidate_confidence(meta, source_tier, value):
+    meta = meta if isinstance(meta, dict) else {}
+    conf = str(meta.get("confidence") or "").strip().lower()
+    if conf in {"high", "medium", "low"}:
+        return conf
+    if value in (None, "", "null"):
+        return "low"
+    if source_tier <= 2:
+        return "high"
+    if source_tier <= 4:
+        return "medium"
+    return "low"
+
+
+def _candidate_conflict_status(value, original_value=None, meta=None):
+    meta = meta if isinstance(meta, dict) else {}
+    explicit = str(meta.get("conflict_status") or "").strip()
+    if explicit:
+        return explicit
+    if original_value is None:
+        return "not_compared"
+    if value in (None, "", "null"):
+        return "candidate_missing"
+    cand_num = s_float(value)
+    orig_num = s_float(original_value)
+    if cand_num is not None and orig_num is not None:
+        if abs(cand_num - orig_num) <= max(0.0001, abs(orig_num) * 0.005):
+            return "same_as_system"
+        return "different_from_system"
+    return "same_as_system" if str(value).strip() == str(original_value).strip() else "different_from_system"
+
+
+def _candidate_difference(value, original_value=None):
+    cand_num = s_float(value)
+    orig_num = s_float(original_value)
+    if cand_num is None or orig_num is None:
+        return None, None
+    diff_abs = cand_num - orig_num
+    diff_pct = None if abs(orig_num) < 1e-12 else diff_abs / abs(orig_num)
+    return diff_abs, diff_pct
+
+
+def _candidate_display_fmt(unit):
+    if unit == "ratio_decimal":
+        return "pct"
+    if unit == "NTD/share":
+        return "price"
+    if unit in {"count", "shares"}:
+        return "int"
+    if unit == "x":
+        return "x"
+    return "num"
+
+
+def build_financial_candidate_data(
+    ai_fin,
+    *,
+    system_values=None,
+    stock_id="",
+    stock_name="",
+    retrieved_at=None,
+    default_review_status="pending",
+    include_null=False,
+):
+    """把 AI 財報回傳值轉成 candidate_data，供後續 pending_review / audit log 使用。"""
+    if not isinstance(ai_fin, dict):
+        return []
+    system_values = system_values if isinstance(system_values, dict) else {}
+    retrieved_at = str(retrieved_at or ai_fin.get("retrieved_at") or datetime.datetime.now().isoformat(timespec="seconds"))
+    status = normalize_candidate_review_status(default_review_status)
+    trace = ai_fin.get("_ai_source_trace") or ai_fin.get("_sources") or ai_fin.get("field_sources") or {}
+    if not isinstance(trace, dict):
+        trace = {}
+
+    rows = []
+    for field_name, default_label in FINANCIAL_CANDIDATE_FIELD_LABELS.items():
+        value = ai_fin.get(field_name)
+        if not include_null and value in (None, "", "null"):
+            continue
+        meta = trace.get(field_name) or {}
+        if isinstance(meta, str):
+            meta = {"source": meta}
+        if not isinstance(meta, dict):
+            meta = {}
+
+        source_name = str(meta.get("source") or meta.get("publisher") or ("AI聯網搜尋" if value not in (None, "", "null") else "")).strip()
+        source_date = str(meta.get("published_date") or meta.get("source_date") or meta.get("date") or meta.get("data_date") or "").strip()
+        period = str(meta.get("period") or meta.get("data_period") or source_date or ai_fin.get("data_period") or "").strip()
+        unit = str(meta.get("unit") or FINANCIAL_CANDIDATE_FIELD_UNITS.get(field_name, "number")).strip()
+        source_tier = infer_financial_source_tier(meta, source_name)
+        original_value = system_values.get(field_name)
+        diff_abs, diff_pct = _candidate_difference(value, original_value)
+        conflict_status = _candidate_conflict_status(value, original_value, meta)
+        seed = f"{stock_id}|{field_name}|{period}|{source_name}|{source_date}|{value}"
+        digest = hashlib.sha1(seed.encode("utf-8", errors="ignore")).hexdigest()[:12]
+
+        rows.append({
+            "candidate_id": f"fin:{stock_id or 'UNKNOWN'}:{field_name}:{digest}",
+            "stock_id": str(stock_id or ai_fin.get("_stock_id") or ""),
+            "company_name": str(stock_name or ai_fin.get("_stock_name") or ""),
+            "field_name": field_name,
+            "field_label": str(meta.get("label") or default_label),
+            "value": s_float(value) if s_float(value) is not None else value,
+            "unit": unit,
+            "period": period or "unknown",
+            "period_type": str(meta.get("period_type") or FINANCIAL_CANDIDATE_PERIOD_TYPES.get(field_name, "unknown")),
+            "source_tier": source_tier,
+            "source_name": source_name or "AI聯網搜尋",
+            "source_url_or_ref": str(meta.get("source_url") or meta.get("url") or meta.get("link") or "").strip(),
+            "source_date": source_date or period or "unknown",
+            "retrieved_at": retrieved_at,
+            "confidence": _candidate_confidence(meta, source_tier, value),
+            "conflict_status": conflict_status,
+            "review_status": normalize_candidate_review_status(meta.get("review_status") or status),
+            "original_value": original_value,
+            "original_source": system_values.get(f"{field_name}_source") or "",
+            "difference_abs": diff_abs,
+            "difference_pct": diff_pct,
+            "notes": str(meta.get("note") or meta.get("notes") or "").strip(),
+        })
+    return rows
+
+
+def build_candidate_data_report(candidate_data):
+    """將 candidate_data 轉為 UI 可讀表格；不改變審核狀態。"""
+    rows = []
+    for item in candidate_data or []:
+        if not isinstance(item, dict):
+            continue
+        unit = item.get("unit", "number")
+        fmt = _candidate_display_fmt(unit)
+        diff_pct = s_float(item.get("difference_pct"))
+        diff_abs = s_float(item.get("difference_abs"))
+        if diff_abs is None:
+            diff_text = "—"
+        elif diff_pct is None:
+            diff_text = f"{diff_abs:,.4f}"
+        else:
+            diff_text = f"{diff_abs:,.4f} / {diff_pct * 100:.2f}%"
+        status = normalize_candidate_review_status(item.get("review_status"))
+        rows.append({
+            "候選ID": item.get("candidate_id", ""),
+            "股票": f"{item.get('stock_id', '')} {item.get('company_name', '')}".strip(),
+            "欄位": item.get("field_label") or item.get("field_name", ""),
+            "候選值": format_quality_value(item.get("value"), fmt),
+            "原系統值": format_quality_value(item.get("original_value"), fmt),
+            "差異": diff_text,
+            "資料期間": item.get("period", "unknown"),
+            "期間類型": item.get("period_type", "unknown"),
+            "來源層級": f"Level {item.get('source_tier', '—')}",
+            "來源": item.get("source_name", "—"),
+            "來源日期": item.get("source_date", "—"),
+            "信心": item.get("confidence", "medium"),
+            "衝突狀態": item.get("conflict_status", "not_compared"),
+            "審核狀態": REVIEW_STATUS_LABELS.get(status, status),
+            "備註": item.get("notes") or "—",
+        })
+    return pd.DataFrame(rows)
+
+
+def financial_candidate_review_cache_path(cache_path=None):
+    """候選資料審核狀態 JSON cache 路徑。"""
+    if cache_path:
+        return os.fspath(cache_path)
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), ".way_cache", "financial_candidate_reviews.json")
+
+
+def _normalize_candidate_review_cache(raw):
+    if isinstance(raw, dict) and isinstance(raw.get("reviews"), dict):
+        return {
+            "version": raw.get("version") or "financial_candidate_review_v1",
+            "updated_at": raw.get("updated_at") or "",
+            "reviews": raw.get("reviews") or {},
+        }
+    if isinstance(raw, dict):
+        return {"version": "financial_candidate_review_v1", "updated_at": "", "reviews": raw}
+    return {"version": "financial_candidate_review_v1", "updated_at": "", "reviews": {}}
+
+
+def load_financial_candidate_review_cache(cache_path=None):
+    """載入候選資料審核狀態；檔案不存在時回傳空 cache。"""
+    path = financial_candidate_review_cache_path(cache_path)
+    if not os.path.exists(path):
+        return {"version": "financial_candidate_review_v1", "updated_at": "", "reviews": {}}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return _normalize_candidate_review_cache(json.loads(fh.read() or "{}"))
+    except Exception as exc:
+        log_exception("CandidateReviewCache", "load_financial_candidate_review_cache", exc)
+        return {"version": "financial_candidate_review_v1", "updated_at": "", "reviews": {}}
+
+
+def save_financial_candidate_review_cache(review_cache, cache_path=None):
+    """保存候選資料審核狀態 JSON cache。"""
+    path = financial_candidate_review_cache_path(cache_path)
+    cache = _normalize_candidate_review_cache(review_cache)
+    cache["updated_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(cache, fh, ensure_ascii=False, indent=2)
+    return cache
+
+
+def financial_candidate_review_key(stock_id, candidate_id):
+    return f"{str(stock_id or '').strip()}::{str(candidate_id or '').strip()}"
+
+
+def update_financial_candidate_review(
+    *,
+    stock_id,
+    candidate_id,
+    review_status,
+    decision_note="",
+    candidate_snapshot=None,
+    cache_path=None,
+):
+    """更新單筆候選資料審核狀態，並寫入 JSON cache。"""
+    status = normalize_candidate_review_status(review_status)
+    cache = load_financial_candidate_review_cache(cache_path)
+    reviews = cache.setdefault("reviews", {})
+    snapshot = dict(candidate_snapshot or {})
+    field_name = snapshot.get("field_name", "")
+    record = {
+        "stock_id": str(stock_id or snapshot.get("stock_id") or ""),
+        "candidate_id": str(candidate_id or snapshot.get("candidate_id") or ""),
+        "field_name": field_name,
+        "field_label": snapshot.get("field_label") or field_name,
+        "review_status": status,
+        "decision_note": str(decision_note or ""),
+        "candidate_value": snapshot.get("value"),
+        "original_value": snapshot.get("original_value"),
+        "source_tier": snapshot.get("source_tier"),
+        "source_name": snapshot.get("source_name"),
+        "source_date": snapshot.get("source_date"),
+        "decided_at": datetime.datetime.now().isoformat(timespec="seconds"),
+    }
+    reviews[financial_candidate_review_key(record["stock_id"], record["candidate_id"])] = record
+    cache = save_financial_candidate_review_cache(cache, cache_path)
+    return record
+
+
+def apply_financial_candidate_reviews(candidate_data, review_cache=None, *, stock_id=""):
+    """把已保存的 review_status 套回 candidate_data，供 UI 與後續正式採用流程使用。"""
+    cache = _normalize_candidate_review_cache(review_cache or {})
+    reviews = cache.get("reviews", {})
+    rows = []
+    for item in candidate_data or []:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        sid = str(stock_id or row.get("stock_id") or "")
+        cid = str(row.get("candidate_id") or "")
+        record = reviews.get(financial_candidate_review_key(sid, cid))
+        if isinstance(record, dict):
+            row["review_status"] = normalize_candidate_review_status(record.get("review_status"))
+            row["decision_note"] = record.get("decision_note", "")
+            row["decided_at"] = record.get("decided_at", "")
+        else:
+            row["review_status"] = normalize_candidate_review_status(row.get("review_status"))
+        rows.append(row)
+    return rows
+
+
 FIELD_SOURCE_PRIORITY_TABLE = [
     {
         "field": "現價",
@@ -242,6 +658,14 @@ FIELD_SOURCE_PRIORITY_TABLE = [
         "validation_rule": "P/B 與 ROE、產業週期需一起看；不可單靠低 P/B 判斷便宜。",
     },
     {
+        "field": "最新單月 EPS",
+        "code": "latest_month_eps",
+        "aliases": ["latest_month_eps", "單月eps", "自結eps", "月eps", "最新單月eps"],
+        "priority": ["公司自結公告 / 公開資訊觀測站重大訊息", "交易所注意股自結公告", "AI 聯網查證最新單月 EPS"],
+        "adoption_rule": "若取得最新單月 EPS，目前估值優先採單月 EPS x12；缺值才退回最新單季 EPS x4 或 TTM EPS。",
+        "validation_rule": "需標示月份，例如 2026/04；年化估值需清楚寫成單月 EPS x12，不能與單季 EPS 混用。",
+    },
+    {
         "field": "最新單季 EPS",
         "code": "latest_quarter_eps",
         "aliases": ["latest_quarter_eps", "單季eps", "最新eps", "目前eps"],
@@ -250,12 +674,20 @@ FIELD_SOURCE_PRIORITY_TABLE = [
         "validation_rule": "需標示季度，例如 2026Q1；年化估值需清楚寫成單季 EPS x4。",
     },
     {
+        "field": "近二季 EPS",
+        "code": "last_two_quarter_eps",
+        "aliases": ["last_two_quarter_eps", "previous_quarter_eps", "近二季eps", "前一季eps"],
+        "priority": ["公開資訊觀測站 / 最新兩季財報", "AI 聯網查證最新兩季 EPS", "FinMind 財報季度 EPS"],
+        "adoption_rule": "只用於 Run-rate EPS 動能估值，不取代 TTM EPS、FY1 或 FY2 年度估值。",
+        "validation_rule": "必須標示是近二季合計或前一季 EPS；近二季年化=近二季 EPS 合計 x2。",
+    },
+    {
         "field": "TTM EPS",
         "code": "ttm_eps",
         "aliases": ["ttm_eps", "trailing_eps", "近四季eps", "ttmeps"],
-        "priority": ["yfinance trailingEps", "近四季財報 EPS 合計", "現價 / P/E 反推", "AI 聯網查證"],
-        "adoption_rule": "TTM EPS 用於歷史獲利支撐，不可與 Forward EPS 混用。",
-        "validation_rule": "反推值需標示為反推；若 PE 異常，反推 TTM EPS 不可採用。",
+        "priority": ["近四季財報 EPS 合計", "可信 TTM EPS", "yfinance trailingEps 備援", "現價 / P/E 反推", "AI 聯網查證"],
+        "adoption_rule": "近四季 EPS 合計優先；yfinance trailingEps 僅作備援與交叉檢查，不可覆蓋較新的四季合計值。",
+        "validation_rule": "若 yfinance trailingEps 與近四季合計差距 >10%，標示 yfinance EPS 可能過舊；反推值需標示為反推。",
     },
     {
         "field": "完整年度 EPS",
@@ -309,7 +741,7 @@ FIELD_SOURCE_PRIORITY_TABLE = [
         "field": "營收 YoY",
         "code": "revenue_yoy",
         "aliases": ["revenue_yoy", "rev_growth", "yoy", "營收年增", "月營收yoy"],
-        "priority": ["FinMind TaiwanStockMonthRevenue 單月 YoY", "Yahoo 股市月營收單月 YoY", "公開資訊觀測站月營收", "AI 查證公告月份"],
+        "priority": ["公開資訊觀測站 / MOPS 月營收", "FinMind TaiwanStockMonthRevenue 單月 YoY", "Yahoo 股市月營收單月 YoY", "AI 查證公告月份"],
         "adoption_rule": "以實際公告月份的單月 YoY 為準；yfinance revenueGrowth 只作診斷備註，不進月營收 YoY 採用值。",
         "validation_rule": "若 AI 抓到累計 YoY、季度 YoY、不同月份或 yfinance revenueGrowth，需列口徑差異並降權。",
     },
@@ -317,7 +749,7 @@ FIELD_SOURCE_PRIORITY_TABLE = [
         "field": "營收 MoM",
         "code": "revenue_mom",
         "aliases": ["mom", "revenue_mom", "營收月增", "月營收mom"],
-        "priority": ["FinMind TaiwanStockMonthRevenue 單月 MoM", "Yahoo 股市月營收單月 MoM", "公開資訊觀測站月營收", "AI 查證公告月份"],
+        "priority": ["公開資訊觀測站 / MOPS 月營收", "FinMind TaiwanStockMonthRevenue 單月 MoM", "Yahoo 股市月營收單月 MoM", "AI 查證公告月份"],
         "adoption_rule": "以實際公告月份單月 MoM 為準；缺值才採 AI 查證。",
         "validation_rule": "不可用查詢當月推定最新公告月份。",
     },
@@ -512,6 +944,87 @@ def _fmt_gap_pct(gap):
     return "N/A" if gap is None else f"{gap * 100:.1f}%"
 
 
+def build_ttm_eps_adoption(
+    *,
+    system_ttm_eps=None,
+    ai_ttm_eps=None,
+    current_price=None,
+    pe_ratio=None,
+    system_source="yfinance trailingEps",
+    ai_source="近四季財報 EPS 合計",
+    ai_has_trace=False,
+    system_is_inferred=False,
+    stale_gap_threshold=0.10,
+):
+    """決定 TTM EPS 採用值。
+
+    原則：
+    1. 明確的近四季 EPS 合計優先。
+    2. yfinance trailingEps 只作備援與交叉檢查。
+    3. 現價 / P/E 反推值只作最後備援，必須標示。
+    """
+    sys_eps = s_float(system_ttm_eps)
+    ai_eps = s_float(ai_ttm_eps)
+    inferred_eps = None
+    if sys_eps is None and current_price is not None and pe_ratio is not None:
+        price = s_float(current_price)
+        pe = s_float(pe_ratio)
+        if price is not None and price > 0 and pe is not None and pe > 0:
+            inferred_eps = price / pe
+            sys_eps = inferred_eps
+            system_is_inferred = True
+            system_source = "現價 / P/E 反推"
+
+    ai_trusted = ai_eps is not None and ai_eps > 0 and bool(ai_has_trace)
+    sys_valid = sys_eps is not None and sys_eps > 0
+    notes = []
+    warnings = []
+    adopted = None
+    adopted_source = "無可用資料"
+    adopted_rule = "缺少 TTM EPS，無法建立歷史 P/E。"
+
+    if ai_trusted:
+        adopted = ai_eps
+        adopted_source = ai_source
+        adopted_rule = "近四季 EPS 合計優先採用。"
+    elif sys_valid:
+        adopted = sys_eps
+        adopted_source = system_source
+        adopted_rule = "未取得可信近四季 EPS 合計，採系統備援值。"
+    elif ai_eps is not None and ai_eps > 0:
+        adopted = ai_eps
+        adopted_source = ai_source
+        adopted_rule = "AI 提供 TTM EPS 但來源/期間不足，暫作備援採用。"
+        warnings.append("AI TTM EPS 缺少來源或期間，需人工確認。")
+
+    if system_is_inferred and sys_valid:
+        notes.append("系統 TTM EPS 為現價 / P/E 反推，只能作備援。")
+    elif sys_valid:
+        notes.append("系統 TTM EPS 來自 yfinance trailingEps，僅作備援與交叉檢查。")
+
+    if ai_trusted:
+        notes.append("AI/外部校對 TTM EPS 標示為近四季 EPS 合計，優先於 yfinance trailingEps。")
+
+    gap = _relative_gap(sys_eps, ai_eps, "max")
+    if gap is not None and gap > stale_gap_threshold:
+        warnings.append(f"yfinance trailingEps 與近四季 TTM EPS 差距 {_fmt_gap_pct(gap)}，yfinance EPS 可能過舊。")
+
+    return {
+        "adopted_value": adopted,
+        "adopted_source": adopted_source,
+        "adopted_rule": adopted_rule,
+        "system_ttm_eps": sys_eps,
+        "ai_ttm_eps": ai_eps,
+        "system_source": system_source,
+        "ai_source": ai_source,
+        "system_is_inferred": bool(system_is_inferred),
+        "ai_has_trace": bool(ai_has_trace),
+        "gap": gap,
+        "warnings": warnings,
+        "notes": notes,
+    }
+
+
 def detect_forward_eps_period_mismatch(system_forward_eps=None, fy1_eps=None, fy2_eps=None, threshold=0.30):
     """Detect when system Forward EPS likely reflects FY2 instead of FY1."""
     sys_eps = s_float(system_forward_eps)
@@ -614,14 +1127,15 @@ def build_divergence_warnings(
         yoy_gap_pp = abs(sy - ay) * 100
         yoy_rel_gap = _relative_gap(sy, ay, "min")
         if yoy_gap_pp >= 5 and (yoy_rel_gap is None or yoy_rel_gap > 0.20):
+            yoy_severity = "danger" if yoy_gap_pp >= 10 else "warning"
             add(
                 "YoY 分歧",
                 f"{label} 的營收年增率口徑可能混淆，請確認單月 YoY / 累計 YoY / yfinance revenueGrowth。",
-                "warning",
+                yoy_severity,
                 format_quality_value(sy, "pct"),
                 format_quality_value(ay, "pct"),
                 f"{yoy_gap_pp:.1f} 個百分點",
-                "月營收判斷應優先採公告月份的單月 YoY；AI 若抓到累計 YoY，不能直接比較。",
+                "YoY 差距達 10 個百分點以上時禁止輸出可買；月營收判斷應優先採公告月份的單月 YoY，AI 若抓到累計 YoY 不能直接比較。",
             )
 
     # 3) PEG 矛盾：系統 PEG < 1 且 AI PEG > 3，或反向發生
@@ -727,9 +1241,135 @@ def build_divergence_warnings(
     return warnings
 
 
+DATA_QUALITY_LEVEL_DEFINITIONS = {
+    "L1": {
+        "label": "L1 口徑差異",
+        "action": "主採用值可確認時不影響主結論，列備註。",
+        "rank": 1,
+    },
+    "L2": {
+        "label": "L2 資料過舊 / 來源待確認",
+        "action": "改採較可信來源或降權該來源。",
+        "rank": 2,
+    },
+    "L3": {
+        "label": "L3 年期 / 估值口徑錯位",
+        "action": "公式估值降權，採保守 EPS 或保守倍率。",
+        "rank": 3,
+    },
+    "L4": {
+        "label": "L4 關鍵欄位錯誤",
+        "action": "暫停買進判斷，先確認 EPS、營收月份、現價或槓桿口徑。",
+        "rank": 4,
+    },
+    "L5": {
+        "label": "L5 多核心衝突",
+        "action": "資料包不可用，停止買賣判斷並重新抓取。",
+        "rank": 5,
+    },
+}
+
+
+def classify_data_quality_warning(warning):
+    """把現有分歧警告映射成 L1-L5 資料品質等級。"""
+    w = warning or {}
+    rule = str(w.get("規則", "") or "")
+    severity = str(w.get("嚴重度", "") or "").lower()
+    message = " ".join(str(w.get(k, "") or "") for k in ["警告文字", "建議處理"])
+    level = "L2"
+
+    if "Forward EPS 年期錯位" in rule:
+        level = "L3"
+    elif "EPS 分歧" in rule:
+        level = "L4" if severity == "danger" else "L3"
+    elif "YoY 分歧" in rule:
+        level = "L1" if "revenueGrowth" in message and severity != "danger" else "L3"
+    elif "Forward P/E 分歧" in rule:
+        level = "L3"
+    elif "PEG 矛盾" in rule or "PEG 分歧" in rule or "預估獲利成長 YoY 分歧" in rule:
+        level = "L3"
+    elif "合理價分歧" in rule:
+        level = "L4" if severity == "danger" else "L3"
+    elif "P/B 分歧" in rule:
+        level = "L4" if severity == "danger" else "L2"
+    elif "D/E 分歧" in rule:
+        level = "L2"
+    elif severity == "danger":
+        level = "L4"
+    elif severity == "warning":
+        level = "L2"
+    elif severity in {"info", "note", "none", ""}:
+        level = "L1"
+
+    info = DATA_QUALITY_LEVEL_DEFINITIONS[level]
+    return {
+        "level": level,
+        "label": info["label"],
+        "rank": info["rank"],
+        "action": info["action"],
+    }
+
+
+def annotate_data_quality_warnings(warnings):
+    """回傳含 L1-L5 欄位的分歧警告，不修改原 list。"""
+    annotated = []
+    for warning in warnings or []:
+        row = dict(warning or {})
+        quality = classify_data_quality_warning(row)
+        row["資料等級"] = quality["level"]
+        row["資料等級說明"] = quality["label"]
+        row["採用動作"] = quality["action"]
+        row["_quality_rank"] = quality["rank"]
+        annotated.append(row)
+    return annotated
+
+
+def summarize_data_quality_levels(warnings, critical_reasons=None):
+    """彙總本次資料品質等級；L5 僅在多個核心衝突或硬性錯誤時出現。"""
+    critical_reasons = [str(x) for x in (critical_reasons or []) if str(x).strip()]
+    annotated = annotate_data_quality_warnings(warnings)
+    if critical_reasons:
+        return {
+            "level": "L4",
+            "label": DATA_QUALITY_LEVEL_DEFINITIONS["L4"]["label"],
+            "rank": 4,
+            "action": DATA_QUALITY_LEVEL_DEFINITIONS["L4"]["action"],
+            "reasons": critical_reasons,
+        }
+    if not annotated:
+        return {
+            "level": "L0",
+            "label": "資料未見重大異常",
+            "rank": 0,
+            "action": "可依一般估值流程使用。",
+            "reasons": [],
+        }
+    ranks = [int(row.get("_quality_rank") or 0) for row in annotated]
+    l4_count = sum(1 for r in ranks if r >= 4)
+    l3_count = sum(1 for r in ranks if r == 3)
+    if l4_count >= 2 or (l4_count >= 1 and l3_count >= 2):
+        level = "L5"
+    else:
+        max_rank = max(ranks)
+        level = next((k for k, v in DATA_QUALITY_LEVEL_DEFINITIONS.items() if v["rank"] == max_rank), "L2")
+    info = DATA_QUALITY_LEVEL_DEFINITIONS[level]
+    reasons = [f"{row.get('規則', '資料警告')}({row.get('資料等級', level)})" for row in annotated]
+    return {
+        "level": level,
+        "label": info["label"],
+        "rank": info["rank"],
+        "action": info["action"],
+        "reasons": reasons,
+    }
+
+
 def build_divergence_warning_report(warnings):
     """將分歧警告整理成 DataFrame，供 Streamlit 顯示。"""
-    return pd.DataFrame(warnings or [], columns=["規則", "嚴重度", "警告文字", "系統值", "AI值", "差距", "建議處理"])
+    return pd.DataFrame(
+        annotate_data_quality_warnings(warnings),
+        columns=["規則", "資料等級", "資料等級說明", "嚴重度", "警告文字", "系統值", "AI值", "差距", "建議處理", "採用動作"],
+    )
+
 
 def infer_quality_status(adopted_value, system_value=None, ai_value=None, is_stale=False, notes=""):
     """依欄位是否有採用值、是否過期、是否被校驗提醒標記，產生一致的品質狀態。"""
@@ -758,6 +1398,11 @@ def build_financial_quality_report(rows):
         table.append({
             "資料欄位": r.get("field", ""),
             "系統來源": r.get("system_source", "系統"),
+            "營收所屬月份": r.get("revenue_month", "—") or "—",
+            "公告月份": r.get("announce_month", "—") or "—",
+            "公告日": r.get("announce_date", "—") or "—",
+            "來源規則": r.get("source_rule", "—") or "—",
+            "系統來源網址": r.get("system_source_url", "—") or "—",
             "系統值": format_quality_value(system_value, fmt),
             "AI來源/日期": r.get("ai_source", "未啟動AI") if ai_value is None else r.get("ai_source", "AI補齊"),
             "AI來源網址": r.get("ai_source_url", "—") or "—",
@@ -824,6 +1469,68 @@ def normalize_revenue_month(val):
     if m:
         return f"{int(m.group(1)):04d}/{int(m.group(2)):02d}"
     return s
+
+
+def build_monthly_revenue_growth_frame(df, date_col="date", revenue_col="revenue"):
+    """用營收所屬月份明確比對前月與去年同月，建立月營收 MoM / YoY。
+
+    回傳欄位的 YoY / MoM 單位維持百分點，例如 16.14 代表 16.14%。
+    """
+    if df is None or getattr(df, "empty", True):
+        return pd.DataFrame()
+    if date_col not in df.columns or revenue_col not in df.columns:
+        return pd.DataFrame()
+
+    out = df.copy()
+    out["_revenue_date"] = pd.to_datetime(out[date_col], errors="coerce")
+    out["_revenue_value"] = pd.to_numeric(out[revenue_col], errors="coerce")
+    out = out.dropna(subset=["_revenue_date", "_revenue_value"]).copy()
+    if out.empty:
+        return pd.DataFrame()
+
+    out["_period"] = out["_revenue_date"].dt.to_period("M")
+    out = out.sort_values("_period").drop_duplicates("_period", keep="last").reset_index(drop=True)
+    revenue_by_period = out.set_index("_period")["_revenue_value"].to_dict()
+
+    def _growth(period, months):
+        current = revenue_by_period.get(period)
+        previous = revenue_by_period.get(period - months)
+        if current is None or previous is None or previous <= 0:
+            return None
+        return (current / previous - 1) * 100
+
+    out["revenue_month"] = out["_period"].apply(lambda p: f"{p.year:04d}/{p.month:02d}")
+    out["actual_revenue_month"] = out["revenue_month"]
+    out["monthly_revenue"] = out["_revenue_value"]
+    out["monthly_revenue_mom"] = out["_period"].apply(lambda p: _growth(p, 1))
+    out["monthly_revenue_yoy"] = out["_period"].apply(lambda p: _growth(p, 12))
+    out["Month"] = out["revenue_month"]
+    out["Revenue"] = out["monthly_revenue"] / 100000000
+    out["MoM"] = out["monthly_revenue_mom"]
+    out["YoY"] = out["monthly_revenue_yoy"]
+    out["source_rule"] = "monthly revenue only; not yfinance revenueGrowth"
+    return out.drop(columns=["_revenue_date", "_revenue_value", "_period"])
+
+
+def calc_monthly_revenue_growth(df, date_col="date", revenue_col="revenue"):
+    """回傳最新月份的單月營收、MoM、YoY，YoY 以去年同月明確比對。"""
+    growth_df = build_monthly_revenue_growth_frame(df, date_col=date_col, revenue_col=revenue_col)
+    if growth_df.empty:
+        return {
+            "revenue_month": "",
+            "monthly_revenue": None,
+            "monthly_revenue_mom": None,
+            "monthly_revenue_yoy": None,
+            "source_rule": "monthly revenue only; not yfinance revenueGrowth",
+        }
+    latest = growth_df.iloc[-1]
+    return {
+        "revenue_month": latest.get("revenue_month"),
+        "monthly_revenue": s_float(latest.get("monthly_revenue")),
+        "monthly_revenue_mom": s_float(latest.get("monthly_revenue_mom")),
+        "monthly_revenue_yoy": s_float(latest.get("monthly_revenue_yoy")),
+        "source_rule": latest.get("source_rule") or "monthly revenue only; not yfinance revenueGrowth",
+    }
 
 
 def previous_calendar_month(today=None):
@@ -967,8 +1674,9 @@ def validate_and_correct_financial_metrics(system_vals, ai_vals=None, monthly_re
 
     # 最新單月 YoY：優先用月營收表，不用 yfinance info 的 revenueGrowth 當月 YoY
     try:
-        if monthly_rev_df is not None and not monthly_rev_df.empty and "YoY" in monthly_rev_df.columns:
-            monthly_yoy_pct = s_float(monthly_rev_df["YoY"].iloc[-1])
+        if monthly_rev_df is not None and not monthly_rev_df.empty and ("monthly_revenue_yoy" in monthly_rev_df.columns or "YoY" in monthly_rev_df.columns):
+            monthly_yoy_col = "monthly_revenue_yoy" if "monthly_revenue_yoy" in monthly_rev_df.columns else "YoY"
+            monthly_yoy_pct = s_float(monthly_rev_df[monthly_yoy_col].iloc[-1])
             monthly_yoy = monthly_yoy_pct / 100.0 if monthly_yoy_pct is not None else None
             monthly_period = ""
             if "Month" in monthly_rev_df.columns:
@@ -1097,7 +1805,7 @@ def validate_ai_financial_json(ai_fin, stock_id="", stock_name=""):
         "pe",
         # EPS 拆欄：保留 legacy 欄位，也支援新標準欄位。
         "trailing_eps", "forward_eps",
-        "latest_quarter_eps", "ttm_eps", "fiscal_year_eps",
+        "latest_month_eps", "latest_quarter_eps", "previous_quarter_eps", "last_two_quarter_eps", "ttm_eps", "fiscal_year_eps",
         "forward_eps_system", "forward_eps_ai", "forward_eps_consensus",
         "forward_eps_fy1", "forward_eps_fy2", "forward_eps_fy3",
         "pb", "target_price", "target_price_high",
@@ -1137,7 +1845,7 @@ def validate_ai_financial_json(ai_fin, stock_id="", stock_name=""):
         null_field("pb", f"P/B={pb:.2f} 超出 0～100 安全範圍")
 
     # EPS：允許虧損，但極端值通常是單位或股本欄位誤抓
-    for field in ["trailing_eps", "forward_eps", "latest_quarter_eps", "ttm_eps", "fiscal_year_eps", "forward_eps_system", "forward_eps_ai", "forward_eps_consensus", "forward_eps_fy1", "forward_eps_fy2", "forward_eps_fy3"]:
+    for field in ["trailing_eps", "forward_eps", "latest_month_eps", "latest_quarter_eps", "previous_quarter_eps", "last_two_quarter_eps", "ttm_eps", "fiscal_year_eps", "forward_eps_system", "forward_eps_ai", "forward_eps_consensus", "forward_eps_fy1", "forward_eps_fy2", "forward_eps_fy3"]:
         v = data.get(field)
         if v is not None and abs(v) > 10000:
             null_field(field, f"EPS={v:,.2f} 絕對值過大，疑似單位錯置")
@@ -1385,6 +2093,8 @@ def build_final_operation_signal(
     gross_margin=None,
     operating_margin=None,
     has_ai_fin_fetch=False,
+    pricing_horizon=None,
+    future_evidence=None,
 ):
     """
     產生最終操作燈號。
@@ -1413,6 +2123,14 @@ def build_final_operation_signal(
 
     pe_model_suitable = bool(industry_profile.get("pe_model_suitable", True))
     target_rank = int(target_confidence.get("rank", 1) or 1)
+    pricing_pack = pricing_horizon if isinstance(pricing_horizon, dict) else {"code": str(pricing_horizon or ""), "label": str(pricing_horizon or "未判斷"), "explanation": "", "decision_rule": ""}
+    pricing_code = pricing_pack.get("code", "")
+    pricing_label = pricing_pack.get("label", pricing_code or "未判斷")
+    pricing_rank = _pricing_horizon_rank(pricing_code)
+    future_pack = future_evidence if isinstance(future_evidence, dict) else {}
+    future_score = s_float(future_pack.get("score"))
+    future_label = future_pack.get("label", "未評分")
+    future_action = future_pack.get("action", "")
 
     # 資料分級防呆：把硬性不可判斷與可降權判斷的分歧拆開。
     critical_reasons = []
@@ -1432,6 +2150,10 @@ def build_final_operation_signal(
         downgrade_reasons.append("重大分歧警告達 2 項以上，需採保守估值")
     if warning_count >= 4:
         downgrade_reasons.append("系統 / AI 分歧警告較多，需降權判斷")
+    if pricing_rank == 2:
+        downgrade_reasons.append(f"市場定價年期為 {pricing_label}，新買需降權")
+    elif pricing_rank >= 3 and pricing_rank < 6:
+        downgrade_reasons.append(f"市場定價年期為 {pricing_label}，不支援一般買進")
     if op_low is None or op_high is None:
         critical_reasons.append("可操作估值區間無法建立")
     if om_v is not None and gm_v is not None and om_v > gm_v + 0.05:
@@ -1440,6 +2162,8 @@ def build_final_operation_signal(
         critical_reasons.append("D/E 異常偏高，需確認單位")
     if peg_v is not None and peg_v < 0:
         watch_reasons.append("PEG 為負值，成長估值不可直接使用")
+
+    quality_level = summarize_data_quality_levels(warnings, critical_reasons=critical_reasons)
 
     # 三個可信度分數：資料、估值、操作。
     data_score = 85
@@ -1475,6 +2199,19 @@ def build_final_operation_signal(
             valuation_score += 8
         elif cp > op_high:
             valuation_score -= 15
+    if pricing_rank == 2:
+        valuation_score -= 8
+    elif pricing_rank == 3:
+        valuation_score -= 16
+    elif pricing_rank >= 4 and pricing_rank < 6:
+        valuation_score -= 24
+    if future_score is not None:
+        if future_score >= 80:
+            valuation_score += 6
+        elif future_score >= 60:
+            valuation_score += 3
+        elif pricing_rank >= 2 and future_score < 50:
+            valuation_score -= 12
     valuation_score -= danger_count * 12
     valuation_score = max(0, min(100, valuation_score))
 
@@ -1487,6 +2224,15 @@ def build_final_operation_signal(
         operation_score -= 8
     if target_rank <= 2:
         operation_score -= 6
+    if pricing_rank == 2:
+        operation_score -= 8
+    elif pricing_rank >= 3 and pricing_rank < 6:
+        operation_score -= 14
+    if future_score is not None and pricing_rank >= 2:
+        if future_score >= 80:
+            operation_score += 6
+        elif future_score < 50:
+            operation_score -= 10
     operation_score = max(0, min(100, operation_score))
 
     data_grade = data_signal_grading(
@@ -1546,12 +2292,51 @@ def build_final_operation_signal(
         reasons.append("法人目標價樣本數偏低，可買燈號降為觀望")
         advice = "可列入觀察，不宜直接重倉。"
 
+    # 市場定價年期風控：FY2/FY3 只能解釋市場先行，不直接支撐一般買進。
+    if data_grade["grade"] != "資料異常-不可判斷" and pricing_rank >= 2 and pricing_rank < 6:
+        pricing_reason = f"市場定價年期：{pricing_label}"
+        if pricing_reason not in reasons:
+            reasons.append(pricing_reason)
+        if pricing_rank == 2:
+            if future_score is not None and future_score < 50:
+                signal = "不建議"
+                color = "#ff8c00"
+                advice = "現價需 FY2 才能解釋，但未來證據不足，不可用 FY2 支撐買進。"
+            elif future_score is not None and future_score >= 80:
+                if signal != "不建議":
+                    signal = "資料分歧-降權判斷"
+                    color = "#ff9900"
+                    advice = "現價需 FY2 / 樂觀情境才合理；未來證據高度落地時，只能小部位或既有持股續抱，不宜重倉新買。"
+                else:
+                    advice = "新買不追；若是低成本既有部位，可續抱觀察 EPS / 營收是否持續落地並設定風控。"
+            elif future_score is not None and future_score >= 60:
+                if signal in {"可買-小量分批", "資料分歧-降權判斷"}:
+                    signal = "觀望-資料待確認"
+                    color = "#FFD700"
+                    advice = "現價已提前反映 FY2，證據逐步形成但安全邊際不足；新買等回檔或 EPS / 營收再確認。"
+            elif signal == "可買-小量分批":
+                signal = "不建議"
+                color = "#ff8c00"
+                advice = "現價需 FY2 才能解釋，但未來證據尚未評分，不可直接用 FY2 支撐買進。"
+        elif pricing_rank >= 3:
+            if future_score is not None and future_score >= 80 and signal != "不建議":
+                signal = "觀望-資料待確認"
+                color = "#FFD700"
+                advice = "現價屬 FY3 / 題材重評價等高風險遠期定價；未來證據雖強，新買仍不宜追價，低成本既有部位可看事件節點續抱。"
+            else:
+                signal = "不建議"
+                color = "#ff8c00"
+                advice = "現價需 FY3、極限未來或題材重評價才能解釋；不支援一般買進，需等事件 / EPS / 營收落地。"
+
     report = pd.DataFrame([
         {"項目": "最終操作燈號", "結果": signal, "說明": advice},
         {"項目": "資料可信度", "結果": f"{data_score:.0f} / 100（{_confidence_label_from_score(data_score)}）", "說明": f"分歧警告 {warning_count} 項，重大 {danger_count} 項。"},
         {"項目": "估值可信度", "結果": f"{valuation_score:.0f} / 100（{_confidence_label_from_score(valuation_score)}）", "說明": "依 Forward P/E、PEG、P/B、產業模型與可操作區間判斷。"},
         {"項目": "操作可信度", "結果": f"{operation_score:.0f} / 100（{_confidence_label_from_score(operation_score)}）", "說明": "取資料與估值可信度後，再納入 ROE、營收 YoY、D/E 與法人樣本數。"},
+        {"項目": "市場定價年期", "結果": f"{pricing_label}（{pricing_code or 'NULL'}）", "說明": f"{pricing_pack.get('explanation', '—')}｜{pricing_pack.get('decision_rule', '—')}"},
+        {"項目": "未來證據落地", "結果": "NULL" if future_score is None else f"{future_score:.0f} / 100（{future_label}）", "說明": future_action or "—"},
         {"項目": "資料分級", "結果": data_grade["grade"], "說明": f"{data_grade['advice']}｜倉位限制：{data_grade['position_limit']}"},
+        {"項目": "資料品質 L級", "結果": f"{quality_level['level']}｜{quality_level['label']}", "說明": quality_level["action"]},
         {"項目": "可操作估值區間", "結果": "NULL" if op_low is None else f"{op_low:,.2f}～{op_high:,.2f}", "說明": "用保守 EPS、法人樣本數、分歧警告與產業模型折減。"},
         {"項目": "主要原因", "結果": "；".join(reasons) if reasons else "—", "說明": industry_profile.get("warning_note", "—")},
     ])
@@ -1569,6 +2354,14 @@ def build_final_operation_signal(
         "operation_confidence": _confidence_label_from_score(operation_score),
         "data_grade": data_grade,
         "data_grade_label": data_grade["grade"],
+        "data_quality_level": quality_level,
+        "data_quality_level_label": f"{quality_level['level']}｜{quality_level['label']}",
+        "pricing_horizon": pricing_pack,
+        "pricing_horizon_code": pricing_code,
+        "pricing_horizon_label": pricing_label,
+        "future_evidence": future_pack,
+        "future_evidence_score": future_score,
+        "future_evidence_label": future_label,
         "report": report,
     }
 
@@ -1779,6 +2572,8 @@ def init_session_state():
     if 'fugle_key' not in st.session_state: st.session_state.fugle_key = "" 
     if 'finmind_key' not in st.session_state: st.session_state.finmind_key = "" 
     if 'ai_fetched_financials' not in st.session_state: st.session_state.ai_fetched_financials = {}
+    if 'financial_candidate_reviews' not in st.session_state:
+        st.session_state.financial_candidate_reviews = load_financial_candidate_review_cache().get("reviews", {})
     if 'show_pk' not in st.session_state: st.session_state.show_pk = False
     if 'ai_industry_result' not in st.session_state: st.session_state.ai_industry_result = None
     if 'run_screener' not in st.session_state: st.session_state.run_screener = False
@@ -2331,6 +3126,254 @@ def build_industry_model_snapshot_audit(
 # =========================================================
 # 第 17-C-9：Forward EPS 年期分層估值模型
 # =========================================================
+def _pricing_horizon_rank(code):
+    order = {
+        "TTM_PRICED": 0,
+        "FY1_PRICED": 1,
+        "FY1_SOFT_OR_FY2_WATCH": 2,
+        "FY2_PRICED": 2,
+        "FY2_SOFT_PRICED": 2,
+        "THEME_RE_RATING": 3,
+        "FY3_HIGH_RISK": 3,
+        "FY2_HARD_PRICED": 3,
+        "EXTREME_FUTURE_PRICED": 4,
+        "UNSUPPORTED": 5,
+        "DATA_INSUFFICIENT": 6,
+    }
+    return order.get(str(code or ""), 6)
+
+
+def infer_pricing_horizon(
+    *,
+    price=None,
+    ttm_eps=None,
+    fy1_eps=None,
+    fy2_eps=None,
+    fy3_eps=None,
+    base_pe=None,
+    soft_pe=None,
+    hard_pe=None,
+    theme_re_rating_flag=False,
+):
+    """判斷現價主要需要哪個 EPS 年期或題材重評價才能解釋。
+
+    回傳 code / label / rank / explanation。FY2 以後都只能視為先行定價或高風險情境，
+    不直接支撐一般買進燈號。
+    """
+    def sf(v):
+        return s_float(v)
+
+    p = sf(price)
+    base = sf(base_pe)
+    soft = sf(soft_pe)
+    hard = sf(hard_pe)
+    ttm = sf(ttm_eps)
+    fy1 = sf(fy1_eps)
+    fy2 = sf(fy2_eps)
+    fy3 = sf(fy3_eps)
+
+    if soft is not None and base is not None:
+        soft = max(soft, base)
+    if hard is not None and soft is not None:
+        hard = max(hard, soft)
+
+    def supported(eps, cap):
+        return p is not None and p > 0 and eps is not None and eps > 0 and cap is not None and cap > 0 and p <= eps * cap
+
+    def pack(code, label, explanation, decision_rule):
+        return {
+            "code": code,
+            "label": label,
+            "rank": _pricing_horizon_rank(code),
+            "is_future_priced": _pricing_horizon_rank(code) >= 2,
+            "explanation": explanation,
+            "decision_rule": decision_rule,
+        }
+
+    if p is None or p <= 0 or base is None or base <= 0:
+        return pack("DATA_INSUFFICIENT", "資料不足", "缺少現價或 base 倍率，無法判斷市場定價年期。", "補齊現價、EPS 與產業倍率後再判斷。")
+    if supported(ttm, base):
+        return pack("TTM_PRICED", "TTM 定價", "現價可由近四季已實現 EPS × base 倍率解釋。", "可用一般估值規則判斷。")
+    if supported(fy1, base):
+        return pack("FY1_PRICED", "FY1 定價", "現價需 FY1 一年預估 EPS × base 倍率才可解釋。", "可分批，但需追蹤 FY1 EPS 是否兌現。")
+    if supported(fy1, soft):
+        return pack("FY1_SOFT_OR_FY2_WATCH", "FY1 樂觀 / FY2 觀察", "現價需 FY1 soft 樂觀倍率才可解釋，已接近市場先行定價。", "新買需降權，既有部位需看未來證據。")
+    if supported(fy2, base):
+        return pack("FY2_PRICED", "FY2 先行定價", "現價需 FY2 第二年預估 EPS × base 倍率才可解釋。", "新買自動降權，只能小部位或既有持股續抱觀察。")
+    if supported(fy2, soft):
+        return pack("FY2_SOFT_PRICED", "FY2 樂觀先行定價", "現價需 FY2 第二年預估 EPS × soft 樂觀倍率才可解釋。", "新買需明顯降權；只有 EPS、毛利率與法人共識持續上修時，既有部位才可續抱。")
+    if supported(fy2, hard):
+        return pack("FY2_HARD_PRICED", "FY2 極限先行定價", "現價需 FY2 第二年預估 EPS × hard 極限倍率才可解釋。", "屬高風險先行定價，不支援一般新買；需等回檔或 EPS 再上修。")
+    if supported(fy3, base):
+        return pack("FY3_HIGH_RISK", "FY3 高風險遠期定價", "現價需 FY3 第三年預估 EPS × base 倍率才可解釋。", "不支援一般買進，只能高風險題材觀察。")
+    if supported(fy3, hard):
+        return pack("EXTREME_FUTURE_PRICED", "極限未來定價", "現價需 FY3 EPS 搭配 hard 極限倍率才可接近解釋。", "屬極限風控區，不作買進依據。")
+    if theme_re_rating_flag:
+        return pack("THEME_RE_RATING", "題材重評價", "EPS 堆疊尚不足以解釋現價，但產業定位或題材可能正在重評價。", "改用事件里程碑追蹤，不單用 FY1 估值停利。")
+    return pack("UNSUPPORTED", "EPS 堆疊不支撐", "即使用 FY2/FY3 或 hard 情境仍難以解釋現價。", "不建議追價，需等 EPS / 營收 / 事件落地。")
+
+
+def calculate_future_evidence_score(
+    *,
+    revenue_yoy=None,
+    revenue_mom=None,
+    gross_margin=None,
+    operating_margin=None,
+    roe=None,
+    fy1_eps=None,
+    fy2_eps=None,
+    fy3_eps=None,
+    analyst_count=None,
+    target_confidence=None,
+    divergence_warnings=None,
+    dq_warnings=None,
+    pricing_horizon=None,
+    theme_re_rating_flag=False,
+):
+    """評估市場看的未來是否正在落地，避免 FY2/FY3 被無條件合理化。"""
+    def sf(v):
+        return s_float(v)
+
+    def ratio(v):
+        x = sf(v)
+        if x is None:
+            return None
+        return x / 100.0 if abs(x) > 1.5 else x
+
+    score = 45
+    positives = []
+    negatives = []
+    checks = []
+
+    def add(item, value, result, delta, note):
+        checks.append({"項目": item, "數值": value, "判斷": result, "分數影響": delta, "說明": note})
+
+    yoy = ratio(revenue_yoy)
+    mom = ratio(revenue_mom)
+    gm = ratio(gross_margin)
+    om = ratio(operating_margin)
+    roev = ratio(roe)
+    fy1 = sf(fy1_eps)
+    fy2 = sf(fy2_eps)
+    fy3 = sf(fy3_eps)
+    warnings = divergence_warnings or []
+    dq = dq_warnings or []
+
+    if yoy is None:
+        add("月營收 YoY", "NULL", "未納入", 0, "缺少單月 YoY，未來落地分數不加分。")
+    elif yoy >= 0.50:
+        score += 18; positives.append("月營收 YoY 高成長"); add("月營收 YoY", f"{yoy*100:.2f}%", "高度落地", +18, "營收年增強，支持市場看未來。")
+    elif yoy >= 0.20:
+        score += 14; positives.append("月營收 YoY 強"); add("月營收 YoY", f"{yoy*100:.2f}%", "明確支持", +14, "營收年增足以支撐先行定價。")
+    elif yoy > 0:
+        score += 8; positives.append("月營收 YoY 正成長"); add("月營收 YoY", f"{yoy*100:.2f}%", "溫和支持", +8, "營收成長為正，但仍需 EPS / 毛利率配合。")
+    else:
+        score -= 14; negatives.append("月營收 YoY 轉負"); add("月營收 YoY", f"{yoy*100:.2f}%", "證據反轉", -14, "營收年減不支持遠期高估值。")
+
+    if mom is None:
+        add("月營收 MoM", "NULL", "未納入", 0, "缺少 MoM，無法確認短期落地節奏。")
+    elif mom >= 0.05:
+        score += 8; positives.append("月營收 MoM 轉強"); add("月營收 MoM", f"{mom*100:.2f}%", "短期加速", +8, "MoM 明顯成長，支持出貨或需求落地。")
+    elif mom >= 0:
+        score += 4; positives.append("月營收 MoM 非負"); add("月營收 MoM", f"{mom*100:.2f}%", "穩定", +4, "MoM 未轉負，短期動能未明顯破壞。")
+    elif mom <= -0.10:
+        score -= 10; negatives.append("月營收 MoM 明顯轉弱"); add("月營收 MoM", f"{mom*100:.2f}%", "短期轉弱", -10, "MoM 明顯下滑，需降低遠期樂觀假設。")
+    else:
+        score -= 5; negatives.append("月營收 MoM 轉負"); add("月營收 MoM", f"{mom*100:.2f}%", "輕度轉弱", -5, "MoM 轉負，追價需更保守。")
+
+    if gm is not None:
+        if gm >= 0.40:
+            score += 8; positives.append("毛利率高"); add("毛利率", f"{gm*100:.2f}%", "品質支持", +8, "產品組合或產業地位支持較高估值。")
+        elif gm >= 0.25:
+            score += 5; positives.append("毛利率穩健"); add("毛利率", f"{gm*100:.2f}%", "穩健", +5, "毛利率具基本品質支撐。")
+        elif gm < 0.15:
+            score -= 6; negatives.append("毛利率偏低"); add("毛利率", f"{gm*100:.2f}%", "品質不足", -6, "毛利率偏低，不支持遠期估值放大。")
+
+    if om is not None:
+        if om >= 0.18:
+            score += 8; positives.append("營益率佳"); add("營益率", f"{om*100:.2f}%", "獲利落地", +8, "營收可轉化為營業利益。")
+        elif om >= 0.10:
+            score += 4; positives.append("營益率可用"); add("營益率", f"{om*100:.2f}%", "可用", +4, "營運槓桿尚可。")
+        elif om < 0.05:
+            score -= 8; negatives.append("營益率偏弱"); add("營益率", f"{om*100:.2f}%", "獲利未落地", -8, "營收尚未有效轉為獲利。")
+    if gm is not None and om is not None and om > gm + 0.03:
+        score -= 12; negatives.append("毛利率 / 營益率口徑異常"); add("毛利率 / 營益率", f"{gm*100:.2f}% / {om*100:.2f}%", "資料疑慮", -12, "營益率高於毛利率，需先確認資料口徑。")
+
+    if roev is not None:
+        if roev >= 0.20:
+            score += 6; positives.append("ROE 佳"); add("ROE", f"{roev*100:.2f}%", "品質支持", +6, "股東報酬率支持較高品質評價。")
+        elif roev >= 0.12:
+            score += 3; add("ROE", f"{roev*100:.2f}%", "中性偏正", +3, "ROE 尚可。")
+        elif roev < 0.06:
+            score -= 6; negatives.append("ROE 偏低"); add("ROE", f"{roev*100:.2f}%", "品質偏弱", -6, "ROE 偏低，不支持遠期高估值。")
+
+    if fy1 is not None and fy1 > 0:
+        score += 3; add("FY1 EPS", f"{fy1:.2f}", "可用", +3, "有正數 FY1 EPS 可作防守基準。")
+    if fy1 is not None and fy1 > 0 and fy2 is not None and fy2 > 0:
+        fy2_growth = fy2 / fy1 - 1
+        if fy2_growth >= 0.20:
+            score += 12; positives.append("FY2 EPS 明顯高於 FY1"); add("FY2 / FY1 EPS", f"{fy2_growth*100:.2f}%", "法人遠期上修假設強", +12, "FY2 EPS 結構支持先行定價，但仍需來源驗證。")
+        elif fy2_growth >= 0.10:
+            score += 8; positives.append("FY2 EPS 高於 FY1"); add("FY2 / FY1 EPS", f"{fy2_growth*100:.2f}%", "遠期成長", +8, "FY2 EPS 高於 FY1，支持部分先行定價。")
+        elif fy2_growth >= 0:
+            score += 4; add("FY2 / FY1 EPS", f"{fy2_growth*100:.2f}%", "小幅成長", +4, "FY2 EPS 略高於 FY1。")
+        else:
+            score -= 10; negatives.append("FY2 EPS 低於 FY1"); add("FY2 / FY1 EPS", f"{fy2_growth*100:.2f}%", "遠期下修", -10, "FY2 低於 FY1，不支持用遠期 EPS 合理化現價。")
+    if fy2 is not None and fy2 > 0 and fy3 is not None and fy3 > fy2:
+        score += 2; add("FY3 / FY2 EPS", f"{(fy3 / fy2 - 1)*100:.2f}%", "長期情境", +2, "FY3 僅作長期情境，低權重加分。")
+
+    tc = target_confidence or {}
+    rank = int(tc.get("rank") or classify_target_price_confidence(analyst_count).get("rank", 1))
+    if rank >= 4:
+        score += 8; positives.append("法人共識可信度高"); add("法人共識", tc.get("label", f"rank {rank}"), "樣本支持", +8, "法人樣本數較足，可提高遠期 EPS 可信度。")
+    elif rank == 3:
+        score += 4; add("法人共識", tc.get("label", f"rank {rank}"), "中可信", +4, "法人樣本可參考，但仍需追蹤 EPS 來源。")
+    else:
+        score -= 8; negatives.append("法人共識樣本不足"); add("法人共識", tc.get("label", f"rank {rank}"), "可信度不足", -8, "單一或低樣本法人目標不宜支撐遠期定價。")
+
+    danger_count = sum(1 for w in warnings if str(w.get("嚴重度", "")).lower() == "danger")
+    warning_count = max(0, len(warnings) - danger_count)
+    if danger_count:
+        penalty = min(24, danger_count * 12)
+        score -= penalty; negatives.append(f"重大分歧 {danger_count} 項"); add("資料分歧", f"danger {danger_count}", "重大風險", -penalty, "重大分歧會降低未來落地可信度。")
+    if warning_count:
+        penalty = min(12, warning_count * 4)
+        score -= penalty; add("資料分歧", f"warning {warning_count}", "需留意", -penalty, "一般分歧需降權。")
+    if dq:
+        penalty = min(12, len(dq) * 4)
+        score -= penalty; add("資料品質提醒", f"{len(dq)} 項", "需確認", -penalty, "資料品質提醒存在，先降低未來落地信任度。")
+
+    if theme_re_rating_flag:
+        score += 4; positives.append("題材重評價需事件驗證"); add("題材重評價", "是", "事件追蹤", +4, "題材可解釋估值轉換，但需訂單 / 客戶 / 量產節點驗證。")
+
+    score = int(max(0, min(100, round(score))))
+    if score >= 80:
+        label = "未來高度落地"
+        action = "可接受 FY2 先行定價，但仍需分批；新買不可重倉。"
+    elif score >= 60:
+        label = "證據逐步形成"
+        action = "既有部位可續抱觀察，新買需等回檔或確認。"
+    elif score >= 40:
+        label = "證據不足"
+        action = "只能觀察，不宜用 FY2/FY3 支撐買進。"
+    else:
+        label = "純題材或證據反轉"
+        action = "不建議追價，已有部位需風控。"
+
+    horizon_code = pricing_horizon.get("code") if isinstance(pricing_horizon, dict) else str(pricing_horizon or "")
+    if _pricing_horizon_rank(horizon_code) >= 3 and score < 80:
+        action += " 現價已屬高風險遠期定價，需更嚴格事件證據。"
+
+    return {
+        "score": score,
+        "label": label,
+        "action": action,
+        "positives": positives,
+        "negatives": negatives,
+        "report": pd.DataFrame(checks),
+    }
+
+
 def build_forward_eps_tiered_valuation_report(
     *,
     current_price=None,
@@ -2351,6 +3394,16 @@ def build_forward_eps_tiered_valuation_report(
     hard_ceiling=None,
     eps_source_note=None,
     eps_basis=None,
+    theme_re_rating_flag=False,
+    revenue_yoy=None,
+    revenue_mom=None,
+    gross_margin=None,
+    operating_margin=None,
+    roe=None,
+    analyst_count=None,
+    target_confidence=None,
+    divergence_warnings=None,
+    dq_warnings=None,
 ):
     """建立 TTM / FY1 / FY2 / FY3 EPS 分層估值與法人目標價反推表。
 
@@ -2468,6 +3521,34 @@ def build_forward_eps_tiered_valuation_report(
     elif cp_pe_ttm is not None and hard is not None and cp_pe_ttm > hard and cp_pe_fy1 is not None and cp_pe_fy1 <= hard:
         market_view = "用 TTM EPS 看偏高，但用 FY1 EPS 看可回到 hard 內；市場可能已反映 FY1 成長。"
 
+    pricing_horizon = infer_pricing_horizon(
+        price=cp,
+        ttm_eps=ttm,
+        fy1_eps=fy1,
+        fy2_eps=fy2,
+        fy3_eps=fy3,
+        base_pe=caps["base"],
+        soft_pe=caps["soft"],
+        hard_pe=caps["hard"],
+        theme_re_rating_flag=theme_re_rating_flag,
+    )
+    future_evidence = calculate_future_evidence_score(
+        revenue_yoy=revenue_yoy,
+        revenue_mom=revenue_mom,
+        gross_margin=gross_margin,
+        operating_margin=operating_margin,
+        roe=roe,
+        fy1_eps=fy1,
+        fy2_eps=fy2,
+        fy3_eps=fy3,
+        analyst_count=analyst_count,
+        target_confidence=target_confidence,
+        divergence_warnings=divergence_warnings,
+        dq_warnings=dq_warnings,
+        pricing_horizon=pricing_horizon,
+        theme_re_rating_flag=theme_re_rating_flag,
+    )
+
     summary = {
         "fy_definition": fy_definition,
         "ttm_eps": ttm,
@@ -2491,5 +3572,15 @@ def build_forward_eps_tiered_valuation_report(
         "market_pe_fy1": cp_pe_fy1,
         "market_pe_fy2": cp_pe_fy2,
         "market_pe_fy3": cp_pe_fy3,
+        "pricing_horizon": pricing_horizon,
+        "pricing_horizon_code": pricing_horizon.get("code"),
+        "pricing_horizon_label": pricing_horizon.get("label"),
+        "pricing_horizon_rank": pricing_horizon.get("rank"),
+        "pricing_horizon_explanation": pricing_horizon.get("explanation"),
+        "pricing_horizon_decision_rule": pricing_horizon.get("decision_rule"),
+        "future_evidence": future_evidence,
+        "future_evidence_score": future_evidence.get("score"),
+        "future_evidence_label": future_evidence.get("label"),
+        "future_evidence_action": future_evidence.get("action"),
     }
     return {"summary": summary, "report": report}

@@ -27,7 +27,7 @@ def _render_etf_holder_table(rows, title, source_tag):
     if not table_rows:
         return False
     st.markdown(title)
-    st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+    st_dataframe(pd.DataFrame(table_rows), hide_index=True)
     return True
 
 

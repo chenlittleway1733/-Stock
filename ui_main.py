@@ -3,6 +3,7 @@ import re
 主畫面 UI 模組：
 包含個股儀表板、AI 分析、財務資料、圖表、ETF 曝險等主要畫面。
 """
+from app_version import APP_DISPLAY_VERSION
 from ui_common import *
 from ui_panels.overview import (
     render_empty_stock_prompt,
@@ -82,7 +83,7 @@ def render_main_page(sidebar_state=None):
     # ==========================================
     # 5. 主畫面開始
     # ==========================================
-    st.markdown("## 📈 WAY AI 投資戰情室 版本2.2")
+    st.markdown(f"## 📈 WAY AI 投資戰情室 版本{APP_DISPLAY_VERSION}")
 
     if st.session_state.fugle_key and not f_ok:
         st.error("🚨 **系統警報**：您輸入的「富果 (Fugle) API Key」驗證失敗！請至左側欄檢查金鑰是否輸入正確。")
@@ -110,6 +111,11 @@ def render_main_page(sidebar_state=None):
         latest_rev_month, latest_mom_str = "未知", "N/A"
         latest_rev_notice, latest_rev_display_label = "", "公告月份：未知"
         latest_rev_source = ""
+        latest_rev_source_url = ""
+        latest_rev_source_rule = ""
+        latest_rev_announce_date = ""
+        latest_rev_announce_month = ""
+        latest_rev_revenue_month = ""
         dy_str, fcf_str, cr_str, fs_str = "N/A", "N/A", "N/A", "N/A"
         ctx_eps, ctx_rg, ctx_eg, ctx_gm, ctx_om, ctx_roe, ctx_de = "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", "N/A"
         tp_est_str, cap_warning_html = "無資料", ""
@@ -179,6 +185,11 @@ def render_main_page(sidebar_state=None):
             latest_rev_notice = financial_base["latest_rev_notice"]
             latest_rev_display_label = financial_base["latest_rev_display_label"]
             latest_rev_source = financial_base["latest_rev_source"]
+            latest_rev_source_url = financial_base["latest_rev_source_url"]
+            latest_rev_source_rule = financial_base["latest_rev_source_rule"]
+            latest_rev_announce_date = financial_base["latest_rev_announce_date"]
+            latest_rev_announce_month = financial_base["latest_rev_announce_month"]
+            latest_rev_revenue_month = financial_base["latest_rev_revenue_month"]
             pe_ratio = financial_base["pe_ratio"]
             pb_ratio = financial_base["pb_ratio"]
             roe = financial_base["roe"]
@@ -191,6 +202,8 @@ def render_main_page(sidebar_state=None):
             sys_f_eps_calc = financial_base["sys_f_eps_calc"]
             sys_latest_quarter_eps = financial_base["sys_latest_quarter_eps"]
             sys_ttm_eps = financial_base["sys_ttm_eps"]
+            sys_ttm_eps_source = financial_base.get("sys_ttm_eps_source", "")
+            sys_ttm_eps_is_inferred = financial_base.get("sys_ttm_eps_is_inferred", False)
             sys_fiscal_year_eps = financial_base["sys_fiscal_year_eps"]
             sys_forward_eps_system = financial_base["sys_forward_eps_system"]
         
@@ -209,7 +222,10 @@ def render_main_page(sidebar_state=None):
             has_ai_fin_fetch = ai_financial_context["has_ai_fin_fetch"]
             ai_pe = ai_financial_context["ai_pe"]
             ai_pb = ai_financial_context["ai_pb"]
+            ai_latest_month_eps = ai_financial_context["ai_latest_month_eps"]
             ai_latest_quarter_eps = ai_financial_context["ai_latest_quarter_eps"]
+            ai_previous_quarter_eps = ai_financial_context["ai_previous_quarter_eps"]
+            ai_last_two_quarter_eps = ai_financial_context["ai_last_two_quarter_eps"]
             ai_ttm_eps = ai_financial_context["ai_ttm_eps"]
             ai_fiscal_year_eps = ai_financial_context["ai_fiscal_year_eps"]
             ai_forward_eps_ai = ai_financial_context["ai_forward_eps_ai"]
@@ -309,6 +325,21 @@ def render_main_page(sidebar_state=None):
             raw_ai_period = str(ai_fin.get('data_period', '')).replace('None', '').strip() if has_ai_fin_fetch else ""
             ai_label = "AI捉取"
             ai_period_val = f"({raw_ai_period})" if raw_ai_period else ""
+            ai_ttm_has_trace = bool(
+                raw_ai_period
+                or get_ai_field_source_meta(ai_fin, "ttm_eps")
+                or get_ai_field_source_meta(ai_fin, "trailing_eps")
+            )
+            ttm_eps_adoption = build_ttm_eps_adoption(
+                system_ttm_eps=sys_ttm_eps,
+                ai_ttm_eps=ai_ttm_eps,
+                current_price=curr_p,
+                pe_ratio=pe_ratio,
+                system_source=sys_ttm_eps_source or "yfinance trailingEps",
+                ai_source="AI/外部校對近四季 EPS 合計",
+                ai_has_trace=ai_ttm_has_trace,
+                system_is_inferred=sys_ttm_eps_is_inferred,
+            )
         
             # 🚀 在目標價 html 生成前，先宣告給 prompt 用的純文字變數，絕對防禦 NameError
             ai_tp_str = f"{ai_target_price:.1f}" if ai_target_price is not None else "未捕捉到"
@@ -317,7 +348,7 @@ def render_main_page(sidebar_state=None):
 
             eff_pe = pe_ratio if pe_ratio is not None else ai_pe
             eff_pb = pb_ratio if pb_ratio is not None else ai_pb
-            eff_t_eps = t_eps if t_eps is not None else ai_t_eps
+            eff_t_eps = ttm_eps_adoption.get("adopted_value")
             eff_rg = rev_growth if rev_growth is not None else ai_yoy
             eff_eg = earn_growth if earn_growth is not None else ai_yoy
             eff_gm = gross_margin if gross_margin is not None else ai_gm
@@ -380,8 +411,11 @@ def render_main_page(sidebar_state=None):
 
             # EPS 拆欄報告：顯示每一種 EPS 口徑，不再用「目前 EPS」混稱。
             eps_rows = [
+                {"field": "最新單月 EPS", "definition": "公司自結或注意股公告的最新月份 EPS；用來看目前獲利支撐", "system_value": None, "ai_value": ai_latest_month_eps, "adopted_value": ai_latest_month_eps, "source": "AI補齊/自結公告" if ai_latest_month_eps is not None else "未取得", "period": ai_period_val or raw_ai_period or "需查最新自結公告", "notes": "若取得，『目前估值』優先採單月 EPS ×12；不得與單季 EPS 混用。"},
                 {"field": "最新單季 EPS", "definition": "最新已公告季度 EPS；用來判斷短期獲利動能", "system_value": sys_latest_quarter_eps, "ai_value": ai_latest_quarter_eps, "adopted_value": ai_latest_quarter_eps, "source": "AI補齊" if ai_latest_quarter_eps is not None else "未取得", "period": ai_period_val or raw_ai_period or "需查最新財報", "notes": "系統資料源未穩定提供單季 EPS，避免用 TTM 代替。"},
-                {"field": "TTM EPS", "definition": "近四季 EPS 合計；用於歷史 P/E", "system_value": sys_ttm_eps, "ai_value": ai_ttm_eps, "adopted_value": sys_ttm_eps if sys_ttm_eps is not None else ai_ttm_eps, "source": "系統優先" if sys_ttm_eps is not None else ("AI補齊" if ai_ttm_eps is not None else "未取得"), "period": "yfinance trailingEps / 現價÷P/E 反推" if sys_ttm_eps is not None else (raw_ai_period or "AI未揭露"), "notes": "原 trailing_eps 口徑統一視為 TTM EPS。"},
+                {"field": "前一季 EPS", "definition": "最新季度前一季 EPS；與最新單季合計形成近二季 Run-rate", "system_value": None, "ai_value": ai_previous_quarter_eps, "adopted_value": ai_previous_quarter_eps, "source": "AI補齊" if ai_previous_quarter_eps is not None else "未取得", "period": raw_ai_period or "需查前一季財報", "notes": "只用於 Run-rate EPS 動能檢查，不取代 TTM 或 FY1。"},
+                {"field": "近二季 EPS 合計", "definition": "最新兩季 EPS 合計；年化後看 AI 高成長股獲利動能", "system_value": None, "ai_value": ai_last_two_quarter_eps, "adopted_value": ai_last_two_quarter_eps, "source": "AI補齊/自動合計" if ai_last_two_quarter_eps is not None else "未取得", "period": raw_ai_period or "最新兩季", "notes": "近二季年化 = 近二季 EPS 合計 ×2；僅為動能口徑。"},
+                {"field": "TTM EPS", "definition": "近四季 EPS 合計；用於歷史 P/E", "system_value": sys_ttm_eps, "ai_value": ai_ttm_eps, "adopted_value": eff_t_eps, "source": ttm_eps_adoption.get("adopted_source") or ("AI補齊" if ai_ttm_eps is not None else ("系統備援" if sys_ttm_eps is not None else "未取得")), "period": raw_ai_period if ttm_eps_adoption.get("adopted_value") == ai_ttm_eps and ai_ttm_eps is not None else (sys_ttm_eps_source or "系統/備援"), "notes": (ttm_eps_adoption.get("adopted_rule") or "近四季 EPS 合計優先；yfinance trailingEps 只作備援。") + ("；" + "；".join(ttm_eps_adoption.get("warnings") or []) if ttm_eps_adoption.get("warnings") else "")},
                 {"field": "完整年度 EPS", "definition": "最近完整會計年度 EPS；用來看年度基準", "system_value": sys_fiscal_year_eps, "ai_value": ai_fiscal_year_eps, "adopted_value": ai_fiscal_year_eps, "source": "AI補齊" if ai_fiscal_year_eps is not None else "未取得", "period": raw_ai_period or "需查年報", "notes": "不得用 TTM EPS 直接冒充完整年度 EPS。"},
                 {"field": "Forward EPS－系統", "definition": "yfinance forwardEps；缺值時由 TTM EPS × 成長率推估", "system_value": sys_forward_eps_system, "ai_value": None, "adopted_value": sys_forward_eps_system, "source": "系統/反推" if sys_forward_eps_system is not None else "未取得", "period": "forwardEps 或 earningsGrowth 推估", "notes": "用於系統 Forward P/E 與公式估值；若後續判定年期錯位，公式合理價會降權採 FY1 EPS。"},
                 {"field": "Forward EPS－AI", "definition": "AI 從新聞/券商報告抓取或推估的 Forward EPS", "system_value": None, "ai_value": ai_forward_eps_ai, "adopted_value": ai_forward_eps_ai, "source": "AI補齊" if ai_forward_eps_ai is not None else "未取得", "period": raw_ai_period or "AI未揭露", "notes": "與法人共識 EPS 分開，避免單一來源誤當共識。"},
@@ -531,6 +565,11 @@ def render_main_page(sidebar_state=None):
                 latest_rev_display_label=latest_rev_display_label,
                 latest_rev_notice=latest_rev_notice,
                 latest_mom_val=latest_mom_val,
+                latest_rev_source_url=latest_rev_source_url,
+                latest_rev_source_rule=latest_rev_source_rule,
+                latest_rev_announce_date=latest_rev_announce_date,
+                latest_rev_announce_month=latest_rev_announce_month,
+                latest_rev_revenue_month=latest_rev_revenue_month,
                 pe_ratio=pe_ratio,
                 ai_pe=ai_pe,
                 sys_forward_pe=sys_forward_pe,
@@ -541,6 +580,7 @@ def render_main_page(sidebar_state=None):
                 eff_peg=eff_peg,
                 pb_ratio=pb_ratio,
                 ai_pb=ai_pb,
+                ai_latest_month_eps=ai_latest_month_eps,
                 sys_latest_quarter_eps=sys_latest_quarter_eps,
                 ai_latest_quarter_eps=ai_latest_quarter_eps,
                 sys_ttm_eps=sys_ttm_eps,
@@ -574,6 +614,7 @@ def render_main_page(sidebar_state=None):
                 sys_de=sys_de,
                 ai_de=ai_de,
                 eff_de=eff_de,
+                ttm_eps_adoption=ttm_eps_adoption,
             )
             quality_rows = quality_context["quality_rows"]
             dq_report_df = quality_context["dq_report_df"]
@@ -599,7 +640,10 @@ def render_main_page(sidebar_state=None):
                 ai_forward_eps_fy3=ai_forward_eps_fy3,
                 cap_adopted_forward_eps=cap_adopted_forward_eps,
                 sys_latest_quarter_eps=sys_latest_quarter_eps,
+                ai_latest_month_eps=ai_latest_month_eps,
                 ai_latest_quarter_eps=ai_latest_quarter_eps,
+                ai_previous_quarter_eps=ai_previous_quarter_eps,
+                ai_last_two_quarter_eps=ai_last_two_quarter_eps,
                 eff_t_eps=eff_t_eps,
                 raw_ai_period=raw_ai_period,
             )
@@ -620,8 +664,18 @@ def render_main_page(sidebar_state=None):
             current_eps_for_valuation = multiple_context["current_eps_for_valuation"]
             current_eps_source = multiple_context["current_eps_source"]
             current_eps_source_detail = multiple_context["current_eps_source_detail"]
+            current_eps_formula_note = multiple_context["current_eps_formula_note"]
             current_eps_period = multiple_context["current_eps_period"]
             current_target_price_est = multiple_context["current_target_price_est"]
+            run_rate_eps_context = multiple_context["run_rate_eps_context"]
+            run_rate_1q_eps_annualized = multiple_context["run_rate_1q_eps_annualized"]
+            run_rate_2q_eps_annualized = multiple_context["run_rate_2q_eps_annualized"]
+            run_rate_1q_target_price = multiple_context["run_rate_1q_target_price"]
+            run_rate_2q_target_price = multiple_context["run_rate_2q_target_price"]
+            run_rate_reference_eps = multiple_context["run_rate_reference_eps"]
+            run_rate_reference_target_price = multiple_context["run_rate_reference_target_price"]
+            run_rate_label = multiple_context["run_rate_label"]
+            run_rate_action = multiple_context["run_rate_action"]
             is_capped = multiple_context["is_capped"]
             extreme_target_price = multiple_context["extreme_target_price"]
             extreme_target_price_raw = multiple_context["extreme_target_price_raw"]
@@ -758,7 +812,7 @@ def render_main_page(sidebar_state=None):
                             st.error(msg)
                         else:
                             st.warning(msg)
-                    st.dataframe(build_divergence_warning_report(divergence_warnings), use_container_width=True, hide_index=True)
+                    st_dataframe(build_divergence_warning_report(divergence_warnings), hide_index=True)
         
             # 手動組合區域
             time_str = f", {ai_period_val}" if ai_period_val else ""
@@ -869,6 +923,7 @@ def render_main_page(sidebar_state=None):
                     f"公式合理估值({formula_eps_source}×formula cap): {sys_tp_str}；"
                     f"系統原始公式價(系統Forward EPS×formula cap): {sys_raw_tp_str}；"
                     f"目前估值({current_eps_source}×formula cap): {current_value_str}；"
+                    f"Run-rate動能估值(近二季/近一季年化×formula cap): {_fmt_price(run_rate_2q_target_price)} / {_fmt_price(run_rate_1q_target_price)}；"
                     f"FY1年度估值 base/soft/hard(基礎/樂觀/極限): {fy1_range_txt}；"
                     f"FY2第二年度估值 base/soft/hard(基礎/樂觀/極限): {fy2_range_txt}；"
                     f"FY3第三年度估值 base/soft/hard(基礎/樂觀/極限，高風險): {fy3_range_txt}；"
@@ -918,12 +973,20 @@ def render_main_page(sidebar_state=None):
                     "#ffffff",
                 )
                 _valuation_rows_html += _single_valuation_row(
-                    "📍 1-1. 目前估值",
-                    f"{current_eps_source} × formula cap｜{current_eps_source_detail}｜{current_eps_period}",
+                    "📍 1-1. 目前估值（年化 EPS）",
+                    f"{current_eps_source} × formula cap｜{current_eps_source_detail}｜{current_eps_formula_note}｜{current_eps_period}",
                     current_eps_for_valuation,
                     formula_pe_cap,
                     current_target_price_est,
                     "#FCD34D",
+                )
+                _valuation_rows_html += _single_valuation_row(
+                    "⚡ 1-2. Run-rate EPS 動能估值",
+                    f"近二季/近一季年化 × formula cap｜{run_rate_label}｜{run_rate_action}",
+                    run_rate_reference_eps,
+                    formula_pe_cap,
+                    run_rate_reference_target_price,
+                    "#34D399",
                 )
                 _valuation_rows_html += _fy_matrix_row(
                     "📅 2. FY1年度估值",
@@ -1018,6 +1081,16 @@ def render_main_page(sidebar_state=None):
             # ==========================================
             # 📆 第 17-C-9c-hotfix44：Forward EPS 年期分層估值
             # ==========================================
+            _theme_text_for_pricing = " ".join([
+                str(industry_profile.get("themes_text", "")) if isinstance(industry_profile, dict) else "",
+                str(industry_profile.get("event_switch_note", "")) if isinstance(industry_profile, dict) else "",
+                str(industry_profile.get("risk_flags", "")) if isinstance(industry_profile, dict) else "",
+                str(industry_profile.get("primary_valuation", "")) if isinstance(industry_profile, dict) else "",
+            ])
+            topic_re_rating_flag = (
+                (isinstance(industry_profile, dict) and not bool(industry_profile.get("pe_model_suitable", True)))
+                or any(k in _theme_text_for_pricing for k in ["題材", "事件", "重評價", "CPO", "玻璃載板", "ASIC", "先進封裝"])
+            )
             forward_eps_tier_pack = build_forward_eps_tiered_valuation_report(
                 current_price=curr_p,
                 broker_target_avg=ai_me_val,
@@ -1037,12 +1110,24 @@ def render_main_page(sidebar_state=None):
                 hard_ceiling=hard_pe_cap,
                 eps_source_note=ai_forward_eps_fy_source_note,
                 eps_basis=ai_forward_eps_fy_basis,
+                theme_re_rating_flag=topic_re_rating_flag,
+                revenue_yoy=display_rev_growth,
+                revenue_mom=(latest_mom_val / 100.0) if latest_mom_val is not None else ai_mom,
+                gross_margin=display_gross_margin,
+                operating_margin=display_operating_margin,
+                roe=eff_roe,
+                analyst_count=ai_analyst_count,
+                target_confidence=target_confidence,
+                divergence_warnings=divergence_warnings,
+                dq_warnings=dq_warnings,
             )
             if not isinstance(forward_eps_tier_pack, dict):
                 forward_eps_tier_pack = {"summary": {}, "report": None}
             _ft_summary_safe = forward_eps_tier_pack.get("summary", {}) if isinstance(forward_eps_tier_pack, dict) else {}
             if not isinstance(_ft_summary_safe, dict):
                 _ft_summary_safe = {}
+            pricing_horizon_pack = _ft_summary_safe.get("pricing_horizon", {}) if isinstance(_ft_summary_safe, dict) else {}
+            future_evidence_pack = _ft_summary_safe.get("future_evidence", {}) if isinstance(_ft_summary_safe, dict) else {}
             # ==========================================
             # 🧪 第 17-C-9c-hotfix44：產業模型單次快照稽核表
             # ==========================================
@@ -1131,6 +1216,8 @@ def render_main_page(sidebar_state=None):
                 gross_margin=display_gross_margin,
                 operating_margin=display_operating_margin,
                 has_ai_fin_fetch=has_ai_fin_fetch,
+                pricing_horizon=pricing_horizon_pack,
+                future_evidence=future_evidence_pack,
             )
             render_final_signal_panel(final_signal)
 
@@ -1332,8 +1419,17 @@ def render_main_page(sidebar_state=None):
                 "current_eps_raw": locals().get("current_eps_raw"),
                 "current_eps_for_valuation": locals().get("current_eps_for_valuation"),
                 "current_eps_source": locals().get("current_eps_source"),
+                "current_eps_formula_note": locals().get("current_eps_formula_note"),
                 "current_eps_period": locals().get("current_eps_period"),
                 "current_target_price_est": locals().get("current_target_price_est"),
+                "run_rate_1q_eps_annualized": locals().get("run_rate_1q_eps_annualized"),
+                "run_rate_2q_eps_annualized": locals().get("run_rate_2q_eps_annualized"),
+                "run_rate_1q_target_price": locals().get("run_rate_1q_target_price"),
+                "run_rate_2q_target_price": locals().get("run_rate_2q_target_price"),
+                "run_rate_reference_eps": locals().get("run_rate_reference_eps"),
+                "run_rate_reference_target_price": locals().get("run_rate_reference_target_price"),
+                "run_rate_label": locals().get("run_rate_label"),
+                "run_rate_action": locals().get("run_rate_action"),
                 "fy1_base_target_price": locals().get("fy1_base_target_price"),
                 "fy1_soft_target_price": locals().get("fy1_soft_target_price"),
                 "fy1_hard_target_price": locals().get("fy1_hard_target_price"),
@@ -1372,8 +1468,17 @@ def render_main_page(sidebar_state=None):
                     current_eps=prompt_peg_values.get("current_eps_for_valuation"),
                     current_eps_raw=prompt_peg_values.get("current_eps_raw"),
                     current_eps_source=prompt_peg_values.get("current_eps_source"),
+                    current_eps_formula_note=prompt_peg_values.get("current_eps_formula_note"),
                     current_eps_period=prompt_peg_values.get("current_eps_period"),
                     current_price=prompt_peg_values.get("current_target_price_est"),
+                    run_rate_1q_eps=prompt_peg_values.get("run_rate_1q_eps_annualized"),
+                    run_rate_2q_eps=prompt_peg_values.get("run_rate_2q_eps_annualized"),
+                    run_rate_reference_eps=prompt_peg_values.get("run_rate_reference_eps"),
+                    run_rate_1q_price=prompt_peg_values.get("run_rate_1q_target_price"),
+                    run_rate_2q_price=prompt_peg_values.get("run_rate_2q_target_price"),
+                    run_rate_reference_price=prompt_peg_values.get("run_rate_reference_target_price"),
+                    run_rate_label=prompt_peg_values.get("run_rate_label"),
+                    run_rate_action=prompt_peg_values.get("run_rate_action"),
                     fy1_base_price=prompt_peg_values.get("fy1_base_target_price"),
                     fy1_soft_price=prompt_peg_values.get("fy1_soft_target_price"),
                     fy1_hard_price=prompt_peg_values.get("fy1_hard_target_price"),
@@ -1443,6 +1548,7 @@ def render_main_page(sidebar_state=None):
 
             eps_adopted_for_prompt = prompt_eps_adoption_sync_summary(
                 sys_latest_quarter_eps_val=locals().get("sys_latest_quarter_eps"),
+                ai_latest_month_eps_val=locals().get("ai_latest_month_eps"),
                 ai_latest_quarter_eps_val=locals().get("ai_latest_quarter_eps"),
                 raw_ai_period_val=locals().get("raw_ai_period"),
                 sys_ttm_eps_val=locals().get("sys_ttm_eps"),
@@ -1479,8 +1585,17 @@ def render_main_page(sidebar_state=None):
                 current_eps_for_valuation_val=locals().get("current_eps_for_valuation"),
                 current_eps_raw_val=locals().get("current_eps_raw"),
                 current_eps_source_val=locals().get("current_eps_source"),
+                current_eps_formula_note_val=locals().get("current_eps_formula_note"),
                 current_eps_period_val=locals().get("current_eps_period"),
                 current_target_price_est_val=locals().get("current_target_price_est"),
+                run_rate_1q_eps_val=locals().get("run_rate_1q_eps_annualized"),
+                run_rate_2q_eps_val=locals().get("run_rate_2q_eps_annualized"),
+                run_rate_reference_eps_val=locals().get("run_rate_reference_eps"),
+                run_rate_1q_target_price_val=locals().get("run_rate_1q_target_price"),
+                run_rate_2q_target_price_val=locals().get("run_rate_2q_target_price"),
+                run_rate_reference_target_price_val=locals().get("run_rate_reference_target_price"),
+                run_rate_label_val=locals().get("run_rate_label"),
+                run_rate_action_val=locals().get("run_rate_action"),
                 fy1_base_target_price_val=locals().get("fy1_base_target_price"),
                 fy1_soft_target_price_val=locals().get("fy1_soft_target_price"),
                 fy1_hard_target_price_val=locals().get("fy1_hard_target_price"),
@@ -1549,10 +1664,10 @@ def render_main_page(sidebar_state=None):
             def _prompt_model_library_feedback_request():
                 return prompt_model_library_feedback_request(industry_profile)
             context_str = f"""
-【0. WAY AI 投資戰情室 2.2 精簡判讀總覽】
+【0. WAY AI 投資戰情室 {APP_DISPLAY_VERSION} 精簡判讀總覽】
 - 股票: {c_name} ({curr_id})
 - 最新收盤價: {_nullize_text(curr_p)} 元
-- 系統版本: 2.2
+- 系統版本: {APP_DISPLAY_VERSION}
 - 最終操作燈號: {_nullize_text(final_signal.get('signal') if isinstance(final_signal, dict) else 'NULL')}
 - 操作含義: {_nullize_text(final_signal.get('advice') if isinstance(final_signal, dict) else 'NULL')}
 - 資料可信度 / 估值可信度 / 操作可信度: {_nullize_text(final_signal.get('data_confidence') if isinstance(final_signal, dict) else 'NULL')} / {_nullize_text(final_signal.get('valuation_confidence') if isinstance(final_signal, dict) else 'NULL')} / {_nullize_text(final_signal.get('operation_confidence') if isinstance(final_signal, dict) else 'NULL')}
@@ -1561,6 +1676,9 @@ def render_main_page(sidebar_state=None):
 - 營收公告月份標籤: {_nullize_text(latest_rev_display_label)}
 - 最新單月營收 YoY / MoM: {panel_rg} / {_nullize_text(latest_mom_str)}
 - 月營收資料源: {_nullize_text(latest_rev_source)}
+- 月營收來源URL: {_nullize_text(latest_rev_source_url)}
+- 月營收來源規則: {_nullize_text(latest_rev_source_rule)}
+- 月營收所屬月份 / 公告月份 / 公告日: {_nullize_text(latest_rev_revenue_month)} / {_nullize_text(latest_rev_announce_month)} / {_nullize_text(latest_rev_announce_date)}
 - 月營收月份提示: {_nullize_text(latest_rev_notice)}
 
 【2. EPS 口徑摘要（不可混用）】
@@ -1663,7 +1781,7 @@ def render_main_page(sidebar_state=None):
 【0. 系統判讀總覽】
 - 股票: {c_name} ({curr_id})
 - 最新收盤價: {_nullize_text(curr_p)} 元
-- 系統版本: 2.2
+- 系統版本: {APP_DISPLAY_VERSION}
 - 最終操作燈號: {_nullize_text(final_signal.get('signal') if isinstance(final_signal, dict) else 'NULL')}
 - 系統建議: {_nullize_text(final_signal.get('advice') if isinstance(final_signal, dict) else 'NULL')}
 - 資料 / 估值 / 操作可信度: {_nullize_text(final_signal.get('data_confidence') if isinstance(final_signal, dict) else 'NULL')} / {_nullize_text(final_signal.get('valuation_confidence') if isinstance(final_signal, dict) else 'NULL')} / {_nullize_text(final_signal.get('operation_confidence') if isinstance(final_signal, dict) else 'NULL')}
@@ -1672,6 +1790,7 @@ def render_main_page(sidebar_state=None):
 - 最新公告月份: {_nullize_text(latest_rev_display_label)}
 - 月營收 YoY / MoM: {panel_rg} / {_nullize_text(latest_mom_str)}
 - 資料源 / 提醒: {_nullize_text(latest_rev_source)} / {_nullize_text(latest_rev_notice)}
+- 來源URL / 規則 / 營收月份: {_nullize_text(latest_rev_source_url)} / {_nullize_text(latest_rev_source_rule)} / {_nullize_text(latest_rev_revenue_month)}
 
 【2. EPS 口徑與採用值（新版同步：系統 / AI / FY1 / FY2 / FY3）】
 {eps_adopted_for_prompt}
@@ -1743,10 +1862,10 @@ def render_main_page(sidebar_state=None):
 """
 
 
-            full_prompt_for_copy = f"""你是台股研究總監 + 交易策略專家。請用繁體中文、條列、可執行結論，並嚴格使用下方 WAY AI 投資戰情室 2.2 數據。
+            full_prompt_for_copy = f"""你是台股研究總監 + 交易策略專家。請用繁體中文、條列、可執行結論，並嚴格使用下方 WAY AI 投資戰情室 {APP_DISPLAY_VERSION} 數據。
 
 重要原則：
-1) 請優先尊重系統 2.2 已產出的「月營收公告月份、EPS 拆欄、分歧警告、資料品質報告、法人目標價可信度、公式估值/可操作估值分離、產業估值模型、Dynamic Cap 2.0、最終操作燈號」。
+1) 請優先尊重系統 {APP_DISPLAY_VERSION} 已產出的「月營收公告月份、EPS 拆欄、分歧警告、資料品質報告、法人目標價可信度、公式估值/可操作估值分離、產業估值模型、Dynamic Cap 2.0、最終操作燈號」。
 2) 公式合理估值與公式極限價只代表模型輸出，不可直接當作買進目標；真正操作請以「可操作估值區間」與最終燈號為主。
 3) 若系統 / AI 分歧警告存在，必須先說明分歧對估值可信度與操作可信度的影響，不可直接給樂觀目標價。
 4) EPS 必須分清楚最新單季 EPS、TTM EPS、完整年度 EPS、系統 Forward EPS、AI Forward EPS、法人共識 Forward EPS，不可混用。
@@ -1759,7 +1878,7 @@ def render_main_page(sidebar_state=None):
 11) 研究完整版請額外輸出「模型庫回饋建議」：這不是買賣建議，而是協助日後修正 stock_mapping.py、industry_taxonomy.py、dynamic_cap_model.py 或法人目標價可信度規則；AI 回饋只能作為候選清單，不可直接覆蓋模型庫。
 
 任務要求：
-1) 先做「2.2 資料品質盤點」：逐項說明哪些欄位是系統/AI/推估/NULL，並指出最影響結論的 3 個資料風險。
+1) 先做「{APP_DISPLAY_VERSION} 資料品質盤點」：逐項說明哪些欄位是系統/AI/推估/NULL，並指出最影響結論的 3 個資料風險。
 2) 解讀「分歧警告」：EPS / YoY / PEG / 合理價 / D/E 若有警告，請說明是否會讓估值降級。
 3) 解讀「產業估值模型」：說明這檔股票適合用哪些估值指標，不適合用哪些指標。
 4) 解讀「公式估值 vs 可操作估值」：請分開說明公式合理價、公式極限價、可操作估值區間，不可混成同一個目標價。
@@ -1775,7 +1894,7 @@ def render_main_page(sidebar_state=None):
 
 輸出格式（必須照做）：
 - [投資結論一句話]
-- [2.2 資料品質與分歧警告]
+- [{APP_DISPLAY_VERSION} 資料品質與分歧警告]
 - [產業估值模型解讀]
 - [公式估值 vs 可操作估值]
 - [公司優缺點]
@@ -1785,14 +1904,14 @@ def render_main_page(sidebar_state=None):
 - [下月追蹤清單]
 - [模型庫回饋建議｜研究用途，非買賣建議]
 
-以下是系統面板 2.2 精簡打包數據（只保留會影響外部 AI 判斷的採用值、分歧、估值層級、產業模型、Dynamic Cap 與燈號；無資料為 NULL）。若出現數據不合理，可上網查詢並說明不合理原因，但不可忽略系統已標示的分歧與資料品質警告：
+以下是系統面板 {APP_DISPLAY_VERSION} 精簡打包數據（只保留會影響外部 AI 判斷的採用值、分歧、估值層級、產業模型、Dynamic Cap 與燈號；無資料為 NULL）。若出現數據不合理，可上網查詢並說明不合理原因，但不可忽略系統已標示的分歧與資料品質警告：
 {context_str}
 """
 
             research_prompt_for_copy = full_prompt_for_copy
             buy_decision_prompt_for_copy = f"""你是台股研究總監 + 交易策略專家。請用繁體中文、條列、可執行結論，協助我判斷這檔股票「現在是否值得買進」。
 
-請優先尊重 WAY AI 投資戰情室 2.2 的判讀，尤其是：月營收公告月份、EPS 拆欄、分歧警告、資料品質、法人目標價可信度、公式估值/可操作估值分離、產業估值模型、Dynamic Cap 2.0、最終操作燈號。
+請優先尊重 WAY AI 投資戰情室 {APP_DISPLAY_VERSION} 的判讀，尤其是：月營收公告月份、EPS 拆欄、分歧警告、資料品質、法人目標價可信度、公式估值/可操作估值分離、產業估值模型、Dynamic Cap 2.0、最終操作燈號。
 
 重要規則：
 - 不可把公式合理估值或公式極限價直接當買進目標。
@@ -1819,7 +1938,7 @@ def render_main_page(sidebar_state=None):
 11. [EPS 年期判斷]：請先用 TTM EPS 判斷目前實際獲利估值，再說明目前股價與法人目標價比較像用 FY1、FY2 還是 FY3 EPS 定價；FY1/FY2/FY3 是預估年度 EPS 序列，不是查詢日後1/2/3年。若用 FY2/FY3 才合理，請說明風險與是否能作為買進依據。
 12. [產業模型是否需更新]：請根據「17-C-9c-hotfix44 單次快照稽核」回答：不建議更新模型 / 暫時觀察 / 建議檢查 hybrid 權重 / 建議檢查 primary_taxon / 建議檢查整個產業倍率。若建議檢查，請說明是市場過熱、法人過度樂觀、EPS/營收尚未落地，還是公司營運型態已改變；不可因單次現價高於 hard ceiling 就直接調高模型。
 
-以下是 WAY AI 投資戰情室 2.2「買進決策版」系統資料。這不是完整研究資料包，只保留會直接影響買進判斷的採用值、系統值/AI值、分歧、估值層級、產業模型、Dynamic Cap 與燈號。若資料不合理，可上網查證，但不可忽略系統標示的資料品質與分歧警告：
+以下是 WAY AI 投資戰情室 {APP_DISPLAY_VERSION}「買進決策版」系統資料。這不是完整研究資料包，只保留會直接影響買進判斷的採用值、系統值/AI值、分歧、估值層級、產業模型、Dynamic Cap 與燈號。若資料不合理，可上網查證，但不可忽略系統標示的資料品質與分歧警告：
 {decision_context_str}
 """
 

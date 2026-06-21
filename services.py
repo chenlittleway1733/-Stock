@@ -23,13 +23,16 @@ import yfinance as yf
 from google import genai
 from google.genai import types
 
+from ai_services.financial_filler import postprocess_financial_ai_payload
 # 從 utils 引入需要的工具
 from utils import (
+    build_monthly_revenue_growth_frame,
+    expected_latest_revenue_month,
     format_field_source_priority_for_prompt,
+    normalize_revenue_month,
     s_float,
     log_data_health,
     log_exception,
-    validate_ai_financial_json,
 )
 try:
     from industry_taxonomy import INDUSTRY_TAXONOMY
@@ -717,7 +720,10 @@ AI_FINANCIAL_FIELD_LABELS = {
     "pe": "歷史本益比 P/E",
     "trailing_eps": "近四季 EPS（legacy）",
     "forward_eps": "法人預估 EPS（legacy）",
+    "latest_month_eps": "最新單月 / 自結 EPS",
     "latest_quarter_eps": "最新單季 EPS",
+    "previous_quarter_eps": "前一季 EPS",
+    "last_two_quarter_eps": "近二季 EPS 合計",
     "ttm_eps": "近四季 TTM EPS",
     "fiscal_year_eps": "最近完整年度 EPS",
     "forward_eps_system": "系統預估 Forward EPS",
@@ -825,7 +831,9 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
 
     system_prompt = f"""你是一個精準的財經數據提取機器人。請上網搜尋該台股公司「最新」、「最即時」的財報與市場數據，絕對不要使用過期的舊資料，提取以下指標：
     1. 「歷史本益比 (P/E)」
-    2. 「最新單季 EPS (latest_quarter_eps)」：最新已公告季度 EPS，例如 2026Q1 EPS。
+    2. 「最新單月 / 自結 EPS (latest_month_eps)」：若公司因注意股、重大訊息或新聞公告最近月份自結獲利，請填該單月 EPS，例如 2026年4月單月 EPS 13.95；沒有明確單月 EPS 請填 null。
+    2-0. 「最新單季 EPS (latest_quarter_eps)」：最新已公告季度 EPS，例如 2026Q1 EPS。
+    2-1. 「前一季 EPS (previous_quarter_eps)」與「近二季 EPS 合計 (last_two_quarter_eps)」：用於 Run-rate EPS 動能估值。last_two_quarter_eps=最新單季 EPS + 前一季 EPS；若只能查到其中一季，缺值請填 null。
     3. 「近四季 EPS 合計 (ttm_eps / trailing_eps)」：用於歷史 P/E。
     4. 「最近完整年度 EPS (fiscal_year_eps)」：最近完整會計年度 EPS。
     5. 「法人預估 {target_year} 年度 EPS (forward_eps_ai / forward_eps_consensus)」：若有多家法人共識請填 forward_eps_consensus；若只有 AI 從單一新聞/券商抓取或推估，請填 forward_eps_ai。
@@ -860,7 +868,10 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
         - evidence：找到的產品、營收、法說、官網或新聞依據摘要。
         - needs_manual_review：一律填 true，除非分類已非常明確且與公司本業完全一致。
     EPS 欄位請務必拆欄，不可把「最新單季 EPS」、「近四季 TTM EPS」、「完整年度 EPS」、「Forward EPS」混在同一欄：
+    - latest_month_eps：最新單月 / 自結 EPS，例如注意股公告或公司自結的 4 月 EPS；只可填單月值，不可填季度或年化值。
     - latest_quarter_eps：最新已公告季度 EPS。
+    - previous_quarter_eps：前一季 EPS。
+    - last_two_quarter_eps：近二季 EPS 合計，用於 Run-rate EPS；不可取代 TTM EPS 或 FY1/FY2。
     - ttm_eps：近四季 EPS 合計。
     - fiscal_year_eps：最近完整年度 EPS。
     - forward_eps_ai：AI 從最新新聞/券商報告抓取或推估的 {target_year} EPS。
@@ -875,6 +886,7 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
     欄位來源優先表：
     {source_priority_prompt}
     若搜尋結果與欄位來源優先表衝突，請優先依照優先表判斷；若採用較低順位來源，必須在 _sources.<field>.note 說明原因。尤其注意：
+    - 最新單月 / 自結 EPS 若存在，必須填 latest_month_eps，並在 _sources.latest_month_eps.note 寫明月份與是否為自結；不得塞入 latest_quarter_eps。
     - 月營收 YoY / MoM 必須以公告月份的單月資料為準，不可用 yfinance revenueGrowth 或累計 YoY 覆蓋。
     - Forward EPS 必須拆 FY1 / FY2 / FY3 與來源可靠度；FY2/FY3 不可冒充 FY1。
     - D/E 必須說明是倍數或百分比，系統會統一標準化成倍數。
@@ -892,10 +904,10 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
 
     注意：本函式只負責財報與估值校對，不要查詢 ETF 持股；ETF 持股由獨立按鈕 get_etf_holders_from_ai() 執行。
     JSON 格式範例：
-    {{"pe": 15.2, "latest_quarter_eps": 1.35, "ttm_eps": 5.4, "fiscal_year_eps": 4.9, "forward_eps_system": null, "forward_eps_ai": 6.0, "forward_eps_consensus": 6.2, "forward_eps_fy1": 6.2, "forward_eps_fy2": 7.4, "forward_eps_fy3": 8.6, "forward_eps_fy1_year": 2026, "forward_eps_fy2_year": 2027, "forward_eps_fy3_year": 2028, "forward_eps_fy_source_note": "券商共識 FY1/FY2，FY3 為高成長情境", "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.35, "target_price": 1050.0, "target_price_high": 1200.0, "target_price_avg": 1050.0, "target_price_low": 900.0, "target_price_analyst_count": 18, "target_price_rationale": "AI 伺服器需求強、毛利率改善但評價偏高", "debt_to_equity": 0.45, "mom": 0.015, "dividend_yield": 0.032, "data_period": "2026/05/15", "free_cash_flow": 1500000000, "current_ratio": 1.85, "shares_outstanding": 2500000000, "industry_classification": {{"suggested_primary_taxon": "AI_SERVER_ODM", "suggested_display_name": "AI 伺服器 ODM / 組裝", "suggested_themes": ["AI伺服器", "資料中心"], "confidence": "medium", "reason": "主要成長動能來自 AI 伺服器，但仍需確認營收比重。", "evidence": "近期法說與新聞提及 AI 伺服器出貨動能。", "needs_manual_review": true}}, "_sources": {{"pe": {{"source": "Yahoo股市", "published_date": "2026/05/31", "source_url": "https://example.com", "note": "最新可得本益比"}}, "ttm_eps": {{"source": "最新財報/公開資訊觀測站", "published_date": "2026Q1", "source_url": "https://example.com", "note": "近四季 EPS 合計"}}, "forward_eps_consensus": {{"source": "券商/法人預估彙整", "published_date": "2026/05/20", "source_url": "https://example.com", "note": "{target_year} 年度 EPS 共識預估"}}, "target_price_avg": {{"source": "券商目標價彙整", "published_date": "2026/05/20", "source_url": "https://example.com", "note": "最新法人目標價均值"}}}}, "source_urls": ["https://example.com"]}}
+    {{"pe": 15.2, "latest_month_eps": 0.42, "latest_quarter_eps": 1.35, "previous_quarter_eps": 1.10, "last_two_quarter_eps": 2.45, "ttm_eps": 5.4, "fiscal_year_eps": 4.9, "forward_eps_system": null, "forward_eps_ai": 6.0, "forward_eps_consensus": 6.2, "forward_eps_fy1": 6.2, "forward_eps_fy2": 7.4, "forward_eps_fy3": 8.6, "forward_eps_fy1_year": 2026, "forward_eps_fy2_year": 2027, "forward_eps_fy3_year": 2028, "forward_eps_fy_source_note": "券商共識 FY1/FY2，FY3 為高成長情境", "trailing_eps": 5.4, "forward_eps": 6.2, "pb": 2.1, "gross_margin": 0.255, "operating_margin": 0.123, "roe": 0.15, "yoy": 0.35, "target_price": 1050.0, "target_price_high": 1200.0, "target_price_avg": 1050.0, "target_price_low": 900.0, "target_price_analyst_count": 18, "target_price_rationale": "AI 伺服器需求強、毛利率改善但評價偏高", "debt_to_equity": 0.45, "mom": 0.015, "dividend_yield": 0.032, "data_period": "2026/05/15", "free_cash_flow": 1500000000, "current_ratio": 1.85, "shares_outstanding": 2500000000, "industry_classification": {{"suggested_primary_taxon": "AI_SERVER_ODM", "suggested_display_name": "AI 伺服器 ODM / 組裝", "suggested_themes": ["AI伺服器", "資料中心"], "confidence": "medium", "reason": "主要成長動能來自 AI 伺服器，但仍需確認營收比重。", "evidence": "近期法說與新聞提及 AI 伺服器出貨動能。", "needs_manual_review": true}}, "_sources": {{"pe": {{"source": "Yahoo股市", "published_date": "2026/05/31", "source_url": "https://example.com", "note": "最新可得本益比"}}, "latest_month_eps": {{"source": "公司自結公告", "published_date": "2026/05/10", "source_url": "https://example.com", "note": "2026年4月單月 EPS"}}, "ttm_eps": {{"source": "最新財報/公開資訊觀測站", "published_date": "2026Q1", "source_url": "https://example.com", "note": "近四季 EPS 合計"}}, "last_two_quarter_eps": {{"source": "最新財報/公開資訊觀測站", "published_date": "2026Q1", "source_url": "https://example.com", "note": "近二季 EPS 合計，用於 Run-rate 動能估值"}}, "forward_eps_consensus": {{"source": "券商/法人預估彙整", "published_date": "2026/05/20", "source_url": "https://example.com", "note": "{target_year} 年度 EPS 共識預估"}}, "target_price_avg": {{"source": "券商目標價彙整", "published_date": "2026/05/20", "source_url": "https://example.com", "note": "最新法人目標價均值"}}}}, "source_urls": ["https://example.com"]}}
     絕對不要輸出 markdown 標記或其他文字。"""
 
-    prompt_text = f"請啟用搜尋引擎，【務必尋找最新日期】查詢台股 {stock_name} ({stock_id}) 最新財報新聞、營收 MoM、FY1/FY2/FY3 法人預測 EPS、未來三年複合成長率(CAGR)與最新目標價。請務必確認並標示出 EPS 對應年度、資料發布日期與來源！不要查詢 ETF 持股，ETF 持股由獨立功能處理。"
+    prompt_text = f"請啟用搜尋引擎，【務必尋找最新日期】查詢台股 {stock_name} ({stock_id}) 最新財報新聞、最新單月/自結 EPS、最新單季 EPS、前一季 EPS、近二季 EPS 合計、營收 MoM、FY1/FY2/FY3 法人預測 EPS、未來三年複合成長率(CAGR)與最新目標價。請務必確認並標示出 EPS 對應年月/季度/年度、資料發布日期與來源！不要查詢 ETF 持股，ETF 持股由獨立功能處理。"
 
     def _make_config(search_enabled=True):
         kwargs = {
@@ -999,25 +1011,19 @@ def get_financials_from_ai(stock_name, stock_id, api_key, model_name="gemini-3.1
         try:
             parsed = json.loads(clean_text)
             if isinstance(parsed, dict):
-                parsed.update({k: v for k, v in marker_data.items() if v is not None and parsed.get(k) is None})
-                parsed = _normalize_ai_source_metadata(parsed)
-                parsed = validate_ai_financial_json(parsed, stock_id=stock_id, stock_name=stock_name)
-                parsed = _normalize_ai_source_metadata(parsed)
-                parsed["model_used"] = used_model
-                parsed["ai_search_enabled"] = bool(used_search)
-                parsed["fallback_reason"] = fallback_reason
-                parsed["attempts"] = attempts
-                parsed["retry_policy"] = "Pro Only：gemini-3.1-pro-preview + Google Search；最多 3 次；不降級。"
-                parsed["query_payload"] = json.dumps({
-                    "stock": f"{stock_name} ({stock_id})",
-                    "target_year": target_year,
-                    "model_used": used_model,
-                    "google_search_enabled": bool(used_search),
-                    "fallback_reason": fallback_reason or "無",
-                    "retry_policy": "Pro Only same-model retry: delays 0s, 3s, 8s; no downgrade.",
-                    "prompt": prompt_text,
-                    "system_instruction": system_prompt,
-                }, ensure_ascii=False, indent=2)
+                parsed = postprocess_financial_ai_payload(
+                    parsed,
+                    marker_data=marker_data,
+                    stock_id=stock_id,
+                    stock_name=stock_name,
+                    target_year=target_year,
+                    used_model=used_model,
+                    used_search=used_search,
+                    fallback_reason=fallback_reason,
+                    attempts=attempts,
+                    prompt_text=prompt_text,
+                    system_prompt=system_prompt,
+                )
             return parsed
         except json.JSONDecodeError:
             return {
@@ -1166,6 +1172,320 @@ def get_global_market_trend():
         log_exception("Yahoo", "get_global_market_trend", e)
         return None
 
+
+def _parse_revenue_number(value):
+    text = str(value or "").strip()
+    if not text or text.lower() in {"nan", "none", "null", "--", "-"}:
+        return None
+    text = text.replace(",", "").replace("，", "")
+    text = re.sub(r"[^0-9.\-]", "", text)
+    return s_float(text)
+
+
+def _flatten_table_columns(df):
+    out = df.copy()
+    cols = []
+    for col in out.columns:
+        if isinstance(col, tuple):
+            parts = [str(x).strip() for x in col if str(x).strip() and not str(x).startswith("Unnamed")]
+            cols.append(" ".join(parts) if parts else str(col[-1]).strip())
+        else:
+            cols.append(str(col).strip())
+    out.columns = cols
+    return out
+
+
+def _find_col(columns, include, exclude=None):
+    exclude = exclude or []
+    for col in columns:
+        name = str(col)
+        if all(token in name for token in include) and not any(token in name for token in exclude):
+            return col
+    return None
+
+
+def _roc_yyyymm_to_month(value):
+    text = re.sub(r"\D", "", str(value or ""))
+    if not text:
+        return ""
+    if len(text) == 6 and text.startswith("20"):
+        year = int(text[:4])
+        month = int(text[4:6])
+    elif len(text) >= 5:
+        year = int(text[:-2]) + 1911
+        month = int(text[-2:])
+    else:
+        return ""
+    if month < 1 or month > 12:
+        return ""
+    return f"{year:04d}/{month:02d}"
+
+
+def _roc_date_to_iso(value):
+    text = re.sub(r"\D", "", str(value or ""))
+    if not text:
+        return ""
+    if len(text) == 8 and text.startswith("20"):
+        year = int(text[:4])
+        month = int(text[4:6])
+        day = int(text[6:8])
+    elif len(text) >= 7:
+        year = int(text[:-4]) + 1911
+        month = int(text[-4:-2])
+        day = int(text[-2:])
+    else:
+        return ""
+    if month < 1 or month > 12 or day < 1 or day > 31:
+        return ""
+    return f"{year:04d}/{month:02d}/{day:02d}"
+
+
+def parse_mops_monthly_revenue_csv(csv_text, stock_id, market_label="", source_url=""):
+    """Parse MOPS OpenData monthly revenue CSV for one stock.
+
+    t187ap05_* values are in thousand NTD. Returned monthly_revenue is NTD.
+    """
+    if not csv_text or not stock_id:
+        return pd.DataFrame()
+    try:
+        table = pd.read_csv(io.StringIO(csv_text), dtype=str)
+    except Exception:
+        return pd.DataFrame()
+    if table.empty:
+        return pd.DataFrame()
+
+    table = table.copy()
+    table.columns = [str(c).strip().lstrip("\ufeff") for c in table.columns]
+    cols = list(table.columns)
+    code_col = _find_col(cols, ["公司代號"])
+    name_col = _find_col(cols, ["公司名稱"])
+    period_col = _find_col(cols, ["資料年月"])
+    announce_col = _find_col(cols, ["出表日期"])
+    current_col = _find_col(cols, ["當月營收"], exclude=["累計", "去年", "上月"])
+    prev_col = _find_col(cols, ["上月營收"], exclude=["累計"])
+    last_year_col = _find_col(cols, ["去年當月營收"], exclude=["累計"])
+    mom_col = _find_col(cols, ["上月比較增減"], exclude=["累計"])
+    yoy_col = _find_col(cols, ["去年同月增減"], exclude=["累計"])
+    if not code_col or not period_col or not current_col:
+        return pd.DataFrame()
+
+    matched = table[table[code_col].astype(str).str.strip() == str(stock_id)]
+    if matched.empty:
+        return pd.DataFrame()
+
+    row = matched.iloc[0]
+    revenue_month = _roc_yyyymm_to_month(row.get(period_col))
+    if not revenue_month:
+        return pd.DataFrame()
+    period = pd.Period(revenue_month.replace("/", "-"), freq="M")
+    current = _parse_revenue_number(row.get(current_col))
+    prev_month = _parse_revenue_number(row.get(prev_col)) if prev_col else None
+    last_year = _parse_revenue_number(row.get(last_year_col)) if last_year_col else None
+    mom_pct = _parse_revenue_number(row.get(mom_col)) if mom_col else None
+    yoy_pct = _parse_revenue_number(row.get(yoy_col)) if yoy_col else None
+    if current is None:
+        return pd.DataFrame()
+
+    rows = [{"date": period.to_timestamp(), "revenue": current * 1000}]
+    if prev_month is not None:
+        rows.append({"date": (period - 1).to_timestamp(), "revenue": prev_month * 1000})
+    if last_year is not None:
+        rows.append({"date": (period - 12).to_timestamp(), "revenue": last_year * 1000})
+
+    growth_df = build_monthly_revenue_growth_frame(pd.DataFrame(rows), "date", "revenue")
+    latest = growth_df[growth_df["revenue_month"] == revenue_month].copy()
+    if latest.empty:
+        return pd.DataFrame()
+    if pd.isna(latest.iloc[0].get("monthly_revenue_mom")) and mom_pct is not None:
+        latest.loc[:, "monthly_revenue_mom"] = mom_pct
+        latest.loc[:, "MoM"] = mom_pct
+    if pd.isna(latest.iloc[0].get("monthly_revenue_yoy")) and yoy_pct is not None:
+        latest.loc[:, "monthly_revenue_yoy"] = yoy_pct
+        latest.loc[:, "YoY"] = yoy_pct
+
+    announce_date = _roc_date_to_iso(row.get(announce_col)) if announce_col else ""
+    source_name = f"MOPS 開放資料月營收({market_label})" if market_label else "MOPS 開放資料月營收"
+    latest.loc[:, "stock_id"] = str(stock_id)
+    latest.loc[:, "stock_name"] = str(row.get(name_col, "")).strip() if name_col else ""
+    latest.loc[:, "revenue_source"] = source_name
+    latest.loc[:, "source_rule"] = "MOPS OpenData monthly revenue; same-month YoY/MoM"
+    latest.loc[:, "announce_date"] = announce_date
+    latest.loc[:, "announce_month"] = announce_date[:7] if announce_date else ""
+    latest.loc[:, "source_url"] = source_url
+    return latest.reset_index(drop=True)
+
+
+def parse_mops_monthly_revenue_html(html, stock_id, revenue_month):
+    """Parse one MOPS monthly revenue page for a single stock.
+
+    MOPS monthly revenue values are in thousand NTD. Returned monthly_revenue is NTD.
+    """
+    if not html or not stock_id:
+        return pd.DataFrame()
+    try:
+        tables = pd.read_html(io.StringIO(html))
+    except Exception:
+        return pd.DataFrame()
+
+    period = pd.Period(str(revenue_month).replace("/", "-"), freq="M")
+    for raw_table in tables:
+        table = _flatten_table_columns(raw_table)
+        cols = list(table.columns)
+        code_col = _find_col(cols, ["代號"]) or _find_col(cols, ["公司", "代號"])
+        name_col = _find_col(cols, ["公司", "名稱"]) or _find_col(cols, ["名稱"])
+        current_col = _find_col(cols, ["當月營收"], exclude=["累計", "去年", "上月"])
+        prev_col = _find_col(cols, ["上月營收"], exclude=["累計"])
+        last_year_col = _find_col(cols, ["去年當月營收"], exclude=["累計"])
+        mom_col = _find_col(cols, ["上月", "增減"], exclude=["累計"])
+        yoy_col = _find_col(cols, ["去年同月", "增減"], exclude=["累計"])
+
+        for _, row in table.iterrows():
+            cells = [str(x).strip() for x in row.tolist()]
+            code_text = str(row.get(code_col, "")).strip() if code_col else ""
+            if code_text != str(stock_id) and str(stock_id) not in cells[:3]:
+                continue
+
+            def by_col_or_pos(col, pos):
+                if col is not None:
+                    return row.get(col)
+                return row.iloc[pos] if len(row) > pos else None
+
+            current = _parse_revenue_number(by_col_or_pos(current_col, 2))
+            prev_month = _parse_revenue_number(by_col_or_pos(prev_col, 3))
+            last_year = _parse_revenue_number(by_col_or_pos(last_year_col, 4))
+            mom_pct = _parse_revenue_number(by_col_or_pos(mom_col, 5))
+            yoy_pct = _parse_revenue_number(by_col_or_pos(yoy_col, 6))
+            if current is None:
+                continue
+
+            rows = [{"date": period.to_timestamp(), "revenue": current * 1000}]
+            if prev_month is not None:
+                rows.append({"date": (period - 1).to_timestamp(), "revenue": prev_month * 1000})
+            if last_year is not None:
+                rows.append({"date": (period - 12).to_timestamp(), "revenue": last_year * 1000})
+
+            growth_df = build_monthly_revenue_growth_frame(pd.DataFrame(rows), "date", "revenue")
+            latest = growth_df[growth_df["revenue_month"] == f"{period.year:04d}/{period.month:02d}"].copy()
+            if latest.empty:
+                continue
+            if pd.isna(latest.iloc[0].get("monthly_revenue_mom")) and mom_pct is not None:
+                latest.loc[:, "monthly_revenue_mom"] = mom_pct
+                latest.loc[:, "MoM"] = mom_pct
+            if pd.isna(latest.iloc[0].get("monthly_revenue_yoy")) and yoy_pct is not None:
+                latest.loc[:, "monthly_revenue_yoy"] = yoy_pct
+                latest.loc[:, "YoY"] = yoy_pct
+
+            company_name = str(row.get(name_col, "")).strip() if name_col else ""
+            latest.loc[:, "stock_id"] = str(stock_id)
+            latest.loc[:, "stock_name"] = company_name
+            latest.loc[:, "revenue_source"] = "MOPS 公開資訊觀測站月營收"
+            latest.loc[:, "source_rule"] = "MOPS monthly revenue; same-month YoY/MoM"
+            latest.loc[:, "announce_date"] = ""
+            latest.loc[:, "announce_month"] = ""
+            latest.loc[:, "source_url"] = ""
+            return latest.reset_index(drop=True)
+    return pd.DataFrame()
+
+
+def _mops_revenue_month_candidates(today=None, max_back_months=6):
+    expected = expected_latest_revenue_month(today)
+    base = pd.Period(str(expected).replace("/", "-"), freq="M")
+    return [base - i for i in range(max_back_months)]
+
+
+def get_mops_monthly_revenue(stock_id, today=None, max_back_months=6):
+    """Fetch latest official MOPS monthly revenue for listed/OTC stocks."""
+    opendata_markets = [
+        ("L", "上市"),
+        ("O", "上櫃"),
+        ("R", "興櫃"),
+    ]
+    headers = {"User-Agent": "Mozilla/5.0"}
+    for suffix, market_label in opendata_markets:
+        url = f"https://mopsfin.twse.com.tw/opendata/t187ap05_{suffix}.csv"
+        try:
+            res = requests.get(url, headers=headers, timeout=10)
+            ok = res.status_code == 200
+            log_data_health("MOPS OpenData", ok, res.status_code)
+            if not ok:
+                continue
+            raw = res.content
+            for encoding in ("utf-8-sig", "big5"):
+                try:
+                    text = raw.decode(encoding, errors="ignore")
+                    break
+                except Exception:
+                    text = res.text
+            parsed = parse_mops_monthly_revenue_csv(text, stock_id, market_label, url)
+            if parsed is not None and not parsed.empty:
+                return parsed
+        except Exception as e:
+            log_exception("MOPS", f"get_mops_monthly_revenue_opendata:{stock_id}:{suffix}", e)
+            log_data_health("MOPS OpenData", False, f"ERR:{str(e)[:120]}")
+
+    markets = [
+        ("sii", "上市"),
+        ("otc", "上櫃"),
+        ("rotc", "興櫃"),
+    ]
+    for period in _mops_revenue_month_candidates(today=today, max_back_months=max_back_months):
+        roc_year = period.year - 1911
+        month = period.month
+        revenue_month = f"{period.year:04d}/{period.month:02d}"
+        for market_key, market_label in markets:
+            url = f"https://mops.twse.com.tw/nas/t21/{market_key}/t21sc03_{roc_year}_{month}_0.html"
+            try:
+                res = requests.get(url, headers=headers, timeout=10)
+                ok = res.status_code == 200
+                log_data_health("MOPS", ok, res.status_code)
+                if not ok:
+                    continue
+                raw = res.content
+                try:
+                    text = raw.decode("big5", errors="ignore")
+                except Exception:
+                    text = res.text
+                parsed = parse_mops_monthly_revenue_html(text, stock_id, revenue_month)
+                if parsed is not None and not parsed.empty:
+                    parsed.loc[:, "revenue_source"] = f"MOPS 公開資訊觀測站月營收({market_label})"
+                    parsed.loc[:, "source_url"] = url
+                    return parsed
+            except Exception as e:
+                log_exception("MOPS", f"get_mops_monthly_revenue:{stock_id}:{market_key}:{revenue_month}", e)
+                log_data_health("MOPS", False, f"ERR:{str(e)[:120]}")
+    return pd.DataFrame()
+
+
+def merge_mops_latest_revenue(history_df, mops_df):
+    """Use MOPS latest row as official source while preserving historical rows."""
+    if mops_df is None or getattr(mops_df, "empty", True):
+        return history_df
+    if history_df is None or getattr(history_df, "empty", True):
+        return mops_df.copy()
+
+    hist = history_df.copy()
+    mops = mops_df.copy()
+    month_col = "Month" if "Month" in hist.columns else "revenue_month"
+    mops_month = str(mops["Month"].iloc[-1] if "Month" in mops.columns else mops["revenue_month"].iloc[-1])
+    all_cols = list(dict.fromkeys(list(hist.columns) + list(mops.columns)))
+    for col in all_cols:
+        if col not in hist.columns:
+            hist[col] = None
+        if col not in mops.columns:
+            mops[col] = None
+    hist = hist[all_cols]
+    mops = mops[all_cols]
+    if month_col in hist.columns:
+        hist = hist[hist[month_col].astype(str).map(normalize_revenue_month) != normalize_revenue_month(mops_month)]
+    hist_nonempty = hist.dropna(axis=1, how="all")
+    mops_latest = mops.tail(1).dropna(axis=1, how="all")
+    merged = pd.concat([hist_nonempty, mops_latest], ignore_index=True, sort=False)
+    if "Month" in merged.columns:
+        merged["_sort_month"] = merged["Month"].astype(str).map(normalize_revenue_month)
+        merged = merged.sort_values("_sort_month").drop(columns=["_sort_month"]).reset_index(drop=True)
+    return merged
+
+
 @st.cache_data(ttl=43200)
 def get_monthly_revenue(stock_id, fm_key=""):
     """取得月營收資料，並明確保留「實際公告月份」。
@@ -1176,23 +1496,47 @@ def get_monthly_revenue(stock_id, fm_key=""):
     - 保留舊欄位 Month/Revenue/YoY/MoM，確保既有評分與圖表相容。
     """
 
-    def _standardize_revenue_df(df, source="", source_url="", source_date=None):
+    def _standardize_revenue_df(df, source="", source_url="", source_date=None, source_rule=""):
         if df is None or df.empty:
             return df
         out = df.copy()
+        fetch_date = source_date or datetime.date.today().isoformat()
         if "Month" in out.columns:
-            out["actual_revenue_month"] = out["Month"].astype(str)
+            out["actual_revenue_month"] = out["Month"].astype(str).map(normalize_revenue_month)
             out["revenue_month"] = out["actual_revenue_month"]
         if "Revenue" in out.columns:
             out["monthly_revenue"] = out["Revenue"]
         if "YoY" in out.columns:
             out["monthly_yoy"] = out["YoY"]
+            if "monthly_revenue_yoy" not in out.columns:
+                out["monthly_revenue_yoy"] = out["YoY"]
         if "MoM" in out.columns:
             out["monthly_mom"] = out["MoM"]
+            if "monthly_revenue_mom" not in out.columns:
+                out["monthly_revenue_mom"] = out["MoM"]
         out["revenue_source"] = source
         out["source_url"] = source_url
-        out["source_date"] = source_date or datetime.date.today().isoformat()
+        out["source_date"] = fetch_date
+        if source_rule:
+            out["source_rule"] = source_rule
+        elif "source_rule" not in out.columns:
+            out["source_rule"] = "monthly revenue only; not yfinance revenueGrowth"
+
+        # FinMind/Yahoo do not expose an official announcement date in these endpoints.
+        # Keep that explicit so the UI does not mistake fetch date for announce date.
+        for col in ("announce_date", "announce_month"):
+            if col not in out.columns:
+                out[col] = "來源未提供"
+            else:
+                cleaned = out[col].fillna("").astype(str).str.strip()
+                cleaned = cleaned.mask(cleaned.str.lower().isin(["", "nan", "none", "nat", "null"]), "來源未提供")
+                out[col] = cleaned
+        if "revenue_month" not in out.columns:
+            out["revenue_month"] = ""
+        out["revenue_month"] = out["revenue_month"].astype(str).map(normalize_revenue_month)
         return out
+
+    mops_df = get_mops_monthly_revenue(stock_id)
 
     try:
         y_url = f"https://tw.stock.yahoo.com/quote/{stock_id}/revenue"
@@ -1223,27 +1567,47 @@ def get_monthly_revenue(stock_id, fm_key=""):
                 valid_revs = [r for r in rev_list if isinstance(r.get('yearMonth'), str) and re.match(r'\d{4}/\d{2}', r.get('yearMonth'))]
 
                 if valid_revs:
-                    valid_revs.sort(key=lambda x: x['yearMonth'], reverse=True)
-                    latest = valid_revs[0]
-                    mon = latest.get('yearMonth')
-
                     def get_raw(field):
-                        val = latest.get(field)
+                        val = field
                         if isinstance(val, dict): return val.get('raw', 0)
                         return float(val) if val is not None else 0
 
-                    rev_raw = get_raw('revenue')
-                    yoy_raw = get_raw('yearOverYear')
-                    mom_raw = get_raw('monthOverMonth')
+                    rows = []
+                    for item in valid_revs:
+                        mon = item.get('yearMonth')
+                        rev_raw = get_raw(item.get('revenue'))
+                        if mon and rev_raw:
+                            rows.append({
+                                "date": f"{mon.replace('/', '-')}-01",
+                                "revenue": rev_raw,
+                                "_source_yoy": get_raw(item.get('yearOverYear')),
+                                "_source_mom": get_raw(item.get('monthOverMonth')),
+                            })
 
-                    if mon and rev_raw:
-                        df = pd.DataFrame([{
-                            'Month': mon,
-                            'Revenue': round(rev_raw / 100000000, 2),
-                            'YoY': round(yoy_raw * 100, 2),
-                            'MoM': round(mom_raw * 100, 2)
-                        }])
-                        return _standardize_revenue_df(df, source="Yahoo 股市月營收", source_url=y_url)
+                    growth_df = build_monthly_revenue_growth_frame(pd.DataFrame(rows), "date", "revenue")
+                    if not growth_df.empty:
+                        final_df = growth_df.dropna(subset=["YoY"]).tail(12).copy()
+                        if final_df.empty:
+                            latest = growth_df.iloc[-1].copy()
+                            matching = pd.DataFrame(rows)
+                            latest_row = matching.sort_values("date").iloc[-1] if not matching.empty else {}
+                            latest["YoY"] = s_float(latest_row.get("_source_yoy")) * 100 if s_float(latest_row.get("_source_yoy")) is not None else None
+                            latest["MoM"] = s_float(latest_row.get("_source_mom")) * 100 if s_float(latest_row.get("_source_mom")) is not None else None
+                            latest["monthly_revenue_yoy"] = latest["YoY"]
+                            latest["monthly_revenue_mom"] = latest["MoM"]
+                            final_df = pd.DataFrame([latest])
+                        if not final_df.empty:
+                            final_df['Revenue'] = pd.to_numeric(final_df['Revenue'], errors='coerce').round(2)
+                            final_df['YoY'] = pd.to_numeric(final_df['YoY'], errors='coerce').round(2)
+                            final_df['MoM'] = pd.to_numeric(final_df['MoM'], errors='coerce').round(2)
+                            final_df = final_df[['Month', 'Revenue', 'YoY', 'MoM', 'monthly_revenue', 'monthly_revenue_yoy', 'monthly_revenue_mom', 'source_rule']].reset_index(drop=True)
+                            yahoo_df = _standardize_revenue_df(
+                                final_df,
+                                source="Yahoo 股市月營收",
+                                source_url=y_url,
+                                source_rule="Yahoo monthly revenue yearMonth; same-month YoY/MoM; not yfinance revenueGrowth",
+                            )
+                            return merge_mops_latest_revenue(yahoo_df, mops_df)
     except Exception as e:
         log_exception("Yahoo", f"get_monthly_revenue:yahoo:{stock_id}", e)
 
@@ -1265,21 +1629,25 @@ def get_monthly_revenue(stock_id, fm_key=""):
             current_month_start = pd.to_datetime(f"{today.year}-{today.month:02d}-01")
             df = df[df['date'] < current_month_start].sort_values('date').reset_index(drop=True)
             df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce')
-            if 'revenue_year_on_year_growth' in df.columns: df['YoY'] = pd.to_numeric(df['revenue_year_on_year_growth'], errors='coerce')
-            else: df['YoY'] = df['revenue'].pct_change(periods=12) * 100
-            df['MoM'] = df['revenue'].pct_change(periods=1) * 100
-            df['Month'] = df['date'].dt.strftime('%Y/%m')
-            df['Revenue'] = df['revenue'] / 100000000
-            final_df = df.dropna(subset=['YoY']).tail(12).copy()
+            growth_df = build_monthly_revenue_growth_frame(df, "date", "revenue")
+            final_df = growth_df.dropna(subset=['YoY']).tail(12).copy()
             if not final_df.empty:
                 final_df['Revenue'] = final_df['Revenue'].round(2)
                 final_df['YoY'] = final_df['YoY'].round(2)
                 final_df['MoM'] = final_df['MoM'].round(2)
-                final_df = final_df[['Month', 'Revenue', 'YoY', 'MoM']].reset_index(drop=True)
-                return _standardize_revenue_df(final_df, source="FinMind TaiwanStockMonthRevenue", source_url=url.split('&token=')[0])
+                final_df = final_df[['Month', 'Revenue', 'YoY', 'MoM', 'monthly_revenue', 'monthly_revenue_yoy', 'monthly_revenue_mom', 'source_rule']].reset_index(drop=True)
+                finmind_df = _standardize_revenue_df(
+                    final_df,
+                    source="FinMind TaiwanStockMonthRevenue",
+                    source_url=url.split('&token=')[0],
+                    source_rule="FinMind TaiwanStockMonthRevenue; same-month YoY/MoM; not yfinance revenueGrowth",
+                )
+                return merge_mops_latest_revenue(finmind_df, mops_df)
     except Exception as e:
         log_exception("FinMind", f"get_monthly_revenue:finmind:{stock_id}", e)
         log_data_health("FinMind", False, f"ERR:{str(e)[:120]}")
+    if mops_df is not None and not mops_df.empty:
+        return mops_df
     return None
 
 @st.cache_data(ttl=43200)
@@ -1610,6 +1978,68 @@ def inject_realtime_data(hist, stock_id, timeframe="D"):
     hist.index.name = 'Date'
     return hist, rt_prev
 
+
+def reconcile_price_history_with_reference(
+    primary_hist,
+    reference_hist,
+    *,
+    stock_id="",
+    primary_source="主股價來源",
+    reference_source="FinMind",
+    divergence_threshold=0.35,
+):
+    """Flag material price-source divergence without replacing the primary market price."""
+    if primary_hist is None or getattr(primary_hist, "empty", True):
+        return primary_hist, None
+    if reference_hist is None or getattr(reference_hist, "empty", True):
+        return primary_hist, None
+    try:
+        primary_close = float(primary_hist["Close"].dropna().iloc[-1])
+        reference_close = float(reference_hist["Close"].dropna().iloc[-1])
+    except Exception:
+        return primary_hist, None
+    if primary_close <= 0 or reference_close <= 0:
+        return primary_hist, None
+
+    divergence = abs(primary_close - reference_close) / reference_close
+    if divergence <= divergence_threshold:
+        return primary_hist, None
+
+    code_text = f"{stock_id} " if stock_id else ""
+    note = (
+        f"{code_text}股價來源交叉檢查：{primary_source} 最新收盤 {primary_close:.2f} "
+        f"與 {reference_source} {reference_close:.2f} 差距 {divergence*100:.1f}%，"
+        f"請確認是否為不同市場、延遲資料、還原價或來源錯置；系統不自動覆蓋現價。"
+    )
+    return primary_hist, note
+
+
+@st.cache_data(ttl=3600)
+def fetch_finmind_price_history(stock_id, fm_key="", days=1825):
+    """Fetch TaiwanStockPrice history from FinMind as price fallback / cross-check."""
+    try:
+        start_str = f"{(datetime.date.today() - datetime.timedelta(days=days)).isoformat()}"
+        url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id={stock_id}&start_date={start_str}"
+        if fm_key:
+            url += f"&token={fm_key}"
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        log_data_health("FinMind", res.status_code == 200, res.status_code)
+        data = res.json()
+        if data.get('status') == 200 and data.get('data'):
+            df = pd.DataFrame(data['data'])
+            df['Date'] = pd.to_datetime(df['date'])
+            df.rename(columns={'open':'Open','max':'High','min':'Low','close':'Close','Trading_Volume':'Volume'}, inplace=True)
+            df.set_index('Date', inplace=True)
+            out = df[['Open','High','Low','Close','Volume']].dropna()
+            if out is not None and not out.empty:
+                out.index.name = 'Date'
+                return out
+    except Exception as e:
+        log_exception("FinMind", f"fetch_finmind_price_history:{stock_id}", e)
+        log_data_health("FinMind", False, f"ERR:{str(e)[:120]}")
+    return None
+
+
 @st.cache_data(ttl=3600)
 def _get_base_stock_data(stock_id, fugle_key="", fm_key=""):
     hist = None
@@ -1661,25 +2091,24 @@ def _get_base_stock_data(stock_id, fugle_key="", fm_key=""):
                 log_exception("Yahoo", f"_get_base_stock_data:csv_fallback:{stock_id}{ext}", e)
 
     if hist is None or hist.empty:
-        try:
-            start_str = f"{(datetime.date.today() - datetime.timedelta(days=1825)).isoformat()}"
-            url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id={stock_id}&start_date={start_str}"
-            if fm_key: url += f"&token={fm_key}"
-            res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-            log_data_health("FinMind", res.status_code == 200, res.status_code)
-            data = res.json()
-            if data.get('status') == 200 and data.get('data'):
-                df = pd.DataFrame(data['data'])
-                df['Date'] = pd.to_datetime(df['date'])
-                df.rename(columns={'open':'Open','max':'High','min':'Low','close':'Close','Trading_Volume':'Volume'}, inplace=True)
-                df.set_index('Date', inplace=True)
-                hist = df[['Open','High','Low','Close','Volume']]
-                if hist is not None and not hist.empty:
-                    price_source = "FinMind fallback"
-                    fallback_notes.append("Yahoo 來源失敗，已改用 FinMind 備援股價。")
-        except Exception as e:
-            log_exception("FinMind", f"_get_base_stock_data:finmind_price:{stock_id}", e)
-            log_data_health("FinMind", False, f"ERR:{str(e)[:120]}")
+        finmind_hist = fetch_finmind_price_history(stock_id, fm_key)
+        if finmind_hist is not None and not finmind_hist.empty:
+            hist = finmind_hist
+            price_source = "FinMind fallback"
+            fallback_notes.append("Yahoo 來源失敗，已改用 FinMind 備援股價。")
+
+    if hist is not None and not hist.empty and price_source not in {"FinMind fallback", "Fugle API"}:
+        finmind_hist = fetch_finmind_price_history(stock_id, fm_key)
+        hist_checked, price_note = reconcile_price_history_with_reference(
+            hist,
+            finmind_hist,
+            stock_id=stock_id,
+            primary_source=price_source or "Yahoo/yfinance",
+            reference_source="FinMind",
+            divergence_threshold=0.35,
+        )
+        if price_note:
+            fallback_notes.append(price_note)
 
     if hist is not None and not hist.empty:
         hist.index.name = 'Date'
@@ -1707,6 +2136,19 @@ def get_stock_data(stock_id, fugle_key="", fm_key=""):
         info_data = info_data.copy()
         hist, rt_prev = inject_realtime_data(hist, stock_id, "D")
         if rt_prev is not None: info_data['previousClose'] = rt_prev
+        finmind_hist = fetch_finmind_price_history(stock_id, fm_key)
+        hist_checked, price_note = reconcile_price_history_with_reference(
+            hist,
+            finmind_hist,
+            stock_id=stock_id,
+            primary_source="即時/主股價來源",
+            reference_source="FinMind",
+            divergence_threshold=0.35,
+        )
+        if price_note:
+            notes = list(info_data.get('__fallback_notes') or [])
+            notes.append(price_note)
+            info_data['__fallback_notes'] = notes
     return hist, info_data
 
 @st.cache_data(ttl=900)

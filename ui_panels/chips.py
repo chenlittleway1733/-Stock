@@ -114,7 +114,7 @@ def render_chip_panels(*, curr_id, info, ai_shares, eff_eg):
         """
         st.markdown(clean_html(credit_html), unsafe_allow_html=True)
         with st.expander("查看融資融券明細", expanded=False):
-            st.dataframe(margin_credit.get("report"), use_container_width=True, hide_index=True)
+            st_dataframe(margin_credit.get("report"), hide_index=True)
     else:
         if not st.session_state.finmind_key:
             st.warning("⚠️ 系統無法獲取融資融券資料。請至左側上傳 `key.txt` 匯入 FinMind 金鑰。")
