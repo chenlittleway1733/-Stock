@@ -2124,9 +2124,20 @@ def build_final_operation_signal(
     pe_model_suitable = bool(industry_profile.get("pe_model_suitable", True))
     target_rank = int(target_confidence.get("rank", 1) or 1)
     pricing_pack = pricing_horizon if isinstance(pricing_horizon, dict) else {"code": str(pricing_horizon or ""), "label": str(pricing_horizon or "未判斷"), "explanation": "", "decision_rule": ""}
+    if pricing_pack.get("code") == "FY1_SOFT_OR_FY2_WATCH":
+        pricing_pack = dict(pricing_pack)
+        pricing_pack.update({
+            "code": "FY1_SOFT_PRICED",
+            "label": "FY1 樂觀定價",
+            "rank": _pricing_horizon_rank("FY1_SOFT_PRICED"),
+            "is_future_priced": False,
+            "explanation": "現價可由 FY1 一年預估 EPS × soft 樂觀倍率解釋；這是 FY1 樂觀區，不代表必須用 FY2 EPS 才能解釋。",
+            "decision_rule": "估值偏樂觀，新買需保留安全邊際；若高於可操作區間，應等待回檔或基本面再確認。",
+        })
     pricing_code = pricing_pack.get("code", "")
     pricing_label = pricing_pack.get("label", pricing_code or "未判斷")
     pricing_rank = _pricing_horizon_rank(pricing_code)
+    is_fy1_soft_priced = pricing_code in {"FY1_SOFT_PRICED", "FY1_SOFT_OR_FY2_WATCH"}
     future_pack = future_evidence if isinstance(future_evidence, dict) else {}
     future_score = s_float(future_pack.get("score"))
     future_label = future_pack.get("label", "未評分")
@@ -2150,7 +2161,9 @@ def build_final_operation_signal(
         downgrade_reasons.append("重大分歧警告達 2 項以上，需採保守估值")
     if warning_count >= 4:
         downgrade_reasons.append("系統 / AI 分歧警告較多，需降權判斷")
-    if pricing_rank == 2:
+    if is_fy1_soft_priced:
+        watch_reasons.append(f"市場定價年期為 {pricing_label}，屬 FY1 樂觀區，需檢查安全邊際")
+    elif pricing_rank == 2:
         downgrade_reasons.append(f"市場定價年期為 {pricing_label}，新買需降權")
     elif pricing_rank >= 3 and pricing_rank < 6:
         downgrade_reasons.append(f"市場定價年期為 {pricing_label}，不支援一般買進")
@@ -2199,7 +2212,9 @@ def build_final_operation_signal(
             valuation_score += 8
         elif cp > op_high:
             valuation_score -= 15
-    if pricing_rank == 2:
+    if is_fy1_soft_priced:
+        valuation_score -= 4
+    elif pricing_rank == 2:
         valuation_score -= 8
     elif pricing_rank == 3:
         valuation_score -= 16
@@ -2224,7 +2239,9 @@ def build_final_operation_signal(
         operation_score -= 8
     if target_rank <= 2:
         operation_score -= 6
-    if pricing_rank == 2:
+    if is_fy1_soft_priced:
+        operation_score -= 4
+    elif pricing_rank == 2:
         operation_score -= 8
     elif pricing_rank >= 3 and pricing_rank < 6:
         operation_score -= 14
@@ -2298,26 +2315,27 @@ def build_final_operation_signal(
         if pricing_reason not in reasons:
             reasons.append(pricing_reason)
         if pricing_rank == 2:
+            fy2_soft_policy = "現價需 FY2 soft 樂觀情境才合理；買進燈號不得直接升級，只允許既有部位續抱或回檔小量，不追價、不重倉新買。"
             if future_score is not None and future_score < 50:
                 signal = "不建議"
                 color = "#ff8c00"
-                advice = "現價需 FY2 才能解釋，但未來證據不足，不可用 FY2 支撐買進。"
+                advice = fy2_soft_policy if pricing_code == "FY2_SOFT_PRICED" else "現價需 FY2 才能解釋，但未來證據不足，不可用 FY2 支撐買進。"
             elif future_score is not None and future_score >= 80:
                 if signal != "不建議":
                     signal = "資料分歧-降權判斷"
                     color = "#ff9900"
-                    advice = "現價需 FY2 / 樂觀情境才合理；未來證據高度落地時，只能小部位或既有持股續抱，不宜重倉新買。"
+                    advice = fy2_soft_policy if pricing_code == "FY2_SOFT_PRICED" else "現價需 FY2 / 樂觀情境才合理；未來證據高度落地時，只能小部位或既有持股續抱，不宜重倉新買。"
                 else:
-                    advice = "新買不追；若是低成本既有部位，可續抱觀察 EPS / 營收是否持續落地並設定風控。"
+                    advice = fy2_soft_policy if pricing_code == "FY2_SOFT_PRICED" else "新買不追；若是低成本既有部位，可續抱觀察 EPS / 營收是否持續落地並設定風控。"
             elif future_score is not None and future_score >= 60:
                 if signal in {"可買-小量分批", "資料分歧-降權判斷"}:
                     signal = "觀望-資料待確認"
                     color = "#FFD700"
-                    advice = "現價已提前反映 FY2，證據逐步形成但安全邊際不足；新買等回檔或 EPS / 營收再確認。"
+                    advice = fy2_soft_policy if pricing_code == "FY2_SOFT_PRICED" else "現價已提前反映 FY2，證據逐步形成但安全邊際不足；新買等回檔或 EPS / 營收再確認。"
             elif signal == "可買-小量分批":
                 signal = "不建議"
                 color = "#ff8c00"
-                advice = "現價需 FY2 才能解釋，但未來證據尚未評分，不可直接用 FY2 支撐買進。"
+                advice = fy2_soft_policy if pricing_code == "FY2_SOFT_PRICED" else "現價需 FY2 才能解釋，但未來證據尚未評分，不可直接用 FY2 支撐買進。"
         elif pricing_rank >= 3:
             if future_score is not None and future_score >= 80 and signal != "不建議":
                 signal = "觀望-資料待確認"
@@ -3130,7 +3148,8 @@ def _pricing_horizon_rank(code):
     order = {
         "TTM_PRICED": 0,
         "FY1_PRICED": 1,
-        "FY1_SOFT_OR_FY2_WATCH": 2,
+        "FY1_SOFT_PRICED": 1,
+        "FY1_SOFT_OR_FY2_WATCH": 1,
         "FY2_PRICED": 2,
         "FY2_SOFT_PRICED": 2,
         "THEME_RE_RATING": 3,
@@ -3197,11 +3216,11 @@ def infer_pricing_horizon(
     if supported(fy1, base):
         return pack("FY1_PRICED", "FY1 定價", "現價需 FY1 一年預估 EPS × base 倍率才可解釋。", "可分批，但需追蹤 FY1 EPS 是否兌現。")
     if supported(fy1, soft):
-        return pack("FY1_SOFT_OR_FY2_WATCH", "FY1 樂觀 / FY2 觀察", "現價需 FY1 soft 樂觀倍率才可解釋，已接近市場先行定價。", "新買需降權，既有部位需看未來證據。")
+        return pack("FY1_SOFT_PRICED", "FY1 樂觀定價", "現價可由 FY1 一年預估 EPS × soft 樂觀倍率解釋；這是 FY1 樂觀區，不代表必須用 FY2 EPS 才能解釋。", "估值偏樂觀，新買需保留安全邊際；若高於可操作區間，應等待回檔或基本面再確認。")
     if supported(fy2, base):
         return pack("FY2_PRICED", "FY2 先行定價", "現價需 FY2 第二年預估 EPS × base 倍率才可解釋。", "新買自動降權，只能小部位或既有持股續抱觀察。")
     if supported(fy2, soft):
-        return pack("FY2_SOFT_PRICED", "FY2 樂觀先行定價", "現價需 FY2 第二年預估 EPS × soft 樂觀倍率才可解釋。", "新買需明顯降權；只有 EPS、毛利率與法人共識持續上修時，既有部位才可續抱。")
+        return pack("FY2_SOFT_PRICED", "FY2 樂觀先行定價", "現價需 FY2 第二年預估 EPS × soft 樂觀倍率才可解釋。", "買進燈號不得直接升級，需降權；只允許既有部位續抱或回檔小量，需追蹤 EPS、毛利率與法人共識是否持續上修。")
     if supported(fy2, hard):
         return pack("FY2_HARD_PRICED", "FY2 極限先行定價", "現價需 FY2 第二年預估 EPS × hard 極限倍率才可解釋。", "屬高風險先行定價，不支援一般新買；需等回檔或 EPS 再上修。")
     if supported(fy3, base):

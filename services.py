@@ -13,6 +13,7 @@ import re
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
+from html.parser import HTMLParser
 
 import pandas as pd
 import requests
@@ -1315,6 +1316,67 @@ def parse_mops_monthly_revenue_csv(csv_text, stock_id, market_label="", source_u
     return latest.reset_index(drop=True)
 
 
+class _SimpleHtmlTableParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.tables = []
+        self._table = None
+        self._row = None
+        self._cell = None
+        self._in_cell = False
+
+    def handle_starttag(self, tag, attrs):
+        tag = tag.lower()
+        if tag == "table":
+            self._table = []
+        elif tag == "tr" and self._table is not None:
+            self._row = []
+        elif tag in {"td", "th"} and self._row is not None:
+            self._cell = []
+            self._in_cell = True
+
+    def handle_data(self, data):
+        if self._in_cell and self._cell is not None:
+            self._cell.append(data)
+
+    def handle_endtag(self, tag):
+        tag = tag.lower()
+        if tag in {"td", "th"} and self._in_cell and self._row is not None:
+            text = " ".join("".join(self._cell or []).split())
+            self._row.append(text)
+            self._cell = None
+            self._in_cell = False
+        elif tag == "tr" and self._table is not None and self._row:
+            self._table.append(self._row)
+            self._row = None
+        elif tag == "table" and self._table is not None:
+            if self._table:
+                self.tables.append(self._table)
+            self._table = None
+
+
+def _read_html_tables_with_fallback(html):
+    try:
+        return pd.read_html(io.StringIO(html))
+    except Exception:
+        parser = _SimpleHtmlTableParser()
+        try:
+            parser.feed(html)
+        except Exception:
+            return []
+        tables = []
+        for rows in parser.tables:
+            if not rows:
+                continue
+            width = max(len(row) for row in rows)
+            padded = [row + [""] * (width - len(row)) for row in rows]
+            header = padded[0]
+            body = padded[1:] if len(padded) > 1 else []
+            if body:
+                tables.append(pd.DataFrame(body, columns=header))
+        return tables
+
+
 def parse_mops_monthly_revenue_html(html, stock_id, revenue_month):
     """Parse one MOPS monthly revenue page for a single stock.
 
@@ -1322,9 +1384,8 @@ def parse_mops_monthly_revenue_html(html, stock_id, revenue_month):
     """
     if not html or not stock_id:
         return pd.DataFrame()
-    try:
-        tables = pd.read_html(io.StringIO(html))
-    except Exception:
+    tables = _read_html_tables_with_fallback(html)
+    if not tables:
         return pd.DataFrame()
 
     period = pd.Period(str(revenue_month).replace("/", "-"), freq="M")

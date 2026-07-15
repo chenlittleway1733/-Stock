@@ -178,6 +178,42 @@ def _safe_float_for_profile(v, default=None):
         return default
 
 
+def _hybrid_override_weight(hybrid, key, default_weight):
+    """Allow selected cap fields to use a safer weight than the headline hybrid exposure."""
+    if not isinstance(hybrid, dict):
+        return default_weight
+    aliases = {
+        "base_pe": ("base_weight", "base_pe_weight"),
+        "floor_pe": ("floor_weight", "floor_pe_weight"),
+        "soft_ceiling_pe": ("soft_weight", "soft_ceiling_weight", "soft_ceiling_pe_weight"),
+        "hard_ceiling_pe": ("hard_weight", "hard_ceiling_weight", "hard_ceiling_pe_weight"),
+    }.get(key, (f"{key}_weight",))
+    raw = None
+    for alias in aliases:
+        if hybrid.get(alias) is not None:
+            raw = hybrid.get(alias)
+            break
+    weight = _safe_float_for_profile(raw, default_weight)
+    return max(0.0, min(weight or 0.0, 0.50))
+
+
+def _format_hybrid_taxons_text(hybrid_taxons):
+    parts = []
+    for h in hybrid_taxons or []:
+        if not isinstance(h, dict):
+            continue
+        taxon = str(h.get("taxon") or "").strip()
+        if not taxon:
+            continue
+        weight = max(0.0, min(_safe_float_for_profile(h.get("weight"), 0.0) or 0.0, 0.50))
+        text = f"{taxon} {weight:.0%}"
+        hard_weight = _hybrid_override_weight(h, "hard_ceiling_pe", weight)
+        if abs(hard_weight - weight) > 1e-9:
+            text += f"（hard {hard_weight:.0%}）"
+        parts.append(text)
+    return "；".join(parts) if parts else "—"
+
+
 def _compute_hybrid_cap_display(profile):
     """第 17-C-7C-1：供 UI/提示詞顯示混合後 base / floor / soft / hard。
 
@@ -215,7 +251,7 @@ def _compute_hybrid_cap_display(profile):
         if w <= 0:
             continue
         ht = get_taxonomy(taxon)
-        valid.append((taxon, w, ht, h.get("reason", "")))
+        valid.append({"taxon": taxon, "weight": w, "taxonomy": ht, "source": h, "reason": h.get("reason", "")})
         total_w += w
         if total_w >= 0.50:
             break
@@ -228,8 +264,18 @@ def _compute_hybrid_cap_display(profile):
     def mix(key, primary_val):
         if primary_val is None:
             return None
-        out = primary_val * primary_w
-        for _, w, ht, _ in valid:
+        key_weights = []
+        key_total_w = 0.0
+        for item in valid:
+            w = _hybrid_override_weight(item.get("source"), key, item.get("weight", 0.0))
+            if key_total_w + w > 0.50:
+                w = max(0.0, 0.50 - key_total_w)
+            key_weights.append(w)
+            key_total_w += w
+        key_primary_w = 1.0 - key_total_w
+        out = primary_val * key_primary_w
+        for item, w in zip(valid, key_weights):
+            ht = item.get("taxonomy") or {}
             hv = _safe_float_for_profile(ht.get(key))
             if hv is not None:
                 out += hv * w
@@ -239,7 +285,10 @@ def _compute_hybrid_cap_display(profile):
     mixed_floor = mix("floor_pe", primary_floor)
     mixed_soft = mix("soft_ceiling_pe", primary_soft)
     mixed_hard = mix("hard_ceiling_pe", primary_hard)
-    parts = [f"主分類 {primary_w:.0%}"] + [f"{taxon} {w:.0%}" for taxon, w, _, _ in valid]
+    parts = [f"主分類 {primary_w:.0%}"] + [f"{item.get('taxon')} {item.get('weight', 0.0):.0%}" for item in valid]
+    if any(abs(_hybrid_override_weight(item.get("source"), "hard_ceiling_pe", item.get("weight", 0.0)) - item.get("weight", 0.0)) > 1e-9 for item in valid):
+        hard_total_w = sum(_hybrid_override_weight(item.get("source"), "hard_ceiling_pe", item.get("weight", 0.0)) for item in valid)
+        parts.append(f"hard ceiling 權重另計：主分類 {1.0 - min(hard_total_w, 0.50):.0%}")
     return {
         "enabled": True,
         "original_text": f"{primary_floor:g}x / {primary_soft:g}x / {primary_hard:g}x",
@@ -266,6 +315,7 @@ def get_industry_valuation_profile(stock_id, stock_name="", sector="", industry=
     sid = _safe_str(stock_id).strip()
     category = _read_stocklist_category(sid)
     mapping = STOCK_MAPPING.get(sid)
+    mapping_extra = mapping if isinstance(mapping, dict) else {}
     ai_ic = _extract_ai_industry_classification(ai_financials)
     ai_ic_applied = False
 
@@ -317,11 +367,16 @@ def get_industry_valuation_profile(stock_id, stock_name="", sector="", industry=
         "themes": themes,
         "themes_text": "、".join(themes) if themes else "—",
         "hybrid_taxons": hybrid_taxons,
-        "hybrid_taxons_text": "；".join([f"{h.get('taxon')} {float(h.get('weight', 0) or 0):.0%}" for h in hybrid_taxons if isinstance(h, dict)]) if hybrid_taxons else "—",
+        "hybrid_taxons_text": _format_hybrid_taxons_text(hybrid_taxons),
         "hybrid_cap_display": hybrid_cap_display,
         "hybrid_mixed_caps_text": hybrid_cap_display.get("mixed_text", "—"),
         "hybrid_original_caps_text": hybrid_cap_display.get("original_text", "—"),
         "hybrid_note": hybrid_cap_display.get("reason", "—"),
+        "re_rating_status": mapping_extra.get("re_rating_status", ""),
+        "re_rating_status_label": mapping_extra.get("re_rating_status_label", mapping_extra.get("re_rating_status", "")),
+        "pricing_horizon_policy": mapping_extra.get("pricing_horizon_policy", ""),
+        "hard_ceiling_policy": mapping_extra.get("hard_ceiling_policy", ""),
+        "disable_market_hard_overlay": bool(mapping_extra.get("disable_market_hard_overlay", False)),
         "matched_category": category or "未在 stocklist.txt 找到分類",
         "stocklist_category": category or "未在 stocklist.txt 找到分類",
         "mapping_source": mapping_source,
@@ -375,6 +430,9 @@ def build_industry_valuation_model_report(profile):
         {"項目": "AI 建議分類依據", "內容": p.get("ai_classification_reason", "—") or "—"},
         {"項目": "stocklist 分類", "內容": p.get("matched_category", "—")},
         {"項目": "題材標籤", "內容": p.get("themes_text", "—")},
+        {"項目": "模型重評價狀態", "內容": p.get("re_rating_status_label") or p.get("re_rating_status") or "—"},
+        {"項目": "重評價操作規則", "內容": p.get("pricing_horizon_policy") or "—"},
+        {"項目": "hard ceiling 政策", "內容": p.get("hard_ceiling_policy") or "—"},
         {"項目": "主要估值方式", "內容": p.get("primary_valuation", "—")},
         {"項目": "次要估值方式", "內容": "、".join(p.get("secondary_valuation", [])) if isinstance(p.get("secondary_valuation"), list) else p.get("secondary_valuation", "—")},
         {"項目": "優先觀察指標", "內容": p.get("primary_metrics", "—")},

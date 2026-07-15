@@ -1,7 +1,7 @@
 產業估值模型說明文件
-版本：17-C-22
-模型建立日期：2026-06-20
-狀態：已完成 M10 margin benchmark 導入；base/soft/hard 倍率不因本次導入改動，Dynamic Cap 只用毛利率 / 營益率 benchmark 作品質係數守門、風險提示、UI 顯示與打包提示詞同步。
+版本：taxonomy 17-C-22 / Dynamic Cap 17-C-23
+模型建立日期：2026-06-23
+狀態：已完成 M10 margin benchmark 導入，並新增 hybrid 欄位級權重。base/soft 可反映副成長曲線，但 hard ceiling 可獨立鎖住；聯發科 2454 已加入 Cloud AI ASIC 重評價觀察，且不因股價先漲而上調 hard ceiling。
 
 一、模型目的
 
@@ -17,9 +17,9 @@
 
 二、目前資料盤點
 
-截至 2026-06-08：
-- stocklist.txt 股票數：275
-- stock_mapping.py 股票數：275
+截至 2026-06-23：
+- stocklist.txt 股票數：276
+- stock_mapping.py 股票數：276
 - industry_taxonomy.py 產業分類數：127
 - hybrid_taxons 條目數：24
 - 目前檢查結果：stocklist 與 stock_mapping 無缺碼、無重複碼；primary_taxon 與 hybrid taxon 皆可在 taxonomy 中找到。
@@ -34,7 +34,7 @@
 | model_data/*.json | M10 / M12 外部模型資料匯入層；目前包含 90 類 margin taxonomy、275 檔個股 margin metadata、157 檔估值 universe 與 margin 規則 |
 | model_data_loader.py | 讀取 M10 margin benchmark，轉換百分比口徑，輸出可掛載到 industry_profile 的 metadata |
 | industry_model.py | 整合個股分類、產業參數與 M10 margin benchmark，產生 industry_profile，並輸出模型建立日期與維護提醒 |
-| dynamic_cap_model.py | Dynamic Cap 2.0 核心計算：成長、品質、題材、規模、資料可信度與風險折扣；17-C-22 起會讀取 M10 margin benchmark 作為品質係數守門 |
+| dynamic_cap_model.py | Dynamic Cap 2.0 核心計算：成長、品質、題材、規模、資料可信度與風險折扣；17-C-22 起會讀取 M10 margin benchmark 作為品質係數守門，17-C-23 起支援 hybrid 欄位級權重與個股市場 hard overlay 關閉 |
 | utils.py | EPS 拆欄、Forward EPS 分層估值、公式估值/可操作估值分離、快照稽核、AI JSON 驗證 |
 | ui_main.py | Streamlit 主流程；負責資料取得、估值計算串接與各面板呼叫 |
 | ui_panels/quote.py / market_trend.py | 即時報價與交易資訊、國際連動與隔日趨勢推估面板 |
@@ -59,7 +59,7 @@
    - 找不到 mapping：用 stocklist/關鍵字 fallback；若 AI 有建議分類，先標示待人工確認並套折扣。
 4. industry_model.py 從 industry_taxonomy.py 取得產業估值參數。
 5. industry_model.py 呼叫 model_data_loader.py，把該股 M10 margin benchmark 掛載到 industry_profile。
-6. 若該股有 hybrid_taxons，計算混合後 base/floor/soft/hard 顯示值。
+6. 若該股有 hybrid_taxons，計算混合後 base/floor/soft/hard 顯示值；若設定 hard_weight，hard ceiling 可使用不同權重。
 7. dynamic_cap_model.py 用財務資料、產業參數與 M10 margin benchmark 計算 Dynamic Cap 2.0。
 8. utils.py 建立估值分層、可操作區間、分歧警告與快照稽核表。
 9. ui_main.py 顯示模型建立日期、分類、倍率、Forward EPS 三情境、M10 margin 狀態與打包提示詞。
@@ -71,6 +71,9 @@ stock_mapping.py 欄位：
 - primary_taxon：主要估值分類，決定主要模型。
 - themes：題材標籤，只作顯示與輔助判讀，不取代主分類。
 - hybrid_taxons：混合型企業的副分類與權重。
+- re_rating_status / re_rating_status_label：個股重評價觀察狀態。
+- pricing_horizon_policy：若市場定價年期已進入 FY2 soft 等遠期情境，對買進燈號的限制。
+- hard_ceiling_policy / disable_market_hard_overlay：個股是否鎖住 hard ceiling，避免因市場先漲而反向調高模型。
 
 分類優先順序：
 1. stock_mapping.py 正式分類。
@@ -119,7 +122,16 @@ base / soft / hard 定義：
 3. hybrid_taxons 總權重最多 50%。
 4. 主分類權重 = 1 - hybrid 總權重。
 5. 混合後倍率會以主分類與副分類加權計算 base/floor/soft/hard。
-6. hybrid 權重只反映已能影響估值的成長曲線，不等於題材熱度。
+6. 17-C-23 起允許 base/floor/soft/hard 使用欄位級權重，例如 hard_weight=0 表示副分類可影響 base/soft，但不推高 hard ceiling。
+7. hybrid 權重只反映已能影響估值的成長曲線，不等於題材熱度。
+
+聯發科 2454 範例：
+- primary_taxon 保留 PLATFORM_IC_LEADER。
+- hybrid_taxons 加入 IC_DESIGN_ASIC_HIGH_VISIBILITY 35%，但 hard_weight=0。
+- re_rating_status 為 CLOUD_AI_ASIC_RE_RATING。
+- 混合後顯示為 base 35.25x / floor 21.50x / soft 52.00x / hard 60.00x。
+- 若 pricing_horizon=FY2_SOFT_PRICED，買進燈號不得直接升級，只允許既有部位續抱或回檔小量。
+- disable_market_hard_overlay=True，市場 hard overlay 不會因現價隱含 P/E 高於 hard 而調高 hard ceiling。
 
 八、Dynamic Cap 2.0 計算概念
 
@@ -251,9 +263,9 @@ AI 回傳後處理：
 十二、模型稽核與維護規則
 
 模型建立資訊目前由 industry_model.py 輸出：
-- model_build_version：17-C-22
+- model_build_version：taxonomy 17-C-22 / Dynamic Cap 17-C-23
 - model_built_at：2026-06-20
-- model_build_note：17-C-22 導入 M10 margin benchmark metadata；base/soft/hard 倍率不改，Dynamic Cap 只用毛利率 / 營益率 benchmark 作品質係數守門與風險提示。
+- model_build_note：17-C-22 導入 M10 margin benchmark metadata；17-C-23 支援 hybrid 欄位級權重與個股市場 hard overlay 關閉。
 - model_maintenance_note：建議每月做 mapping/hybrid 小檢查，每季檢查產業 base/soft/hard。
 
 建議維護節奏：
@@ -268,7 +280,7 @@ AI 回傳後處理：
 1. stocklist 管理器只會修改 stocklist.txt，不會自動同步 stock_mapping.py。
 2. 產業模型已建立最小自動化測試，並開始覆蓋 M10 loader、Dynamic Cap、prompt context 與提示詞面板 UI contract；但尚未擴充到完整瀏覽器 UI、外部 API 與端到端情境回歸測試。
 3. ui_main.py 已完成第十三階段資料組裝模組化，並補上第一批 UI 回歸測試：已抽出總覽/空白提示、股票標題/產業分類、即時報價、國際連動、打包提示詞面板、財報 AI 校對控制列、EPS/資料品質、估值明細、最終燈號、財務卡片、防禦力、法人目標價、ETF、籌碼、新聞、產業比較、估值河流圖與技術圖表面板，並新增 financial / valuation / quality / multiple / implied / prompt context，統一整理系統/FinMind/Yahoo 基礎財務資料、AI 財報快照、Dynamic Cap 採用值、分歧警告前置資料、資料品質報告 rows、倍率分層、年度估值矩陣、市場/法人隱含 Forward P/E，以及提示詞用表格/警告/來源摘要、法人目標價 fallback、Dynamic Cap/EPS/PEG/snapshot audit prompt core、ETF/防禦力/籌碼/panel sync prompt summary、模型落差/買進風險/模型庫回饋 prompt 規則與技術面 prompt suffix；後續重點改為擴充更多 UI 面板 contract與完整瀏覽器回歸測試。
-4. industry_taxonomy.py 與 dynamic_cap_model.py 已補上可讀取版本表、建立日期與目前版本 17-C-22；長期仍可把多段 update 覆寫整理為資料檔或單一建表流程。
+4. industry_taxonomy.py 與 dynamic_cap_model.py 已補上可讀取版本表；目前 taxonomy 為 17-C-22、Dynamic Cap 為 17-C-23。長期仍可把多段 update 覆寫整理為資料檔或單一建表流程。
 5. 歷史紀錄資料庫尚未啟用，因此快照稽核不能判斷連續幾次偏離。
 6. AI 建議分類仍需人工確認，不可自動覆蓋正式模型。
 
@@ -282,7 +294,7 @@ AI 回傳後處理：
 2. primary_taxon / hybrid_taxons 是否存在於 taxonomy。
 3. hybrid 權重是否落在 0%～50%，總權重是否不超過 50%。
 4. taxonomy 中 P/E 類倍率是否符合 floor <= base <= soft <= hard。
-5. industry_taxonomy.py / dynamic_cap_model.py 版本表是否存在、完整階段清單與排序是否正確，且最新版本為 17-C-22。
+5. industry_taxonomy.py / dynamic_cap_model.py 版本表是否存在、完整階段清單與排序是否正確；taxonomy 最新版本為 17-C-22，Dynamic Cap 最新版本為 17-C-23。
 6. 17-C-17 高風險倍率收斂分類是否與 Dynamic Cap 實算口徑一致，且全模型 hard ceiling 是否不再超過 82x。
 7. Dynamic Cap 2.0 是否輸出合理且受 floor/hard 約束的 forward_pe pack，並回傳最新 engine version。
 8. Forward EPS 分層是否正確計算 FY1/FY2/FY3 的 base/soft/hard 估值。
@@ -296,6 +308,7 @@ AI 回傳後處理：
 16. ETF 面板 UI 回歸：快速 ETF 持股表、AI ETF 補查表、按鈕狀態與 AI 摘要是否正常呈現。
 17. 財報面板 UI 回歸：AI 全方位校對控制列、既有 AI 財報快照、JSON 校驗警示與原始回報切換按鈕是否正常呈現。
 18. M10 margin benchmark 回歸：資料匯入 count、個股 profile 掛載、Dynamic Cap 品質係數守門、UI 顯示與打包提示詞同步。
+19. 聯發科 2454 Cloud AI ASIC 重評價回歸：primary_taxon 保留 PLATFORM_IC_LEADER、hybrid 權重 35% 但 hard_weight=0、Dynamic Cap hard ceiling 不被市場 overlay 上調、FY2_SOFT_PRICED 不升級買進燈號。
 
 執行方式：
 python -m unittest discover -s tests -v
@@ -321,7 +334,8 @@ python -m unittest discover -s tests -v
 1. 確認副成長曲線已實際影響營收、EPS、毛利率、營益率或法人目標價。
 2. 權重不可只根據市場題材熱度。
 3. 單一與總權重需遵守 50% 上限。
-4. 調整後檢查混合後 base/floor/soft/hard 是否仍合理。
+4. 若副成長線只應影響 base/soft，不應影響極限天花板，需設定 hard_weight=0 或較低 hard 權重。
+5. 調整後檢查混合後 base/floor/soft/hard 是否仍合理，並確認 Dynamic Cap 與提示詞同步。
 
 調整 M10 margin benchmark：
 1. 先確認分類是否適用製造業毛利率 / 營益率模型。

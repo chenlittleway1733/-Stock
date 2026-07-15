@@ -1725,6 +1725,9 @@ def render_main_page(sidebar_state=None):
 - 匹配模型: {_nullize_text(industry_profile.get('model_label') if isinstance(industry_profile, dict) else 'NULL')}
 - 主分類 / stocklist 分類: {_nullize_text(industry_profile.get('parent_category') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('stocklist_category') if isinstance(industry_profile, dict) else 'NULL')}
 - 題材標籤: {_nullize_text(industry_profile.get('themes_text') if isinstance(industry_profile, dict) else 'NULL')}
+- 模型重評價狀態: {_nullize_text(industry_profile.get('re_rating_status_label') if isinstance(industry_profile, dict) else 'NULL')}｜{_nullize_text(industry_profile.get('re_rating_status') if isinstance(industry_profile, dict) else 'NULL')}
+- 重評價操作規則: {_nullize_text(industry_profile.get('pricing_horizon_policy') if isinstance(industry_profile, dict) else 'NULL')}
+- hard ceiling 政策: {_nullize_text(industry_profile.get('hard_ceiling_policy') if isinstance(industry_profile, dict) else 'NULL')}
 - 產業分類來源 / 可信度 / 折扣: {_nullize_text(industry_profile.get('classification_source') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('classification_confidence') if isinstance(industry_profile, dict) else 'NULL')} / ×{_nullize_text(industry_profile.get('classification_confidence_factor') if isinstance(industry_profile, dict) else 'NULL')}
 - 是否待人工確認: {_nullize_text(industry_profile.get('classification_needs_manual_review') if isinstance(industry_profile, dict) else 'NULL')}｜{_nullize_text(industry_profile.get('classification_warning') if isinstance(industry_profile, dict) else 'NULL')}
 - AI 建議分類: {_nullize_text(industry_profile.get('ai_suggested_taxon') if isinstance(industry_profile, dict) else 'NULL')}｜{_nullize_text(industry_profile.get('ai_suggested_themes') if isinstance(industry_profile, dict) else 'NULL')}
@@ -1833,6 +1836,9 @@ def render_main_page(sidebar_state=None):
 - 是否待人工確認: {_nullize_text(industry_profile.get('classification_needs_manual_review') if isinstance(industry_profile, dict) else 'NULL')}｜{_nullize_text(industry_profile.get('classification_warning') if isinstance(industry_profile, dict) else 'NULL')}
 - AI 建議分類 / 題材: {_nullize_text(industry_profile.get('ai_suggested_taxon') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('ai_suggested_themes') if isinstance(industry_profile, dict) else 'NULL')}
 - 題材標籤: {_nullize_text(industry_profile.get('themes_text') if isinstance(industry_profile, dict) else 'NULL')}
+- 模型重評價狀態: {_nullize_text(industry_profile.get('re_rating_status_label') if isinstance(industry_profile, dict) else 'NULL')}｜{_nullize_text(industry_profile.get('re_rating_status') if isinstance(industry_profile, dict) else 'NULL')}
+- 重評價操作規則: {_nullize_text(industry_profile.get('pricing_horizon_policy') if isinstance(industry_profile, dict) else 'NULL')}
+- hard ceiling 政策: {_nullize_text(industry_profile.get('hard_ceiling_policy') if isinstance(industry_profile, dict) else 'NULL')}
 - 主要估值方式: {_nullize_text(industry_profile.get('primary_valuation') if isinstance(industry_profile, dict) else 'NULL')}；是否循環股/P-E陷阱: {_nullize_text(industry_profile.get('cyclical') if isinstance(industry_profile, dict) else 'NULL')} / {_nullize_text(industry_profile.get('pe_trap_warning') if isinstance(industry_profile, dict) else 'NULL')}
 - 主分類原始 floor / soft / hard: {_nullize_text(industry_profile.get('hybrid_original_caps_text') if isinstance(industry_profile, dict) else 'NULL')}
 - 混合產業權重: {_nullize_text(industry_profile.get('hybrid_taxons_text') if isinstance(industry_profile, dict) else 'NULL')}

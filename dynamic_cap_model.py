@@ -1,5 +1,5 @@
 """
-Dynamic Cap 2.0 係數校準模型（目前版本 17-C-22）。
+Dynamic Cap 2.0 係數校準模型（目前版本 17-C-23）。
 
 設計原則：
 - 不再採用「產業基準 + 各項絕對倍數」加總，避免倍率連續堆高。
@@ -17,8 +17,8 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-DYNAMIC_CAP_MODEL_VERSION = "17-C-22"
-DYNAMIC_CAP_MODEL_BUILD_DATE = "2026-06-20"
+DYNAMIC_CAP_MODEL_VERSION = "17-C-23"
+DYNAMIC_CAP_MODEL_BUILD_DATE = "2026-06-23"
 DYNAMIC_CAP_MODEL_ENGINE_VERSION = f"Dynamic Cap 2.0 calibration {DYNAMIC_CAP_MODEL_VERSION}"
 DYNAMIC_CAP_MODEL_VERSION_TABLE = [
     {
@@ -152,6 +152,13 @@ DYNAMIC_CAP_MODEL_VERSION_TABLE = [
         "order": 1722,
         "title": "M10 margin benchmark 品質係數守門",
         "scope": "導入 M10 毛利率 / 營益率 benchmark，區分可納入、只追蹤與不適用狀態；同步 Dynamic Cap 拆解、UI 與提示詞。",
+        "kind": "engine",
+    },
+    {
+        "stage": "17-C-23",
+        "order": 1723,
+        "title": "欄位級混合權重與 FY2 soft 風控",
+        "scope": "支援 hybrid_taxons 對 base/soft/hard 使用不同權重；聯發科 Cloud AI ASIC 重評價提高成長權重但不推高 hard ceiling。",
         "kind": "engine",
     },
 ]
@@ -757,15 +764,46 @@ def _safe_weight(x: Any) -> float:
     return max(0.0, min(float(v), 0.50))
 
 
-def _weighted_value(primary: Any, hybrids: List[Dict[str, Any]], key: str, primary_weight: float) -> Optional[float]:
+def _hybrid_weight_for_key(hybrid: Dict[str, Any], key: str) -> float:
+    base_weight = float(hybrid.get("effective_weight", hybrid.get("weight", 0)) or 0)
+    aliases = {
+        "base_pe": ("base_weight", "base_pe_weight"),
+        "floor_pe": ("floor_weight", "floor_pe_weight"),
+        "soft_ceiling_pe": ("soft_weight", "soft_ceiling_weight", "soft_ceiling_pe_weight"),
+        "hard_ceiling_pe": ("hard_weight", "hard_ceiling_weight", "hard_ceiling_pe_weight"),
+    }.get(key, (f"{key}_weight",))
+    for alias in aliases:
+        if hybrid.get(alias) is not None:
+            return _safe_weight(hybrid.get(alias))
+    return _safe_weight(base_weight)
+
+
+def _hybrid_key_weights(hybrids: List[Dict[str, Any]], key: str) -> tuple[List[float], float]:
+    weights: List[float] = []
+    total_weight = 0.0
+    for h in hybrids:
+        weight = _hybrid_weight_for_key(h, key)
+        if total_weight + weight > 0.50:
+            weight = max(0.0, 0.50 - total_weight)
+        weights.append(weight)
+        total_weight += weight
+        if total_weight >= 0.50:
+            weights.extend([0.0] * (len(hybrids) - len(weights)))
+            break
+    return weights, total_weight
+
+
+def _weighted_value(primary: Any, hybrids: List[Dict[str, Any]], key: str) -> Optional[float]:
     base = _sf(primary)
     if base is None:
         return None
+    key_weights, total_hybrid_weight = _hybrid_key_weights(hybrids, key)
+    primary_weight = 1.0 - total_hybrid_weight
     total = base * primary_weight
-    for h in hybrids:
+    for h, weight in zip(hybrids, key_weights):
         hv = _sf(h.get(key))
         if hv is not None:
-            total += hv * float(h.get("effective_weight", h.get("weight", 0)) or 0)
+            total += hv * weight
     return total
 
 
@@ -817,6 +855,14 @@ def _build_hybrid_calibration(industry_profile: Dict[str, Any], primary_calibrat
         hc["weight"] = weight
         hc["effective_weight"] = weight
         hc["reason"] = str(h.get("reason") or "")
+        for weight_key in [
+            "base_weight", "base_pe_weight",
+            "floor_weight", "floor_pe_weight",
+            "soft_weight", "soft_ceiling_weight", "soft_ceiling_pe_weight",
+            "hard_weight", "hard_ceiling_weight", "hard_ceiling_pe_weight",
+        ]:
+            if h.get(weight_key) is not None:
+                hc[weight_key] = h.get(weight_key)
         valid.append(hc)
         total_weight += weight
         if total_weight >= 0.50:
@@ -831,7 +877,7 @@ def _build_hybrid_calibration(industry_profile: Dict[str, Any], primary_calibrat
     for key in ["base_pe", "floor_pe", "soft_ceiling_pe", "hard_ceiling_pe",
                 "gross_margin_baseline", "gross_margin_good", "gross_margin_excellent",
                 "max_growth_factor", "max_quality_factor", "max_theme_factor", "max_scale_factor"]:
-        v = _weighted_value(primary_calibration.get(key), valid, key, primary_weight)
+        v = _weighted_value(primary_calibration.get(key), valid, key)
         if v is not None:
             c[key] = round(v, 4)
 
@@ -844,13 +890,30 @@ def _build_hybrid_calibration(industry_profile: Dict[str, Any], primary_calibrat
 
     note_parts = [
         f"主分類權重 {primary_weight:.0%}",
-        *[f"{h.get('taxon')} {float(h.get('effective_weight', 0)):.0%}" + (f"（{h.get('reason')}）" if h.get("reason") else "") for h in valid],
+        *[
+            f"{h.get('taxon')} {float(h.get('effective_weight', 0)):.0%}"
+            + (
+                f"（hard {_hybrid_weight_for_key(h, 'hard_ceiling_pe'):.0%}）"
+                if abs(_hybrid_weight_for_key(h, "hard_ceiling_pe") - float(h.get("effective_weight", 0) or 0)) > 1e-9
+                else ""
+            )
+            + (f"（{h.get('reason')}）" if h.get("reason") else "")
+            for h in valid
+        ],
     ]
     summary = {
         "enabled": True,
         "primary_weight": primary_weight,
         "total_hybrid_weight": total_weight,
-        "hybrids": [{"taxon": h.get("taxon"), "weight": h.get("effective_weight"), "reason": h.get("reason", "")} for h in valid],
+        "hybrids": [
+            {
+                "taxon": h.get("taxon"),
+                "weight": h.get("effective_weight"),
+                "hard_weight": _hybrid_weight_for_key(h, "hard_ceiling_pe"),
+                "reason": h.get("reason", ""),
+            }
+            for h in valid
+        ],
         "reason": "；".join(note_parts + reasons),
         "mixed_base_pe": c.get("base_pe"),
         "mixed_soft_ceiling_pe": c.get("soft_ceiling_pe"),
@@ -1507,6 +1570,9 @@ def market_condition_hard_overlay(
     if hard is None or soft is None:
         fc["market_condition_reason"] = "hard / soft ceiling 缺值，無法做市場 overlay"
         return fc
+    if p.get("disable_market_hard_overlay"):
+        fc["market_condition_reason"] = "本股設定關閉市場 hard overlay，避免因股價先漲而反向調高 hard ceiling"
+        return fc
     if cp is None or cp <= 0 or eps is None or eps <= 0:
         fc["market_condition_reason"] = "現價或 Forward EPS 缺值，維持產業結構 hard"
         return fc
@@ -1970,7 +2036,7 @@ def calculate_dynamic_cap_v2(
         "industry_profile": p,
         "m10_margin_benchmark": m10_margin_benchmark,
         "report": pd.DataFrame(rows),
-        "explanation": "Dynamic Cap 2.0 17-C-22：保留產業結構 hard，並依市場狀況產生市場調整 hard；M10 margin benchmark 只作品質係數守門與風險提示，不直接改 base/soft/hard。",
+        "explanation": "Dynamic Cap 2.0 17-C-23：保留產業結構 hard，並支援 hybrid 欄位級權重與市場調整 hard；M10 margin benchmark 只作品質係數守門與風險提示，不直接改 base/soft/hard。",
     }
 
 # ===== 第 17-C-4：Dynamic Cap 校準覆寫 =====
