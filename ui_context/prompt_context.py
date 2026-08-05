@@ -507,6 +507,8 @@ def prompt_forward_eps_tier_core(pack):
 
         lines = [
             f"- FY 定義: {prompt_nullize_text(summary.get('fy_definition'))}",
+            f"- FY 年度提示: {prompt_nullize_text(summary.get('fy_sequence_text'))}",
+            f"- 目前月份/FY2參考提示: {prompt_nullize_text(summary.get('fy_calendar_prompt_notice'))}",
             f"- 年度估值倍率 base / soft / hard: {_fmt_cap(summary.get('base_cap'))} / {_fmt_cap(summary.get('soft_cap'))} / {_fmt_cap(summary.get('hard_cap'))}",
             f"- 倍率意義: {prompt_nullize_text(summary.get('cap_definition'))}",
             f"- TTM EPS: {prompt_nullize_text(summary.get('ttm_eps'))}｜近四季已實現 EPS，用於目前實際獲利估值",
@@ -536,7 +538,7 @@ def prompt_forward_eps_tier_core(pack):
                     pass
         lines.extend([
             "- 請 AI 判斷：目前股價/法人目標價偏高，是因為 Dynamic Cap 倍率太低，還是因為市場已經在看 FY2/FY3 EPS？也請同時對照 TTM EPS，看目前實際獲利是否能支撐股價。",
-            "- 重要限制：FY1/FY2/FY3 是預估年度 EPS 序列，不是查詢日後1/2/3年；base 是基礎估值，soft 是樂觀估值，hard 是極限風控上限；FY2 只能用來解釋市場先行，不等於可操作買點；FY3 屬高風險遠期情境，不可直接作為買進目標。",
+            "- 重要限制：FY1/FY2/FY3 是預估年度 EPS 序列，不是查詢日後1/2/3年；base 是基礎估值，soft 是樂觀估值，hard 是極限風控上限；FY1_SOFT_PRICED 代表 FY1 樂觀區，不代表必須用 FY2 EPS 才能解釋；FY2 只能用來解釋市場先行，不等於可操作買點；FY3 屬高風險遠期情境，不可直接作為買進目標。",
             "- 新增規則：若 pricing_horizon 為 FY2/FY3/題材重評價，請同時檢查 future_evidence_score；證據不足時不得用 FY2/FY3 支撐買進，證據高時也只能解讀為小部位或低成本既有部位續抱。"
         ])
         return "\n".join(lines)
@@ -592,6 +594,7 @@ def prompt_peg_valuation_layers(
     fy3_soft_price=None,
     fy3_hard_price=None,
     manual_price=None,
+    current_date=None,
     fallback_text="",
 ):
     """Format Forward PEG valuation layers for prompt packs."""
@@ -612,6 +615,12 @@ def prompt_peg_valuation_layers(
             t = prompt_nullize_text(v)
             return "年期未明" if t == "NULL" else t
 
+        fy_calendar_notice = build_forward_eps_calendar_notice(
+            current_date=current_date,
+            fy1_year=fy1_year,
+            fy2_year=fy2_year,
+            fy3_year=fy3_year,
+        )
         lines = []
         source_text = prompt_nullize_text(formula_eps_source or "系統 Forward EPS")
         mismatch_note = prompt_nullize_text(forward_eps_mismatch_note)
@@ -638,6 +647,8 @@ def prompt_peg_valuation_layers(
                 "｜限制=只作 AI 高成長股獲利動能檢查，不取代 TTM、FY1 或 FY2。"
             )
         lines.append(f"- 年度情境倍率: base={_cap(base_cap)}（基礎） / soft={_cap(soft_cap)}（樂觀） / hard={_cap(hard_cap)}（極限風控上限）")
+        lines.append(f"- FY 年度提示: {prompt_nullize_text(fy_calendar_notice.get('fy_sequence_text'))}")
+        lines.append(f"- 目前月份/FY2參考提示: {prompt_nullize_text(fy_calendar_notice.get('prompt_notice'))}")
 
         for title, eps, year, base_price, soft_price, hard_price, note in [
             ("2. FY1年度估值", fy1_eps, fy1_year, fy1_base_price, fy1_soft_price, fy1_hard_price, "一年預估 EPS 的年度主估值參考。"),
@@ -649,7 +660,7 @@ def prompt_peg_valuation_layers(
                 f"｜EPS={_eps(eps)}｜年度={_year(year)}｜判讀={note}"
             )
         lines.append(f"- 5. 手動年度情境價: {_price(manual_price)}｜FY1 EPS × {prompt_nullize_text(manual_cap_source or '使用者手動 Cap')}｜EPS={_eps(fy1_eps_for_annual)}｜倍率={_cap(manual_cap)}｜判讀=壓力測試/反推現價倍率；不代表系統建議買點。")
-        lines.append("- 使用規則: 前瞻 PEG 面板不再單列 AI估值，避免與 FY1 年度估值重複；AI/法人 EPS 留在 EPS 來源與 FY 年度層。FY2 只解釋市場先行定價；FY3 是高風險遠期情境；hard 是極限風控上限，不是買進目標。")
+        lines.append("- 使用規則: 前瞻 PEG 面板不再單列 AI估值，避免與 FY1 年度估值重複；AI/法人 EPS 留在 EPS 來源與 FY 年度層。FY2 只解釋市場先行定價；FY3 是高風險遠期情境；hard 是極限風控上限，不是買進目標。7 月後需同步參考 FY2；10 月後 FY2 可作主要前瞻參考，但不得無條件支撐買進。")
         return "\n".join(lines)
     except Exception as exc:
         try:
@@ -936,6 +947,11 @@ def prompt_eps_adoption_sync_summary(
         if fy1_annual is None:
             fy1_annual = ai_forward_eps_fy1_val if ai_forward_eps_fy1_val is not None else cap_adopted_forward_eps_val
 
+        fy_calendar_notice = build_forward_eps_calendar_notice(
+            fy1_year=ai_forward_eps_fy1_year_val,
+            fy2_year=ai_forward_eps_fy2_year_val,
+            fy3_year=ai_forward_eps_fy3_year_val,
+        )
         lines = []
 
         def _has(*vals):
@@ -983,6 +999,7 @@ def prompt_eps_adoption_sync_summary(
             lines.append(f"- FY2 EPS: {_num(ai_forward_eps_fy2_val)}｜年度={_year(ai_forward_eps_fy2_year_val)}｜用於『FY2第二年度估值』，只判斷市場先行定價")
         if _has(ai_forward_eps_fy3_val):
             lines.append(f"- FY3 EPS: {_num(ai_forward_eps_fy3_val)}｜年度={_year(ai_forward_eps_fy3_year_val)}｜用於高風險遠期情境，不可直接當買點")
+        lines.append(f"- FY 年度/月份提示: {prompt_nullize_text(fy_calendar_notice.get('prompt_notice'))}")
         if _has(ai_f_eps_calc_val):
             lines.append(f"- AI/法人 Forward EPS 採用值: {_num(ai_f_eps_calc_val)}（只作來源與交叉檢查；不再單列 AI估值，避免與 FY1 重複）")
         if _has(fy1_annual):
@@ -1031,7 +1048,7 @@ def prompt_eps_adoption_sync_summary(
                 price_parts.append(f"{label}={_price(value)}")
         if price_parts:
             lines.append("- 新版估值結果: " + "；".join(price_parts))
-        lines.append("- 重要規則: 公式合理估值原則上使用系統 Forward EPS；若偵測到系統 Forward EPS 疑似 FY2 年期錯位，公式價降權採 FY1 EPS，系統原始公式價只作追蹤；目前估值使用最新單季 EPS 年化，缺值才退回 TTM EPS，用於目前獲利支撐度檢查；Run-rate EPS 用近一季/近二季年化檢查 AI 高成長動能，但不得取代 TTM、FY1 或 FY2；系統 Forward EPS 缺值時為 NULL，不得用 AI/FY1 冒充系統公式；前瞻 PEG 不再單列 AI估值；FY1/FY2/FY3 各列 base/soft/hard，分別為基礎/樂觀/極限；手動年度情境以 FY1 EPS 為主，未手動調整時採 FY1 base。")
+        lines.append("- 重要規則: 公式合理估值原則上使用系統 Forward EPS；若偵測到系統 Forward EPS 疑似 FY2 年期錯位，公式價降權採 FY1 EPS，系統原始公式價只作追蹤；目前估值使用最新單季 EPS 年化，缺值才退回 TTM EPS，用於目前獲利支撐度檢查；Run-rate EPS 用近一季/近二季年化檢查 AI 高成長動能，但不得取代 TTM、FY1 或 FY2；系統 Forward EPS 缺值時為 NULL，不得用 AI/FY1 冒充系統公式；前瞻 PEG 不再單列 AI估值；FY1/FY2/FY3 各列 base/soft/hard，分別為基礎/樂觀/極限；手動年度情境以 FY1 EPS 為主，未手動調整時採 FY1 base；7 月後需同步參考 FY2，10 月後 FY2 可作主要前瞻參考，但不得無條件支撐買進。")
         return "\n".join(lines) if lines else "無可用 EPS 面板資料，提示詞不納入 EPS 估值判斷。"
     except Exception as exc:
         try:
@@ -1287,6 +1304,7 @@ def prompt_model_gap_trigger_conditions():
 - 不可因股價高於模型價就直接調高模型。
 - 不可因單一法人高標就調高模型。
 - FY2 只能解釋市場先行定價，不等於買點。
+- FY1_SOFT_PRICED 只是 FY1 樂觀區或安全邊際不足，不可誤判為 FY2 先行定價。
 - FY3 只作高風險遠期情境，不可作一般買進依據。
 - future_evidence_score 低於 50 時，不得用 FY2/FY3 合理化現價；60-79 只能續抱或小量，80 以上也不可直接重倉。
 - 若建議調整模型，必須說明是 primary_taxon、hybrid 權重，還是 base / soft / hard ceiling 的問題。"""
@@ -1316,6 +1334,7 @@ def prompt_buy_decision_gap_risk_conditions():
 重要限制：
 - 本區不是模型庫修正建議，只用於買進風險判斷。
 - FY2 只能解釋市場先行定價，不等於買點。
+- FY1_SOFT_PRICED 只是 FY1 樂觀區或安全邊際不足，不可誤判為 FY2 先行定價。
 - FY3 只作高風險遠期情境，不可作一般買進依據。
 - future_evidence_score 低於 50 時，不可用 FY2/FY3 支撐買進；60-79 僅能保守續抱或等待確認；80 以上仍需分批與控倉。
 - 法人高標不可直接視為合理買進價。
@@ -1334,6 +1353,9 @@ def prompt_model_library_feedback_request(industry_profile=None):
         confidence = prompt_nullize_text(industry_profile.get("classification_confidence"))
         hard_cap = prompt_nullize_text(industry_profile.get("hard_ceiling_pe"))
         soft_cap = prompt_nullize_text(industry_profile.get("soft_ceiling_pe"))
+        re_rating_status = prompt_nullize_text(industry_profile.get("re_rating_status_label") or industry_profile.get("re_rating_status"))
+        pricing_policy = prompt_nullize_text(industry_profile.get("pricing_horizon_policy"))
+        hard_policy = prompt_nullize_text(industry_profile.get("hard_ceiling_policy"))
 
         lines = [
             "本區只放在研究完整版；目的不是產生買賣建議，而是把本次個案分析整理成模型庫修正候選清單。",
@@ -1341,6 +1363,9 @@ def prompt_model_library_feedback_request(industry_profile=None):
             f"- 目前匹配模型: {model_label}",
             f"- 目前 hybrid_taxons / 權重: {hybrid_taxons}",
             f"- 混合後估值區間: {mixed_caps}",
+            f"- 模型重評價狀態: {re_rating_status}",
+            f"- 重評價操作規則: {pricing_policy}",
+            f"- hard ceiling 政策: {hard_policy}",
             f"- 分類來源 / 可信度: {source} / {confidence}",
             f"- 主模型 soft / hard ceiling: {soft_cap} / {hard_cap}",
             "- 可參考落差來源: 現價、法人目標價、系統可操作估值、FY1/FY2/FY3 估值、Dynamic Cap、產業模型單次快照稽核。",

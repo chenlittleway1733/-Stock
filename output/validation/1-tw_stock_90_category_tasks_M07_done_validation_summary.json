@@ -1,0 +1,66 @@
+{
+  "source": {
+    "file_name": "/tmp/codex-remote-attachments/019ea18f-edfd-74a2-ab28-6f0bc8ff5582/FD259339-9082-4191-A477-AA7F57EE1D14/1-tw_stock_90_category_tasks_M07_done.xlsx",
+    "file_type": "excel",
+    "sheet_name": "M03模型主表_clean",
+    "available_sheets": [
+      "Dashboard",
+      "90分類任務",
+      "股票明細",
+      "資料源與口徑",
+      "M01資料品質規則",
+      "M02分流總覽",
+      "M02可投資分析清單",
+      "M02分類追蹤清單",
+      "M02排除清單",
+      "M03匯出總覽",
+      "M03模型主表_clean",
+      "M03估值AB_clean",
+      "M03產業分類_taxonomy",
+      "M03排除映射_rules",
+      "M03欄位字典",
+      "M04匯出總覽",
+      "M04程式檔案清單",
+      "M05缺值複核總覽",
+      "M05優先複核清單",
+      "M05C級完整清單",
+      "M05分類缺值統計",
+      "M05補資料規則",
+      "M06規則總覽",
+      "M06估值AB_scored",
+      "M06規則引擎_config",
+      "M06風險旗標統計",
+      "M06分類規則統計",
+      "M06程式檔案清單",
+      "M07驗證總覽",
+      "M07資料驗證清單",
+      "M07異常清單",
+      "M07分類驗證統計",
+      "M07舊代號映射_rules",
+      "M07驗證規則_config",
+      "M07程式檔案清單"
+    ]
+  },
+  "total": 275,
+  "pass_count": 220,
+  "issue_count": 55,
+  "status_counts": {
+    "PASS": 220,
+    "WARN_REVIEW": 10,
+    "EXCLUDE_OR_MAPPING": 6,
+    "FIX_REQUIRED": 39
+  },
+  "severity_counts": {
+    "low": 10,
+    "medium": 2,
+    "high": 40,
+    "critical": 3
+  },
+  "rule_counts": {
+    "V020": 10,
+    "V018": 2,
+    "V003": 39,
+    "V016": 3,
+    "V015": 1
+  }
+}

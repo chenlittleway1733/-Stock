@@ -319,10 +319,20 @@ def render_valuation_detail_panel(
             ft_summary = forward_eps_tier_pack.get("summary", {}) if isinstance(forward_eps_tier_pack, dict) else {}
             if not isinstance(ft_summary, dict):
                 ft_summary = {}
+            fy_calendar_notice_html = ""
+            if ft_summary.get("fy_calendar_ui_notice"):
+                fy_calendar_notice_html = (
+                    "<div style='background:#2A2407;color:#FDE68A;border:1px solid #6B5E12;"
+                    "padding:7px 9px;border-radius:6px;margin-top:7px;'>"
+                    f"{_nullize_text_local(ft_summary.get('fy_calendar_ui_notice'))}"
+                    "</div>"
+                )
             st.markdown(
                 "<div style='background:#111827;color:#F3F4F6;border-left:6px solid #60A5FA;padding:12px 14px;border-radius:8px;margin-bottom:10px;line-height:1.7;'>"
                 f"<div style='font-weight:bold;color:#93C5FD;'>市場 EPS 年期判讀：{ft_summary.get('market_view', '資料不足，無法判斷市場 EPS 年期')}</div>"
                 f"<div><b>FY 定義：</b>{ft_summary.get('fy_definition', 'FY1/FY2/FY3 為預估年度 EPS 序列')}</div>"
+                f"<div><b>FY 年度提示：</b>{_nullize_text_local(ft_summary.get('fy_sequence_text'))}</div>"
+                f"{fy_calendar_notice_html}"
                 f"<div><b>年度估值倍率 base / soft / hard：</b>{_nullize_text_local(ft_summary.get('base_cap'))}x / {_nullize_text_local(ft_summary.get('soft_cap'))}x / {_nullize_text_local(ft_summary.get('hard_cap'))}x｜{_nullize_text_local(ft_summary.get('cap_definition'))}</div>"
                 f"<div>TTM EPS：{_nullize_text_local(ft_summary.get('ttm_eps'))}｜近四季已實現 EPS，用於目前實際獲利估值</div>"
                 f"<div>FY1 EPS：{_nullize_text_local(ft_summary.get('fy1_eps'))}｜{_nullize_text_local(ft_summary.get('fy1_label'))}</div>"

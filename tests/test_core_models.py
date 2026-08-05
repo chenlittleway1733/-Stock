@@ -73,6 +73,29 @@ import services
 import ui_context.financial_context as financial_context
 from ai_services.financial_filler import postprocess_financial_ai_payload
 from ai_services.financial_schema import normalize_ai_source_metadata
+from ai_services.market_gateway import (
+    MARKET_AI_GATEWAY_VERSION,
+    build_market_ai_fallback_response,
+    build_market_ai_input,
+    build_market_ai_prompt,
+    parse_and_validate_market_ai_response,
+    validate_market_ai_response,
+)
+from market_backtest import (
+    MARKET_BACKTEST_VERSION,
+    build_backtest_samples,
+    evaluate_market_backtest,
+    normalize_weight_config,
+    optimize_market_weights,
+)
+from market_reports import (
+    MARKET_REPORT_VERSION,
+    build_market_alert_report,
+    build_market_alerts,
+    build_market_auto_report,
+    build_market_report_frame,
+    build_market_report_text,
+)
 from dynamic_cap_model import (
     CALIBRATION_DEFAULTS,
     build_m10_margin_benchmark_summary,
@@ -81,6 +104,16 @@ from dynamic_cap_model import (
     quality_factor_relative,
 )
 from industry_model import get_industry_valuation_profile
+from market_reasoning import (
+    append_market_reasoning_history,
+    build_market_reasoning_api_payload,
+    build_market_history_frame,
+    build_market_reasoning_report,
+    build_market_scenario_report,
+    classify_short_position,
+    calculate_market_reasoning,
+    format_market_reasoning_prompt_summary,
+)
 from model_data_loader import (
     build_margin_benchmark_profile,
     get_stock_model_margin_by_stock_id,
@@ -88,7 +121,9 @@ from model_data_loader import (
 )
 from services import (
     build_margin_credit_summary,
+    build_taifex_foreign_futures_snapshot,
     merge_mops_latest_revenue,
+    parse_taifex_futures_contracts_html,
     parse_mops_monthly_revenue_csv,
     parse_mops_monthly_revenue_html,
     reconcile_price_history_with_reference,
@@ -105,6 +140,14 @@ from ui_context.prompt_context import (
     prompt_technical_suffix,
 )
 from ui_context.multiple_context import build_multiple_context
+from ui_panels.market_reasoning import (
+    MARKET_AI_ANALYSIS_KEY,
+    MARKET_AI_BUTTON_KEY,
+    MARKET_AUTO_REPORT_TEXT_KEY,
+    MARKET_AUTO_REPORT_TYPE_KEY,
+    MARKET_REASONING_HISTORY_KEY,
+    build_market_reasoning_calculation_kwargs,
+)
 from validators.candidate_review import build_financial_candidate_data as modular_build_financial_candidate_data
 from validators.financial_validation import validate_ai_financial_json as modular_validate_ai_financial_json
 from validators.stock_dataset_validation import (
@@ -124,6 +167,7 @@ from utils import (
     build_candidate_data_report,
     build_financial_candidate_data,
     build_financial_quality_report,
+    build_forward_eps_calendar_notice,
     build_ttm_eps_adoption,
     build_forward_eps_tiered_valuation_report,
     build_divergence_warnings,
@@ -189,6 +233,49 @@ class StockMappingConsistencyTests(unittest.TestCase):
                 total_weight += weight
             self.assertLessEqual(total_weight, 0.50 + 1e-9, f"{code} total hybrid weight exceeds 50%")
 
+    def test_7828_innovation_service_uses_semiconductor_test_model(self):
+        rows = {r["code"]: r for r in _parse_stocklist()}
+        self.assertIn("7828", rows)
+        self.assertEqual(rows["7828"]["name"], "創新服務")
+        self.assertIn("測試 / AOI / 自動化檢測設備", rows["7828"]["category"])
+
+        profile = get_industry_valuation_profile("7828", "創新服務")
+        self.assertEqual(profile["primary_taxon"], "TEST_AUTOMATION_EQUIPMENT")
+        self.assertEqual(profile["model_label"], "測試 / AOI / 自動化檢測設備")
+        self.assertEqual(profile["classification_source"], "stock_mapping.py")
+        self.assertEqual(profile["m10_margin_status"], "stock_not_valuation_ready")
+
+    def test_2454_cloud_ai_asic_re_rating_keeps_platform_primary_and_hard_cap_locked(self):
+        profile = get_industry_valuation_profile("2454", "聯發科")
+
+        self.assertEqual(profile["primary_taxon"], "PLATFORM_IC_LEADER")
+        self.assertEqual(profile["re_rating_status"], "CLOUD_AI_ASIC_RE_RATING")
+        self.assertIn("IC_DESIGN_ASIC_HIGH_VISIBILITY 35%（hard 0%）", profile["hybrid_taxons_text"])
+        self.assertTrue(profile["disable_market_hard_overlay"])
+        self.assertIn("FY2_SOFT_PRICED", profile["pricing_horizon_policy"])
+        self.assertAlmostEqual(profile["hybrid_cap_display"]["mixed_hard_ceiling_pe"], 60.0)
+        self.assertGreater(profile["hybrid_cap_display"]["mixed_soft_ceiling_pe"], 45.0)
+
+        cap_pack = calculate_dynamic_cap_v2(
+            stock_id="2454",
+            stock_name="聯發科",
+            current_price=5000,
+            industry_profile=profile,
+            ttm_eps=100,
+            system_forward_eps=100,
+            revenue_yoy=0.80,
+            gross_margin=0.50,
+            operating_margin=0.25,
+            roe=0.25,
+            divergence_warnings=[],
+            dq_warnings=[],
+        )
+        self.assertEqual(cap_pack["model_version"], "Dynamic Cap 2.0 calibration 17-C-23")
+        self.assertAlmostEqual(cap_pack["structural_hard_ceiling_cap"], 60.0)
+        self.assertAlmostEqual(cap_pack["hard_ceiling_cap"], 60.0)
+        self.assertFalse(cap_pack["market_condition_hard_adjustment"]["adjusted"])
+        self.assertIn("關閉市場 hard overlay", cap_pack["market_condition_hard_adjustment"]["reason"])
+
     def test_taxonomy_pe_caps_are_ordered_when_present(self):
         for taxon, profile in industry_taxonomy.INDUSTRY_TAXONOMY.items():
             base = profile.get("base_pe")
@@ -208,6 +295,469 @@ class StockMappingConsistencyTests(unittest.TestCase):
         self.assertEqual(profile.get("model_key"), "THERMAL_LIQUID_CORE")
         self.assertEqual(profile.get("taxon_key"), "THERMAL_LIQUID_CORE")
         self.assertEqual(profile.get("model_build_version"), "17-C-22")
+
+
+class MarketReasoningEngineTests(unittest.TestCase):
+    def test_bullish_global_tech_inputs_produce_risk_on_regime(self):
+        pack = calculate_market_reasoning({
+            "sox": 1.8,
+            "tsm": 1.4,
+            "ewt": 1.0,
+            "nq": 0.8,
+            "target_day": "今日",
+        })
+
+        self.assertTrue(pack["available"])
+        self.assertEqual(pack["regime"], "RISK_ON")
+        self.assertGreater(pack["direction_score"], 35)
+        self.assertLess(pack["risk_score"], 55)
+        self.assertGreater(pack["confidence_score"], 90)
+        self.assertIn("SOX", " ".join(pack["evidence"]))
+
+    def test_bearish_global_inputs_raise_risk_warning(self):
+        pack = calculate_market_reasoning({
+            "sox": -2.2,
+            "tsm": -1.8,
+            "ewt": -1.2,
+            "nq": -1.0,
+        })
+
+        self.assertTrue(pack["available"])
+        self.assertEqual(pack["regime"], "RISK_OFF")
+        self.assertLess(pack["direction_score"], -35)
+        self.assertGreater(pack["risk_score"], 55)
+        self.assertGreaterEqual(len(pack["counter_evidence"]), 4)
+
+    def test_missing_market_inputs_are_not_marked_available(self):
+        pack = calculate_market_reasoning({})
+
+        self.assertFalse(pack["available"])
+        self.assertEqual(pack["regime"], "DATA_INSUFFICIENT")
+        self.assertEqual(pack["data_quality"]["status"], "INSUFFICIENT")
+        self.assertTrue(pack["warnings"])
+
+    def test_market_reasoning_report_and_prompt_are_stable(self):
+        pack = calculate_market_reasoning({
+            "sox": 0.4,
+            "tsm": -0.2,
+            "ewt": 0.1,
+            "nq": 0.2,
+        })
+
+        report = build_market_reasoning_report(pack)
+        prompt = format_market_reasoning_prompt_summary(pack)
+
+        self.assertIn("市場方向分數", set(report["項目"]))
+        self.assertIn("資料品質", set(report["項目"]))
+        self.assertIn("市場推理模型=", prompt)
+        self.assertIn("資料品質=OK", prompt)
+
+    def test_phase2_institutional_and_margin_features_affect_scores(self):
+        chip_state = {
+            "has_institutional_data": True,
+            "f_10d": 1800,
+            "t_10d": 900,
+            "margin_credit": {
+                "available": True,
+                "risk_label": "偏熱",
+                "risk_score": 4,
+                "margin_usage_ratio": 0.62,
+                "margin_to_shares_ratio": 0.08,
+                "margin_change_5d_pct": 0.22,
+                "source": "FinMind TaiwanStockMarginPurchaseShortSale",
+            },
+        }
+        pack = calculate_market_reasoning(
+            trend_data={"sox": 0.7, "tsm": 0.5, "ewt": 0.2, "nq": 0.4},
+            chip_state=chip_state,
+        )
+        report = build_market_reasoning_report(pack)
+
+        self.assertTrue(pack["available"])
+        self.assertEqual(pack["data_quality"]["status"], "OK")
+        self.assertIn("institutional_flow", pack["data_quality"]["available_groups"])
+        self.assertIn("margin_credit", pack["data_quality"]["available_groups"])
+        self.assertGreater(pack["risk_score"], 40)
+        self.assertTrue(any("法人近10日" == item for item in report["項目"]))
+        self.assertTrue(any("信用交易風險" == item for item in report["項目"]))
+        self.assertIn("信用交易風險", " ".join(pack["counter_evidence"]))
+
+    def test_phase2_missing_chip_inputs_downgrades_quality_but_keeps_global_signal(self):
+        pack = calculate_market_reasoning(
+            trend_data={"sox": 1.0, "tsm": 0.8, "ewt": 0.6, "nq": 0.4},
+            chip_state={},
+        )
+
+        self.assertTrue(pack["available"])
+        self.assertEqual(pack["data_quality"]["status"], "PARTIAL")
+        self.assertIn("institutional_flow", pack["data_quality"]["missing_fields"])
+        self.assertIn("margin_credit", pack["data_quality"]["missing_fields"])
+
+    def test_market_reasoning_ui_defaults_to_global_scope_keys_and_ignores_stock_chip_state(self):
+        self.assertEqual(MARKET_REASONING_HISTORY_KEY, "market_reasoning_history_global")
+        self.assertEqual(MARKET_AI_ANALYSIS_KEY, "market_ai_analysis_global")
+        self.assertEqual(MARKET_AI_BUTTON_KEY, "market_ai_analysis_btn_global")
+        self.assertEqual(MARKET_AUTO_REPORT_TYPE_KEY, "market_auto_report_type_global")
+        self.assertEqual(MARKET_AUTO_REPORT_TEXT_KEY, "market_auto_report_text_global")
+
+        trend = {"sox": 0.6, "tsm": 0.4, "ewt": 0.2, "nq": 0.3}
+        futures = {"available": True, "foreign_futures_short_change": 4000, "price_change_pct": 0.2}
+        stock_chip_a = {"f_10d": 5000, "t_10d": 1000, "margin_credit": {"available": True, "risk_score": 80}}
+        stock_chip_b = {"f_10d": -5000, "t_10d": -1000, "margin_credit": {"available": True, "risk_score": 10}}
+
+        kwargs_a = build_market_reasoning_calculation_kwargs(trend, stock_chip_a, futures)
+        kwargs_b = build_market_reasoning_calculation_kwargs(trend, stock_chip_b, futures)
+        self.assertIsNone(kwargs_a["chip_state"])
+        self.assertIsNone(kwargs_b["chip_state"])
+
+        pack_a = calculate_market_reasoning(**kwargs_a)
+        pack_b = calculate_market_reasoning(**kwargs_b)
+        self.assertEqual(round(pack_a["direction_score"], 4), round(pack_b["direction_score"], 4))
+        self.assertEqual(round(pack_a["risk_score"], 4), round(pack_b["risk_score"], 4))
+        self.assertIn("futures_snapshot", pack_a["data_quality"]["available_groups"])
+
+    def test_market_reasoning_uses_taifex_short_position_in_scores(self):
+        trend = {"sox": 0.4, "tsm": 0.3, "ewt": 0.2, "nq": 0.2}
+        base = calculate_market_reasoning(trend_data=trend)
+        bearish_short = calculate_market_reasoning(
+            trend_data=trend,
+            futures_snapshot={
+                "available": True,
+                "foreign_futures_short_change": 9000,
+                "foreign_futures_net_oi_lots": -85000,
+                "price_change_pct": -0.8,
+            },
+            institutional_flow={"f_10d": -6000},
+        )
+
+        self.assertTrue(bearish_short["short_position"]["available"])
+        self.assertEqual(bearish_short["short_position"]["top_class"], "directional_bear")
+        self.assertLess(bearish_short["direction_score"], base["direction_score"])
+        self.assertGreater(bearish_short["risk_score"], base["risk_score"])
+
+    def test_short_position_classifier_identifies_hedge_when_cash_buys_and_futures_shorts_rise(self):
+        result = classify_short_position(
+            institutional_flow={"cash_net": 6200},
+            futures_snapshot={"foreign_futures_short_change": 14000, "price_change_pct": 0.2},
+        )
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["top_class"], "hedge")
+        self.assertGreater(result["probabilities"]["hedge"], result["probabilities"]["directional_bear"])
+
+    def test_short_position_classifier_requires_futures_data(self):
+        result = classify_short_position(institutional_flow={"cash_net": -3000})
+
+        self.assertFalse(result["available"])
+        self.assertIsNone(result["top_class"])
+        self.assertIn("台指期", result["message"])
+
+    def test_taifex_foreign_futures_snapshot_parses_tx_foreign_row(self):
+        html = """
+        <html><body>日期2026/07/15
+        <table>
+        <tr><th>序號</th><th>商品名稱</th><th>身份別</th><th>多方口數</th><th>多方金額</th><th>空方口數</th><th>空方金額</th><th>多空淨額口數</th><th>多空淨額金額</th><th>未平倉多方口數</th><th>未平倉多方金額</th><th>未平倉空方口數</th><th>未平倉空方金額</th><th>未平倉淨額口數</th><th>未平倉淨額金額</th></tr>
+        <tr><td>1</td><td>臺股期貨</td><td>自營商</td><td>8,774</td><td>79,913,086</td><td>10,717</td><td>97,646,365</td><td>-1,943</td><td>-17,733,279</td><td>3,941</td><td>36,404,678</td><td>4,605</td><td>42,508,599</td><td>-664</td><td>-6,103,921</td></tr>
+        <tr><td>投信</td><td>6,242</td><td>57,219,234</td><td>4,469</td><td>40,853,445</td><td>1,773</td><td>16,365,789</td><td>81,601</td><td>751,806,333</td><td>5,955</td><td>54,864,606</td><td>75,646</td><td>696,941,727</td></tr>
+        <tr><td>外資</td><td>61,727</td><td>561,690,489</td><td>60,535</td><td>551,182,103</td><td>1,192</td><td>10,508,385</td><td>7,319</td><td>67,433,521</td><td>86,876</td><td>800,498,844</td><td>-79,557</td><td>-733,065,323</td></tr>
+        </table></body></html>
+        """
+
+        row = parse_taifex_futures_contracts_html(html)
+        snapshot = build_taifex_foreign_futures_snapshot(row, price_change_pct=-0.8)
+
+        self.assertTrue(row["available"])
+        self.assertEqual(row["data_date"], "2026-07-15")
+        self.assertEqual(row["product_name"], "臺股期貨")
+        self.assertEqual(row["investor_name"], "外資")
+        self.assertEqual(snapshot["foreign_futures_net_change"], 1192)
+        self.assertEqual(snapshot["foreign_futures_short_change"], -1192)
+        self.assertEqual(snapshot["foreign_futures_short_oi_lots"], 86876)
+        self.assertEqual(snapshot["foreign_futures_net_oi_lots"], -79557)
+        self.assertIn("未平倉偏空", snapshot["net_oi_bias"])
+
+        classified = classify_short_position(futures_snapshot=snapshot)
+        self.assertEqual(classified["top_class"], "covering")
+        self.assertEqual(classified["position_label"], "未平倉重度偏空")
+        self.assertEqual(classified["flow_label"], "當日小幅回補")
+        self.assertIn("未平倉重度偏空 / 當日小幅回補", classified["display_label"])
+        self.assertIn("不代表既有空單已消失", classified["interpretation"])
+
+    def test_short_position_classifier_uses_open_interest_bias_for_hedge_or_bearish_read(self):
+        hedge = classify_short_position(
+            institutional_flow={"cash_net": 6200},
+            futures_snapshot={
+                "foreign_futures_short_change": -1200,
+                "foreign_futures_net_oi_lots": -79557,
+                "foreign_futures_long_oi_lots": 7319,
+                "foreign_futures_short_oi_lots": 86876,
+                "price_change_pct": -0.2,
+            },
+        )
+        bear = classify_short_position(
+            institutional_flow={"cash_net": -6200},
+            futures_snapshot={
+                "foreign_futures_short_change": 5200,
+                "foreign_futures_net_oi_lots": -79557,
+                "foreign_futures_long_oi_lots": 7319,
+                "foreign_futures_short_oi_lots": 86876,
+                "price_change_pct": -1.0,
+            },
+        )
+
+        self.assertTrue(hedge["available"])
+        self.assertEqual(hedge["top_class"], "hedge")
+        self.assertIn("期貨未平倉淨額", "；".join(hedge["evidence"]))
+        self.assertEqual(bear["top_class"], "directional_bear")
+
+    def test_phase3_scenarios_and_evidence_records_are_generated(self):
+        pack = calculate_market_reasoning(
+            trend_data={"sox": 1.2, "tsm": 0.9, "ewt": 0.5, "nq": 0.7},
+            chip_state={
+                "has_institutional_data": True,
+                "f_10d": 2500,
+                "t_10d": 700,
+                "margin_credit": {
+                    "available": True,
+                    "risk_label": "正常",
+                    "risk_score": 1,
+                    "margin_usage_ratio": 0.28,
+                    "margin_to_shares_ratio": 0.02,
+                    "margin_change_5d_pct": -0.05,
+                },
+            },
+        )
+
+        self.assertEqual(pack["model_version"], "V3-MR-Phase7c-20260715")
+        self.assertEqual(set(pack["scenarios"]), {"bull", "base", "bear"})
+        self.assertAlmostEqual(sum(s["probability"] for s in pack["scenarios"].values()), 1.0)
+        self.assertTrue(pack["reasoning_evidence"])
+        self.assertTrue({"signal_code", "direction", "evidence_text"}.issubset(pack["reasoning_evidence"][0]))
+
+        scenario_report = build_market_scenario_report(pack)
+        self.assertEqual(set(scenario_report["情境"]), {"多方情境", "基準情境", "空方情境"})
+        self.assertIn("觸發條件", scenario_report.columns)
+
+    def test_phase3_api_payload_matches_expected_schema(self):
+        pack = calculate_market_reasoning(
+            trend_data={"sox": -1.5, "tsm": -1.1, "ewt": -0.7, "nq": -0.8},
+            futures_snapshot={"foreign_futures_short_change": 12000, "price_change_pct": -0.9},
+            institutional_flow={"cash_net": -5200},
+            margin_credit={
+                "available": True,
+                "risk_label": "偏熱",
+                "risk_score": 4,
+                "margin_usage_ratio": 0.66,
+            },
+        )
+        payload = build_market_reasoning_api_payload(pack, trade_date="2026-07-15", analysis_id="unit-test")
+        prompt = format_market_reasoning_prompt_summary(pack)
+        report = build_market_reasoning_report(pack)
+
+        self.assertEqual(payload["analysis_id"], "unit-test")
+        self.assertEqual(payload["trade_date"], "2026-07-15")
+        self.assertEqual(payload["model_version"], "V3-MR-Phase7c-20260715")
+        self.assertIn("scenarios", payload)
+        self.assertIn("evidence", payload)
+        self.assertIn("source_snapshot", payload)
+        self.assertEqual(payload["short_position"]["top_class"], "directional_bear")
+        self.assertIn("情境=", prompt)
+        self.assertTrue(any("情境機率" == item for item in report["項目"]))
+
+    def test_phase4_dashboard_history_deduplicates_and_builds_frame(self):
+        base_pack = calculate_market_reasoning(
+            trend_data={"sox": 0.4, "tsm": 0.3, "ewt": 0.2, "nq": 0.1},
+            chip_state={
+                "f_10d": 1000,
+                "t_10d": 300,
+                "margin_credit": {"available": True, "risk_label": "正常", "risk_score": 1},
+            },
+        )
+        changed_pack = calculate_market_reasoning(
+            trend_data={"sox": -1.8, "tsm": -1.2, "ewt": -0.9, "nq": -1.0},
+            chip_state={
+                "f_10d": -1500,
+                "t_10d": -500,
+                "margin_credit": {"available": True, "risk_label": "偏熱", "risk_score": 4},
+            },
+        )
+
+        history = append_market_reasoning_history([], base_pack, stock_id="2330", stock_name="台積電")
+        history = append_market_reasoning_history(history, base_pack, stock_id="2330", stock_name="台積電")
+        history = append_market_reasoning_history(history, changed_pack, stock_id="2330", stock_name="台積電")
+        frame = build_market_history_frame(history)
+
+        self.assertEqual(len(history), 2)
+        self.assertFalse(frame.empty)
+        self.assertIn("方向", frame.columns)
+        self.assertIn("Bull", frame.columns)
+        self.assertEqual(frame.iloc[-1]["股票"], "台積電 2330")
+
+    def test_phase5_ai_gateway_builds_fixed_prompt_input(self):
+        pack = calculate_market_reasoning(
+            trend_data={"sox": 0.9, "tsm": 0.6, "ewt": 0.4, "nq": 0.5},
+            chip_state={
+                "f_10d": 1200,
+                "t_10d": 500,
+                "margin_credit": {"available": True, "risk_label": "正常", "risk_score": 1},
+            },
+        )
+
+        ai_input = build_market_ai_input(pack, stock_id="2330", stock_name="台積電")
+        prompt = build_market_ai_prompt(ai_input)
+
+        self.assertEqual(ai_input["gateway_version"], MARKET_AI_GATEWAY_VERSION)
+        self.assertEqual(ai_input["analysis_scope"]["target"], "TAIWAN_EQUITY_MARKET")
+        self.assertEqual(ai_input["stock"]["stock_id"], "2330")
+        self.assertIn("整體台股市場", ai_input["analysis_scope"]["description"])
+        self.assertIn("不得針對此單一股票", ai_input["stock"]["note"])
+        self.assertIn("整體台股市場", ai_input["rules"]["market_scope"])
+        self.assertIn("只能根據 INPUT_JSON", ai_input["rules"]["data_boundary"])
+        self.assertIn("output_schema", ai_input)
+        self.assertIn("INPUT_JSON", prompt["user_prompt"])
+        self.assertIn("不得把結論寫成針對單一股票", prompt["system_instruction"])
+        self.assertIn("不得自行上網", prompt["system_instruction"])
+
+    def test_phase5_ai_gateway_validates_good_json_response(self):
+        payload = {
+            "summary": "市場狀態偏中性但科技股外部訊號略有支撐，仍需等待法人與信用交易延續確認。",
+            "market_bias": "NEUTRAL",
+            "short_interpretation": {"top_class": "資料不足", "explanation": "缺少台指期資料", "probabilities": {}},
+            "key_evidence": ["SOX 上漲", "法人買超"],
+            "counter_evidence": ["信用交易略升溫"],
+            "scenarios": {"bull": "多方需 SOX 延續", "base": "維持震盪", "bear": "風險升高轉弱"},
+            "risk_alerts": ["期貨資料缺漏"],
+            "watch_next": ["SOX", "法人買賣超"],
+            "confidence": 68,
+            "disclaimer": "僅供研究，不構成投資建議。",
+        }
+
+        validation = validate_market_ai_response(payload)
+        parsed = parse_and_validate_market_ai_response(json.dumps(payload, ensure_ascii=False))
+
+        self.assertTrue(validation["ok"], validation["issues"])
+        self.assertTrue(parsed["ok"], parsed["issues"])
+        self.assertFalse(parsed["data"]["_fallback"])
+        self.assertEqual(parsed["data"]["market_bias"], "NEUTRAL")
+
+    def test_phase5_ai_gateway_invalid_response_falls_back_to_rule_summary(self):
+        pack = calculate_market_reasoning(
+            trend_data={"sox": -1.2, "tsm": -0.8, "ewt": -0.5, "nq": -0.6},
+            chip_state={"margin_credit": {"available": True, "risk_label": "偏熱", "risk_score": 4}},
+        )
+        ai_input = build_market_ai_input(pack, stock_id="2330", stock_name="台積電")
+
+        parsed = parse_and_validate_market_ai_response("不是 JSON", ai_input=ai_input)
+        fallback = build_market_ai_fallback_response(ai_input, reason="unit test fallback")
+
+        self.assertFalse(parsed["ok"])
+        self.assertTrue(parsed["data"]["_fallback"])
+        self.assertIn("JSON", parsed["issues"][0])
+        self.assertEqual(fallback["_gateway_version"], MARKET_AI_GATEWAY_VERSION)
+        self.assertIn(fallback["market_bias"], {"BULLISH", "NEUTRAL", "BEARISH"})
+
+    def test_phase6_backtest_requires_future_return_labels(self):
+        pack = calculate_market_reasoning(
+            trend_data={"sox": 0.5, "tsm": 0.4, "ewt": 0.2, "nq": 0.3},
+            chip_state={"f_10d": 800, "t_10d": 200, "margin_credit": {"available": True, "risk_label": "正常", "risk_score": 1}},
+        )
+        history = append_market_reasoning_history([], pack, stock_id="2330", stock_name="台積電")
+
+        result = evaluate_market_backtest(history, min_samples=3)
+
+        self.assertFalse(result["available"])
+        self.assertEqual(result["version"], MARKET_BACKTEST_VERSION)
+        self.assertEqual(result["status"], "INSUFFICIENT")
+        self.assertEqual(result["sample_count"], 0)
+        self.assertIn("future_return", result["message"])
+
+    def test_phase6_backtest_evaluates_direction_hit_rate_and_returns(self):
+        rows = [
+            {"direction_score": 35, "future_return_5d": 0.020, "bull_probability": 0.70},
+            {"direction_score": 25, "future_return_5d": 0.015, "bull_probability": 0.65},
+            {"direction_score": -30, "future_return_5d": -0.018, "bull_probability": 0.20},
+            {"direction_score": -25, "future_return_5d": -0.012, "bull_probability": 0.25},
+            {"direction_score": 5, "future_return_5d": 0.0005, "bull_probability": 0.45},
+        ]
+
+        samples = build_backtest_samples(rows)
+        result = evaluate_market_backtest(rows, min_samples=5)
+
+        self.assertEqual(len(samples), 5)
+        self.assertTrue(result["available"])
+        self.assertEqual(result["sample_count"], 5)
+        self.assertAlmostEqual(result["hit_rate"], 1.0)
+        self.assertGreater(result["avg_strategy_return"], 0)
+        self.assertLessEqual(result["max_drawdown"], 0)
+        self.assertFalse(result["report"].empty)
+
+    def test_phase6_weight_optimization_compares_candidates(self):
+        rows = [
+            {"global_direction_score": -35, "institutional_direction_score": 60, "margin_direction_score": 0, "future_return_5d": 0.020},
+            {"global_direction_score": -25, "institutional_direction_score": 55, "margin_direction_score": 0, "future_return_5d": 0.018},
+            {"global_direction_score": 40, "institutional_direction_score": -60, "margin_direction_score": -20, "future_return_5d": -0.022},
+            {"global_direction_score": 30, "institutional_direction_score": -50, "margin_direction_score": -15, "future_return_5d": -0.015},
+            {"global_direction_score": 5, "institutional_direction_score": 0, "margin_direction_score": 0, "future_return_5d": 0.0002},
+        ]
+
+        normalized = normalize_weight_config({"global": 2, "institutional": 1, "margin": 1})
+        result = optimize_market_weights(rows, min_samples=5)
+
+        self.assertAlmostEqual(sum(normalized.values()), 1.0)
+        self.assertTrue(result["available"])
+        self.assertEqual(result["version"], MARKET_BACKTEST_VERSION)
+        self.assertIsNotNone(result["best_config"])
+        self.assertIn(result["best_config"]["config_name"], {"phase6_default", "global_heavy", "chip_heavy", "risk_control"})
+        self.assertFalse(result["report"].empty)
+
+    def test_phase7_alerts_detect_risk_off_and_data_quality(self):
+        pack = calculate_market_reasoning(
+            trend_data={"sox": -3.0, "tsm": -3.0, "ewt": -2.8, "nq": -2.6},
+            chip_state={},
+        )
+
+        alerts = build_market_alerts(pack)
+        alert_codes = {item["code"] for item in alerts}
+        report = build_market_alert_report(alerts)
+
+        self.assertIn("DATA_PARTIAL", alert_codes)
+        self.assertIn("HIGH_MARKET_RISK", alert_codes)
+        self.assertIn("RISK_OFF_REGIME", alert_codes)
+        self.assertEqual(alerts[0]["severity"], "danger")
+        self.assertIn("嚴重度", report.columns)
+        self.assertIn("建議", report.columns)
+
+    def test_phase7_auto_report_contains_markdown_and_watchlist(self):
+        pack = calculate_market_reasoning(
+            trend_data={"sox": 1.1, "tsm": 0.8, "ewt": 0.4, "nq": 0.6},
+            chip_state={
+                "f_10d": 1800,
+                "t_10d": 500,
+                "margin_credit": {"available": True, "risk_label": "正常", "risk_score": 1, "margin_usage_ratio": 0.25},
+            },
+            futures_snapshot={"foreign_futures_short_change": 4000, "price_change_pct": 0.2},
+        )
+        backtest = evaluate_market_backtest([], min_samples=5)
+
+        report = build_market_auto_report(
+            pack,
+            report_type="pre_market",
+            stock_id="2330",
+            stock_name="台積電",
+            backtest_result=backtest,
+        )
+        frame = build_market_report_frame(report)
+        text = build_market_report_text(report)
+
+        self.assertEqual(report["version"], MARKET_REPORT_VERSION)
+        self.assertEqual(report["report_type_label"], "盤前報告")
+        self.assertEqual(report["stock"]["stock_id"], "2330")
+        self.assertTrue(report["alerts"])
+        self.assertTrue(report["watch_next"])
+        self.assertFalse(frame.empty)
+        self.assertIn("## 市場摘要", text)
+        self.assertIn("## 告警", text)
+        self.assertIn("台積電", text)
 
 
 class ModelVersionTableTests(unittest.TestCase):
@@ -254,9 +804,10 @@ class ModelVersionTableTests(unittest.TestCase):
             "17-C-20",
             "17-C-21",
             "17-C-22",
+            "17-C-23",
         ]
 
-        for info in (tax_info, cap_info):
+        for info in (tax_info,):
             table = info["version_table"]
             orders = [row["order"] for row in table]
             self.assertGreaterEqual(len(table), 5)
@@ -266,9 +817,18 @@ class ModelVersionTableTests(unittest.TestCase):
             self.assertEqual(table[-1]["stage"], info["latest_stage"])
             self.assertEqual(orders, sorted(orders))
 
+        table = cap_info["version_table"]
+        orders = [row["order"] for row in table]
+        self.assertGreaterEqual(len(table), 5)
+        self.assertEqual(cap_info["version"], "17-C-23")
+        self.assertEqual(cap_info["latest_stage"], "17-C-23")
+        self.assertEqual(cap_info["build_date"], "2026-06-23")
+        self.assertEqual(table[-1]["stage"], cap_info["latest_stage"])
+        self.assertEqual(orders, sorted(orders))
+
         self.assertEqual([row["stage"] for row in tax_info["version_table"]], expected_taxonomy_stages)
         self.assertEqual([row["stage"] for row in cap_info["version_table"]], expected_dynamic_cap_stages)
-        self.assertEqual(cap_info["engine_version"], "Dynamic Cap 2.0 calibration 17-C-22")
+        self.assertEqual(cap_info["engine_version"], "Dynamic Cap 2.0 calibration 17-C-23")
 
     def test_multiplier_tightening_stage_keeps_taxonomy_and_dynamic_cap_in_sync(self):
         expected_caps = {
@@ -346,7 +906,7 @@ class M10ModelDataLoaderTests(unittest.TestCase):
 
         self.assertTrue(summary["ok"], summary["issues"])
         self.assertEqual(summary["industry_category_count"], 90)
-        self.assertEqual(summary["stock_model_count"], 275)
+        self.assertEqual(summary["stock_model_count"], 276)
         self.assertEqual(summary["valuation_universe_count"], 157)
         self.assertEqual(summary["margin_quality_counts"], {"A": 37, "B": 35, "C": 15, "N/A": 3})
 
@@ -629,6 +1189,34 @@ class FieldSourcePriorityTests(unittest.TestCase):
         self.assertIn("yfinance trailingEps 僅作備援", ttm["採用規則"])
         self.assertIn("標準化成倍數", de["採用規則"])
         self.assertIn("D/E > 8", de["校驗/降權規則"])
+
+    def test_forward_eps_calendar_notice_flags_h2_and_q4_without_changing_fy_sequence(self):
+        june = build_forward_eps_calendar_notice(
+            current_date="2026-06-15",
+            fy1_year="2026",
+            fy2_year="2027",
+            fy3_year="2028",
+        )
+        july = build_forward_eps_calendar_notice(
+            current_date="2026-07-15",
+            fy1_year="2026",
+            fy2_year="2027",
+            fy3_year="2028",
+        )
+        october = build_forward_eps_calendar_notice(
+            current_date="2026-10-15",
+            fy1_year="2026",
+            fy2_year="2027",
+            fy3_year="2028",
+        )
+
+        self.assertEqual(june["phase"], "h1_fy1_primary")
+        self.assertEqual(june["ui_notice"], "")
+        self.assertEqual(july["fy_sequence_text"], "FY1=2026E / FY2=2027E / FY3=2028E")
+        self.assertIn("同步參考 FY2", july["ui_notice"])
+        self.assertEqual(october["phase"], "q4_fy2_primary_reference")
+        self.assertIn("FY2 作主要前瞻參考", october["ui_notice"])
+        self.assertIn("FY1/FY2/FY3 EPS 計算方式不變", october["prompt_notice"])
 
     def test_financial_base_context_uses_monthly_yoy_not_yfinance_revenue_growth(self):
         old_monthly = financial_context.get_monthly_revenue
@@ -1213,7 +1801,7 @@ class ValuationLogicTests(unittest.TestCase):
         self.assertGreater(pack.get("final_cap"), 0)
         self.assertGreaterEqual(pack.get("final_cap"), pack.get("floor_cap"))
         self.assertLessEqual(pack.get("final_cap"), pack.get("hard_ceiling_cap"))
-        self.assertEqual(pack.get("model_version"), "Dynamic Cap 2.0 calibration 17-C-22")
+        self.assertEqual(pack.get("model_version"), "Dynamic Cap 2.0 calibration 17-C-23")
         self.assertFalse(pack.get("report").empty)
 
     def test_dynamic_cap_market_condition_can_expand_hard_ceiling(self):
@@ -1303,6 +1891,7 @@ class ValuationLogicTests(unittest.TestCase):
             base_cap=18,
             soft_ceiling=22,
             hard_ceiling=28,
+            current_date="2026-10-15",
         )
         report = result["report"]
 
@@ -1314,6 +1903,8 @@ class ValuationLogicTests(unittest.TestCase):
         self.assertEqual(result["summary"]["base_cap"], 18)
         self.assertEqual(result["summary"]["soft_cap"], 22)
         self.assertEqual(result["summary"]["hard_cap"], 28)
+        self.assertEqual(result["summary"]["fy_sequence_text"], "FY1=2026E / FY2=2027E / FY3=2028E")
+        self.assertIn("FY2 作主要前瞻參考", result["summary"]["fy_calendar_ui_notice"])
 
     def test_infer_pricing_horizon_detects_fy2_pricing(self):
         result = infer_pricing_horizon(
@@ -1347,6 +1938,23 @@ class ValuationLogicTests(unittest.TestCase):
         self.assertEqual(result["rank"], 2)
         self.assertIn("soft", result["explanation"])
         self.assertIn("降權", result["decision_rule"])
+
+    def test_infer_pricing_horizon_keeps_fy1_soft_separate_from_fy2(self):
+        result = infer_pricing_horizon(
+            price=3040,
+            ttm_eps=39.59,
+            fy1_eps=68.29,
+            fy2_eps=100.0,
+            fy3_eps=None,
+            base_pe=38,
+            soft_pe=60,
+            hard_pe=60,
+        )
+
+        self.assertEqual(result["code"], "FY1_SOFT_PRICED")
+        self.assertEqual(result["rank"], 1)
+        self.assertFalse(result["is_future_priced"])
+        self.assertIn("不代表必須用 FY2", result["explanation"])
 
     def test_future_evidence_score_rewards_landing_but_penalizes_data_risk(self):
         strong = calculate_future_evidence_score(
@@ -1723,6 +2331,72 @@ class ValuationLogicTests(unittest.TestCase):
         self.assertIn("小部位", result["advice"])
         self.assertEqual(result["future_evidence_score"], 85)
 
+    def test_final_signal_does_not_treat_fy1_soft_as_fy2_future_pricing(self):
+        result = build_final_operation_signal(
+            current_price=85,
+            valuation_separation={"operable_low": 90, "operable_mid": 105, "operable_high": 120, "warning_count": 0, "danger_count": 0},
+            divergence_warnings=[],
+            target_confidence={"rank": 5},
+            industry_profile={"pe_model_suitable": True},
+            forward_pe=24,
+            peg=0.9,
+            roe=0.20,
+            revenue_yoy=0.20,
+            gross_margin=0.30,
+            operating_margin=0.20,
+            pricing_horizon={"code": "FY1_SOFT_PRICED", "label": "FY1 樂觀定價", "explanation": "FY1 soft 可解釋", "decision_rule": "安全邊際不足"},
+            future_evidence={"score": 35, "label": "證據不足", "action": "不可追價"},
+        )
+
+        self.assertEqual(result["pricing_horizon_code"], "FY1_SOFT_PRICED")
+        self.assertNotIn("需 FY2", result["advice"])
+        self.assertNotIn("FY2", "；".join(result["reasons"]))
+        self.assertIn("FY1 樂觀區", "；".join(result["reasons"]))
+
+    def test_final_signal_normalizes_legacy_fy1_soft_or_fy2_watch_code(self):
+        result = build_final_operation_signal(
+            current_price=85,
+            valuation_separation={"operable_low": 90, "operable_mid": 105, "operable_high": 120, "warning_count": 0, "danger_count": 0},
+            divergence_warnings=[],
+            target_confidence={"rank": 5},
+            industry_profile={"pe_model_suitable": True},
+            forward_pe=24,
+            peg=0.9,
+            roe=0.20,
+            revenue_yoy=0.20,
+            gross_margin=0.30,
+            operating_margin=0.20,
+            pricing_horizon={"code": "FY1_SOFT_OR_FY2_WATCH", "label": "FY1 樂觀 / FY2 觀察", "explanation": "舊版 code", "decision_rule": "舊版規則"},
+            future_evidence={"score": 35, "label": "證據不足", "action": "不可追價"},
+        )
+
+        self.assertEqual(result["pricing_horizon_code"], "FY1_SOFT_PRICED")
+        self.assertIn("FY1 樂觀定價", result["pricing_horizon_label"])
+        self.assertNotIn("需 FY2", result["advice"])
+        self.assertNotIn("FY2", "；".join(result["reasons"]))
+
+    def test_final_signal_never_upgrades_buy_for_fy2_soft_priced(self):
+        result = build_final_operation_signal(
+            current_price=85,
+            valuation_separation={"operable_low": 90, "operable_mid": 105, "operable_high": 120, "warning_count": 0, "danger_count": 0},
+            divergence_warnings=[],
+            target_confidence={"rank": 5},
+            industry_profile={"pe_model_suitable": True},
+            forward_pe=16,
+            peg=0.9,
+            roe=0.25,
+            revenue_yoy=0.50,
+            gross_margin=0.45,
+            operating_margin=0.25,
+            pricing_horizon={"code": "FY2_SOFT_PRICED", "label": "FY2 樂觀先行定價", "explanation": "需 FY2 soft 才能解釋", "decision_rule": "不得升級買進"},
+            future_evidence={"score": 90, "label": "未來高度落地", "action": "續抱或回檔小量"},
+        )
+
+        self.assertNotEqual(result["signal"], "可買-小量分批")
+        self.assertEqual(result["signal"], "資料分歧-降權判斷")
+        self.assertIn("不得直接升級", result["advice"])
+        self.assertIn("回檔小量", result["advice"])
+
     def test_margin_credit_summary_calculates_ratios_and_risk(self):
         df = pd.DataFrame({
             "date": pd.date_range("2026-05-01", periods=6, freq="B"),
@@ -1904,6 +2578,9 @@ class PromptContextTests(unittest.TestCase):
             run_rate_label="獲利動能加速",
             run_rate_action="近二季年化高於 TTM",
             fy1_eps=6,
+            fy1_year="2026",
+            fy2_year="2027",
+            fy3_year="2028",
             formula_cap=18,
             base_cap=18,
             soft_cap=22,
@@ -1912,6 +2589,7 @@ class PromptContextTests(unittest.TestCase):
             fy1_base_price=108,
             fy1_soft_price=132,
             fy1_hard_price=168,
+            current_date="2026-10-15",
         )
 
         self.assertIn("1-1. 目前估值", summary)
@@ -1924,6 +2602,9 @@ class PromptContextTests(unittest.TestCase):
         self.assertIn("目前實際獲利支撐度", summary)
         self.assertIn("系統原始公式價=126.0元", summary)
         self.assertIn("系統 Forward EPS 更接近 FY2", summary)
+        self.assertIn("目前台北時間月份=10月", summary)
+        self.assertIn("FY1=2026E / FY2=2027E / FY3=2028E", summary)
+        self.assertIn("FY2 可作主要前瞻參考", summary)
 
     def test_eps_adoption_summary_includes_current_valuation_price(self):
         summary = prompt_eps_adoption_sync_summary(
