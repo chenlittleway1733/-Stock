@@ -1,78 +1,118 @@
 #!/usr/bin/env python3
-"""Check the local runtime before launching the Streamlit app."""
+"""Build a clean zip package for moving the app to another computer."""
 
 from __future__ import annotations
 
-import importlib
-import platform
-import sys
+import argparse
+import fnmatch
+import os
+from datetime import datetime
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
 
 
-MIN_PYTHON = (3, 11)
-REQUIRED_PACKAGES = [
-    "streamlit",
-    "pandas",
-    "plotly",
-    "requests",
-    "yfinance",
-    "google.genai",
-    "openpyxl",
-]
+ROOT = Path(__file__).resolve().parents[1]
+IGNORE_FILE = ROOT / ".packageignore"
+DEFAULT_PACKAGE_DIR = ROOT / "dist"
 
 
-def _version_text() -> str:
-    return ".".join(str(part) for part in sys.version_info[:3])
+def _as_posix(path: Path) -> str:
+    text = path.as_posix()
+    return text[2:] if text.startswith("./") else text
 
 
-def _read_runtime_txt() -> str:
-    runtime_path = Path(__file__).resolve().parents[1] / "runtime.txt"
-    if not runtime_path.exists():
-        return "missing"
-    return runtime_path.read_text(encoding="utf-8").strip() or "empty"
+def _read_patterns() -> list[str]:
+    if not IGNORE_FILE.exists():
+        return []
+    patterns: list[str] = []
+    for raw_line in IGNORE_FILE.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        patterns.append(line)
+    return patterns
+
+
+def _matches_pattern(rel_path: str, pattern: str) -> bool:
+    pattern = pattern.strip()
+    if pattern.startswith("./"):
+        pattern = pattern[2:]
+    if not pattern:
+        return False
+    if pattern.startswith("/"):
+        return fnmatch.fnmatch(rel_path, pattern.lstrip("/"))
+    if pattern.endswith("/"):
+        prefix = pattern.rstrip("/")
+        return rel_path == prefix or rel_path.startswith(prefix + "/") or f"/{prefix}/" in f"/{rel_path}/"
+    return fnmatch.fnmatch(rel_path, pattern) or fnmatch.fnmatch(Path(rel_path).name, pattern)
+
+
+def _is_ignored(path: Path, patterns: list[str]) -> bool:
+    rel_path = _as_posix(path.relative_to(ROOT))
+    parts = path.relative_to(ROOT).parts
+    if any(part == "__pycache__" or part.startswith("._") for part in parts):
+        return True
+    return any(_matches_pattern(rel_path, pattern) for pattern in patterns)
+
+
+def iter_package_files(patterns: list[str]) -> list[Path]:
+    files: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(ROOT):
+        current = Path(dirpath)
+        dirnames[:] = [
+            dirname
+            for dirname in dirnames
+            if not _is_ignored(current / dirname, patterns)
+        ]
+        for filename in filenames:
+            path = current / filename
+            if not _is_ignored(path, patterns):
+                files.append(path)
+    return sorted(files, key=lambda item: _as_posix(item.relative_to(ROOT)))
+
+
+def build_package(output_path: Path) -> tuple[int, int]:
+    patterns = _read_patterns()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    files = [
+        path
+        for path in iter_package_files(patterns)
+        if path.resolve() != output_path.resolve()
+    ]
+    with ZipFile(output_path, "w", compression=ZIP_DEFLATED) as archive:
+        for path in files:
+            rel_path = _as_posix(path.relative_to(ROOT))
+            archive.write(path, arcname=f"way_stock/{rel_path}")
+    return len(files), output_path.stat().st_size
 
 
 def main() -> int:
-    errors = []
-    warnings = []
-    python_version = sys.version_info[:3]
-    runtime_txt = _read_runtime_txt()
+    parser = argparse.ArgumentParser(description="Build a clean WAY stock app zip.")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=DEFAULT_PACKAGE_DIR / f"way_stock_clean_{datetime.now():%Y%m%d_%H%M%S}.zip",
+        help="Output zip path. Default: dist/way_stock_clean_YYYYMMDD_HHMMSS.zip",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Only list package contents summary; do not write zip.")
+    args = parser.parse_args()
 
-    print(f"Python executable: {sys.executable}")
-    print(f"Python version: {_version_text()} ({platform.platform()})")
-    print(f"runtime.txt: {runtime_txt}")
+    patterns = _read_patterns()
+    files = iter_package_files(patterns)
+    if args.dry_run:
+        total_size = sum(path.stat().st_size for path in files if path.is_file())
+        print(f"Package file count: {len(files)}")
+        print(f"Package source size: {total_size / 1024 / 1024:.2f} MB")
+        for path in files[:80]:
+            print(_as_posix(path.relative_to(ROOT)))
+        if len(files) > 80:
+            print(f"... {len(files) - 80} more files")
+        return 0
 
-    if python_version < MIN_PYTHON:
-        errors.append(
-            f"Python {_version_text()} is too old. Use Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ to avoid EOL/runtime warnings."
-        )
-
-    if runtime_txt != "python-3.11":
-        warnings.append("runtime.txt is not python-3.11; verify Streamlit Cloud runtime compatibility before deploying.")
-
-    if not errors:
-        missing = []
-        for package in REQUIRED_PACKAGES:
-            try:
-                importlib.import_module(package)
-            except Exception as exc:
-                missing.append(f"{package} ({exc.__class__.__name__}: {exc})")
-
-        if missing:
-            errors.append("Missing or broken packages: " + "; ".join(missing))
-
-    if warnings:
-        print("\nWarnings:")
-        for item in warnings:
-            print(f"- {item}")
-
-    if errors:
-        print("\nRuntime check failed:")
-        for item in errors:
-            print(f"- {item}")
-        return 1
-
-    print("\nRuntime check passed.")
+    file_count, package_size = build_package(args.output)
+    print(f"Package created: {args.output}")
+    print(f"Packaged files: {file_count}")
+    print(f"Zip size: {package_size / 1024 / 1024:.2f} MB")
     return 0
 
 

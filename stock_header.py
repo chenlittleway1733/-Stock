@@ -1,119 +1,106 @@
-"""Top-level overview panels for ui_main.render_main_page."""
+"""Prompt-pack panel extracted from ui_main.py."""
 
-from ui_common import (
-    clean_html,
-    get_ai_analysis_final,
-    reset_all_states_on_stock_change,
-    st,
-)
+import json
+
+from ui_common import components, st
 
 
-def render_topic_loading_panel(topic_q):
-    """Resolve a pending topic-search request and update session state."""
-    if st.session_state.topic_results != "LOADING":
-        return
-    with st.spinner(f"🤖 AI 正在連線推演「{topic_q}」..."):
-        data, links = get_ai_analysis_final(
-            topic_q,
-            st.session_state.api_key,
-            st.session_state.get("selected_model", "gemini-3.1-pro-preview"),
-        )
-        if isinstance(data, dict):
-            st.session_state.topic_results = {"data": data, "links": links, "topic": topic_q}
-            st.session_state.show_whale = False
-            st.rerun()
-        else:
-            st.error(f"AI 解析失敗或逾時無回應。\n\n詳細原因：{data}")
-            st.session_state.topic_results = None
+def render_prompt_pack_panel(
+    *,
+    curr_id,
+    buy_decision_prompt,
+    research_prompt,
+    build_technical_suffix,
+):
+    """Render the copyable prompt-pack panel.
 
-
-def render_topic_results_panel(topic_results):
-    """Render the AI topic stock-picking result panel."""
-    if not isinstance(topic_results, dict):
-        return
-
-    st.success("✅ AI 議題推演完成！系統已為您捕捉以下關聯受惠股，點擊按鈕即可一鍵切換至該檔股票的戰情室面板！")
-    data = topic_results.get("data", {}) or {}
-    topic = topic_results.get("topic", "")
-    stocks = data.get("stocks", []) or []
-
-    ai_topic_html = f"""
-    <div style='background: linear-gradient(90deg, #1e3c72 0%, #2a5298 100%); padding: 20px; border-radius: 10px; margin-bottom: 20px; border-left: 5px solid #FFD700;'>
-        <h3 style='color: white; margin-top: 0;'>💡 議題動態推演：【{topic}】</h3>
-        <div style='color: #e0e0e0; font-size: 1.05rem; line-height: 1.6;'>{data.get('reasoning', '無分析內容')}</div>
-    </div>
+    `build_technical_suffix` stays in ui_main for now because it depends on the
+    current stock chart locals. Keeping it as a callback lets this panel move
+    without changing prompt behavior.
     """
-    st.markdown(clean_html(ai_topic_html), unsafe_allow_html=True)
+    with st.expander("📋 點此複製【打包提示詞】至 Gemini Advanced 或 ChatGPT 發問", expanded=True):
+        prompt_mode = st.radio(
+            "提示詞版本",
+            ["買進決策版（精簡，建議平常使用）", "研究完整版（完整，適合深度分析）"],
+            horizontal=True,
+            key=f"prompt_pack_mode_{curr_id}",
+        )
+        technical_pack_mode = st.radio(
+            "技術面打包選項",
+            ["不加入技術面", "加入技術面摘要", "加入技術面摘要 + 技術線圖輔助規則"],
+            horizontal=True,
+            key=f"prompt_technical_pack_mode_{curr_id}",
+        )
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown("#### 🛡️ 潛力權值股 (點擊切換)")
-        for item in [x for x in stocks if "權值" in x.get("type", "") or "潛力" in x.get("type", "")]:
-            st.button(
-                f"📌 {item.get('name', '未知')} ({item.get('id', '')})",
-                on_click=reset_all_states_on_stock_change,
-                args=(item.get("id", ""),),
-                key=f"tp_{item.get('id', '')}",
-                use_container_width=True,
-            )
-            st.caption(f"理由：{item.get('why', '')}")
-    with c2:
-        st.markdown("#### 🚀 爆發中小型股 (點擊切換)")
-        for item in [x for x in stocks if "中小" in x.get("type", "") or "爆發" in x.get("type", "")]:
-            st.button(
-                f"🔥 {item.get('name', '未知')} ({item.get('id', '')})",
-                on_click=reset_all_states_on_stock_change,
-                args=(item.get("id", ""),),
-                key=f"ts_{item.get('id', '')}",
-                use_container_width=True,
-            )
-            st.caption(f"理由：{item.get('why', '')}")
+        selected_prompt = buy_decision_prompt if prompt_mode.startswith("買進決策版") else research_prompt
+        technical_suffix = build_technical_suffix(technical_pack_mode)
+        if technical_suffix:
+            selected_prompt = selected_prompt.rstrip() + "\n\n" + technical_suffix
+        st.caption("買進決策版只保留會影響是否買進的採用值、系統/AI差異、估值層級、產業模型、Dynamic Cap 與燈號；研究完整版保留較完整資料品質與來源摘要。技術面可選擇不加入、加入摘要，或加入摘要與線圖輔助規則。")
 
-    links = topic_results.get("links", []) or []
-    if links:
-        with st.expander("🔗 查看 AI 參考來源"):
-            for link in links:
-                st.markdown(f"- [{link}]({link})")
-    st.markdown("---")
-
-
-def render_whale_panel():
-    """Render the quick whale-watch shortcut panel."""
-    st.markdown("### 🐳 近兩周大戶持股比例顯著增加標的")
-    whales = [("2317", "鴻海"), ("2382", "廣達"), ("1519", "華城"), ("6669", "緯穎"), ("3324", "雙鴻")]
-    cols = st.columns(5)
-    for idx, (code, name) in enumerate(whales):
-        with cols[idx]:
-            st.button(
-                f"{name}\n({code})",
-                on_click=reset_all_states_on_stock_change,
-                args=(code,),
-                key=f"w_{code}",
-                use_container_width=True,
-            )
-    st.markdown("---")
-
-
-def render_empty_stock_prompt():
-    """Render first-load guidance when no stock is selected."""
-    st.markdown(
-        """
-        <div style="
-            margin-top: 2.5rem;
-            padding: 1.4rem 1.6rem;
-            border: 1px solid rgba(0,0,0,0.10);
-            border-radius: 14px;
-            background: rgba(127,127,127,0.07);
-            max-width: 820px;
-        ">
-            <div style="font-size:1.35rem; font-weight:800; margin-bottom:0.55rem;">
-                🔎 請先輸入股票代號或使用左側下拉選股查詢
+        safe_prompt_js = json.dumps(selected_prompt, ensure_ascii=False)
+        components.html(
+            f"""
+            <div style="margin: 10px 0 12px 0; font-family: sans-serif;">
+                <button
+                    onclick="copyPromptToClipboard()"
+                    style="
+                        width: 100%;
+                        padding: 13px 14px;
+                        border-radius: 10px;
+                        border: 1px solid #4b5563;
+                        background: #2563eb;
+                        color: white;
+                        font-size: 16px;
+                        font-weight: 700;
+                        cursor: pointer;
+                    "
+                >
+                    📋 一鍵複製目前版本提示詞
+                </button>
+                <div id="copyStatus" style="margin-top: 8px; color: #16a34a; font-size: 14px;"></div>
             </div>
-            <div style="font-size:1.02rem; line-height:1.8; color:rgba(120,120,120,0.95);">
-                可在左側「輸入台股代號」欄位輸入，例如 <b>2330</b>、<b>3037</b>、<b>2454</b>，
-                輸入後請按 <b style="color:#ff8c00;">Enter</b> 確認送出；也可以從「快速選股名單」下拉選擇股票。
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+
+            <script>
+            async function copyPromptToClipboard() {{
+                const text = {safe_prompt_js};
+                const status = document.getElementById("copyStatus");
+
+                try {{
+                    await navigator.clipboard.writeText(text);
+                    status.innerText = "✅ 已複製目前版本提示詞，可直接貼到 Gemini Advanced 或 ChatGPT。";
+                }} catch (err) {{
+                    const textarea = document.createElement("textarea");
+                    textarea.value = text;
+                    textarea.style.position = "fixed";
+                    textarea.style.left = "-9999px";
+                    textarea.style.top = "0";
+                    document.body.appendChild(textarea);
+                    textarea.focus();
+                    textarea.select();
+
+                    try {{
+                        document.execCommand("copy");
+                        status.innerText = "✅ 已複製目前版本提示詞，可直接貼上使用。";
+                    }} catch (fallbackErr) {{
+                        status.style.color = "#dc2626";
+                        status.innerText = "⚠️ 手機瀏覽器限制自動複製，請改用下方文字框長按複製。";
+                    }}
+
+                    document.body.removeChild(textarea);
+                }}
+            }}
+            </script>
+            """,
+            height=105,
+        )
+
+        mode_key = "buy" if prompt_mode.startswith("買進決策版") else "research"
+        st.text_area(
+            "提示詞內容",
+            value=selected_prompt,
+            height=330,
+            label_visibility="collapsed",
+            key=f"copy_prompt_textarea_{curr_id}_{mode_key}_{abs(hash(selected_prompt)) % 100000000}",
+        )
+

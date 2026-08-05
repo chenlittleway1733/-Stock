@@ -1,41 +1,21 @@
-"""Validation and review helpers for financial data pipelines."""
+"""Financial validation boundary.
 
-from .stock_dataset_validation import (
-    ALLOWED_MARKET_SUFFIX,
-    KNOWN_STOCK_CODE_RULES,
-    VALID_DATA_QUALITY_GRADES,
-    expected_yahoo_symbol,
-    normalize_stock_code,
-    summarize_record_validation,
-    validate_stock_dataset,
-    validate_stock_record,
-    validation_status_from_issues,
-)
-from .stock_dataset_batch import (
-    COLUMN_ALIASES,
-    PREFERRED_SHEETS,
-    normalize_stock_dataset_dataframe,
-    read_stock_dataset_file,
-    validate_stock_dataset_file,
-    validate_stock_dataset_frame,
-    write_stock_dataset_validation_artifacts,
+This module is the stable import path for financial-field validation.  The
+implementations stay in utils.py for backward compatibility during the first
+modularization pass.
+"""
+
+from utils import (
+    normalize_debt_to_equity,
+    normalize_financial_ratio,
+    validate_ai_financial_json,
+    validate_and_correct_financial_metrics,
 )
 
 __all__ = [
-    "ALLOWED_MARKET_SUFFIX",
-    "COLUMN_ALIASES",
-    "KNOWN_STOCK_CODE_RULES",
-    "PREFERRED_SHEETS",
-    "VALID_DATA_QUALITY_GRADES",
-    "expected_yahoo_symbol",
-    "normalize_stock_dataset_dataframe",
-    "normalize_stock_code",
-    "read_stock_dataset_file",
-    "summarize_record_validation",
-    "validate_stock_dataset",
-    "validate_stock_dataset_file",
-    "validate_stock_dataset_frame",
-    "validate_stock_record",
-    "validation_status_from_issues",
-    "write_stock_dataset_validation_artifacts",
+    "normalize_debt_to_equity",
+    "normalize_financial_ratio",
+    "validate_ai_financial_json",
+    "validate_and_correct_financial_metrics",
 ]
+

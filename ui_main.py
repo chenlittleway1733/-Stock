@@ -24,6 +24,7 @@ from ui_panels.financials import (
 )
 from ui_panels.etf import render_etf_exposure_panel
 from ui_panels.chips import render_chip_panels
+from ui_panels.market_reasoning import render_market_reasoning_panel
 from ui_panels.market_trend import render_market_trend_panel
 from ui_panels.news import render_financial_news_panel
 from ui_panels.peer_compare import render_peer_compare_panel
@@ -907,6 +908,24 @@ def render_main_page(sidebar_state=None):
                 fy1_year_text = _fy_year_display_safe(ai_forward_eps_fy1_year)
                 fy2_year_text = _fy_year_display_safe(ai_forward_eps_fy2_year)
                 fy3_year_text = _fy_year_display_safe(ai_forward_eps_fy3_year)
+                fy_calendar_notice = build_forward_eps_calendar_notice(
+                    fy1_year=ai_forward_eps_fy1_year,
+                    fy2_year=ai_forward_eps_fy2_year,
+                    fy3_year=ai_forward_eps_fy3_year,
+                )
+                fy_sequence_html = (
+                    "<div style='color:#D1D5DB; font-size:0.84rem; margin-top:4px;'>"
+                    f"FY 年度提示：{fy_calendar_notice.get('fy_sequence_text', '年期未明')}"
+                    "</div>"
+                )
+                fy_rollover_html = ""
+                if fy_calendar_notice.get("ui_notice"):
+                    fy_rollover_html = (
+                        "<div style='background:#2A2407; color:#FDE68A; border:1px solid #6B5E12; "
+                        "padding:7px 9px; border-radius:6px; margin-top:8px; line-height:1.5; font-size:0.85rem;'>"
+                        f"{fy_calendar_notice.get('ui_notice')}"
+                        "</div>"
+                    )
 
                 sys_tp_str = _fmt_price(sys_target_price_est)
                 sys_raw_tp_str = _fmt_price(sys_target_price_raw)
@@ -1030,6 +1049,8 @@ def render_main_page(sidebar_state=None):
                         <div>
                             <div style='font-weight:bold; color:#F3F4F6; font-size:1.25rem;'>📈 前瞻 PEG (Forward PEG)｜詳細估值分層</div>
                             <div style='color:#AAB2C0; font-size:0.88rem; margin-top:4px;'>系統公式與 FY1/FY2/FY3 年度三情境分開顯示；AI/法人 EPS 不再另列重複估值。</div>
+                            {fy_sequence_html}
+                            {fy_rollover_html}
                         </div>
                         <div style='text-align:right; min-width:170px;'>
                             <div style='background:{peg_color}; color:#000; padding:4px 10px; border-radius:999px; font-size:0.85rem; font-weight:bold; display:inline-block;'>{peg_text}</div>
@@ -1306,6 +1327,12 @@ def render_main_page(sidebar_state=None):
             )
 
             chip_panel_state = render_chip_panels(curr_id=curr_id, info=info, ai_shares=ai_shares, eff_eg=eff_eg)
+            market_reasoning_pack = render_market_reasoning_panel(
+                trend_data=trend_data,
+                chip_state=chip_panel_state,
+                stock_id=curr_id,
+                stock_name=c_name,
+            )
             if chip_panel_state.get("has_institutional_data"):
                 f_10d = chip_panel_state.get("f_10d")
                 t_10d = chip_panel_state.get("t_10d")

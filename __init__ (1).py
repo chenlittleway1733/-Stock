@@ -1,345 +1,141 @@
-"""Multiple and annual valuation context builders for ui_main.render_main_page."""
+"""Financial quality report context builders for ui_main.render_main_page."""
 
 from ui_common import *
 
 
-def cap_float(value, default=None):
+def adopt_source(sys_val, ai_val, sys_label="系統", ai_label_text="AI補齊"):
+    return sys_label if sys_val is not None else (ai_label_text if ai_val is not None else "無可用資料")
+
+
+def fy_year_display_safe(year_value):
     try:
-        return float(value) if value is not None else default
+        if year_value is None or str(year_value).strip() in ["", "None", "nan"]:
+            return "年期未明"
+        text = str(year_value).strip()
+        return f"{text}E" if re.match(r"^\d{4}$", text) else text
     except Exception:
-        return default
+        return "年期未明"
 
 
-def valuation_num(value):
-    try:
-        if value is None:
-            return None
-        value = float(value)
-        if pd.isna(value) or value <= 0:
-            return None
-        return value
-    except Exception:
-        return None
+def _ai_src(ai_fin, has_ai_fin_fetch, ai_period_text, field_key, fallback_label="AI補齊"):
+    return format_ai_source_detail(ai_fin, field_key, ai_period_text, fallback_label) if has_ai_fin_fetch else "AI未啟動"
 
 
-def valuation_price(eps, cap):
-    eps_value = valuation_num(eps)
-    cap_value = valuation_num(cap)
-    return eps_value * cap_value if eps_value is not None and cap_value is not None else None
+def _ai_url(ai_fin, has_ai_fin_fetch, field_key):
+    return get_ai_source_url(ai_fin, field_key) if has_ai_fin_fetch else ""
 
 
-def build_current_eps_valuation(
+def build_quality_report_context(
     *,
-    ai_latest_month_eps=None,
-    ai_latest_quarter_eps=None,
-    sys_latest_quarter_eps=None,
-    eff_t_eps=None,
-    formula_pe_cap=None,
-    raw_ai_period=None,
-):
-    """Build current realized EPS valuation, preferring latest-month then latest-quarter annualized EPS."""
-    latest_month_eps = valuation_num(ai_latest_month_eps)
-    if latest_month_eps is not None:
-        current_eps_for_valuation = latest_month_eps * 12
-        current_eps_raw = latest_month_eps
-        source = "最新單月 EPS 年化"
-        source_detail = "AI 最新單月 / 自結 EPS ×12 年化值"
-        source_note = f"原始單月 EPS={current_eps_raw:.2f}；年化 EPS={current_eps_for_valuation:.2f}"
-        period = raw_ai_period or "最新已抓取月份"
-    else:
-        latest_quarter_eps = valuation_num(ai_latest_quarter_eps)
-        source = "最新單季 EPS 年化"
-        source_detail = "AI 最新單季 EPS ×4 年化值"
-        if latest_quarter_eps is None:
-            latest_quarter_eps = valuation_num(sys_latest_quarter_eps)
-            source_detail = "系統最新單季 EPS ×4 年化值"
-
-        if latest_quarter_eps is not None:
-            current_eps_for_valuation = latest_quarter_eps * 4
-            current_eps_raw = latest_quarter_eps
-            source_note = f"原始單季 EPS={current_eps_raw:.2f}；年化 EPS={current_eps_for_valuation:.2f}"
-            period = raw_ai_period or "最新已抓取季度"
-        else:
-            current_eps_for_valuation = valuation_num(eff_t_eps)
-            current_eps_raw = current_eps_for_valuation
-            source = "TTM EPS"
-            source_detail = "近四季已實現 EPS"
-            source_note = "直接採 TTM EPS，未做單季年化" if current_eps_for_valuation is not None else "未取得可用 EPS"
-            period = "近四季 / 系統反推" if current_eps_for_valuation is not None else "未取得"
-
-    return {
-        "current_eps_raw": current_eps_raw,
-        "current_eps_for_valuation": current_eps_for_valuation,
-        "current_eps_source": source,
-        "current_eps_source_detail": source_detail,
-        "current_eps_formula_note": source_note,
-        "current_eps_period": period,
-        "current_target_price_est": valuation_price(current_eps_for_valuation, formula_pe_cap),
-    }
-
-
-def build_run_rate_eps_context(
-    *,
-    latest_quarter_eps=None,
-    previous_quarter_eps=None,
-    last_two_quarter_eps=None,
-    ttm_eps=None,
-    fy1_eps=None,
-    formula_pe_cap=None,
-    raw_ai_period=None,
-):
-    """Build 1Q/2Q annualized EPS checks for fast-growth names without replacing TTM."""
-    latest = valuation_num(latest_quarter_eps)
-    previous = valuation_num(previous_quarter_eps)
-    two_quarter_sum = valuation_num(last_two_quarter_eps)
-    if two_quarter_sum is None and latest is not None and previous is not None:
-        two_quarter_sum = latest + previous
-
-    one_q_annualized = latest * 4 if latest is not None else None
-    two_q_annualized = two_quarter_sum * 2 if two_quarter_sum is not None else None
-    ttm = valuation_num(ttm_eps)
-    fy1 = valuation_num(fy1_eps)
-
-    reference_eps = two_q_annualized if two_q_annualized is not None else one_q_annualized
-    ttm_ratio = reference_eps / ttm if reference_eps is not None and ttm is not None and ttm > 0 else None
-    fy1_ratio = reference_eps / fy1 if reference_eps is not None and fy1 is not None and fy1 > 0 else None
-
-    if one_q_annualized is not None and fy1 is not None and one_q_annualized > fy1 * 1.20:
-        label = "單季過熱需確認"
-        action = "最新單季年化已高於 FY1 20% 以上，需確認是否有一次性因素、認列時點或毛利率高峰。"
-        severity = "orange"
-    elif two_q_annualized is not None and ttm is not None and two_q_annualized > ttm * 1.30:
-        label = "獲利動能加速"
-        action = "近二季年化高於 TTM 30% 以上，可作 AI 高成長股動能參考，但不得取代 FY1/FY2。"
-        severity = "green"
-    elif two_q_annualized is not None and fy1 is not None and 0.85 <= (two_q_annualized / fy1) <= 1.15:
-        label = "近二季支撐 FY1"
-        action = "近二季年化與 FY1 接近，代表 FY1 預估較有落地跡象。"
-        severity = "green"
-    elif one_q_annualized is not None and ttm is not None and one_q_annualized > ttm * 1.30:
-        label = "單季動能加速"
-        action = "最新單季年化高於 TTM 30% 以上，但缺近二季確認，需等待下一季或月營收延續。"
-        severity = "yellow"
-    elif reference_eps is not None:
-        label = "動能中性"
-        action = "Run-rate EPS 未明顯高於 TTM 或 FY1，暫不提高估值口徑。"
-        severity = "neutral"
-    else:
-        label = "資料不足"
-        action = "缺少最新單季或近二季 EPS，無法建立 Run-rate EPS。"
-        severity = "gray"
-
-    return {
-        "latest_quarter_eps": latest,
-        "previous_quarter_eps": previous,
-        "last_two_quarter_eps": two_quarter_sum,
-        "one_q_annualized_eps": one_q_annualized,
-        "two_q_annualized_eps": two_q_annualized,
-        "one_q_target_price": valuation_price(one_q_annualized, formula_pe_cap),
-        "two_q_target_price": valuation_price(two_q_annualized, formula_pe_cap),
-        "reference_eps": reference_eps,
-        "reference_target_price": valuation_price(reference_eps, formula_pe_cap),
-        "ttm_ratio": ttm_ratio,
-        "fy1_ratio": fy1_ratio,
-        "label": label,
-        "action": action,
-        "severity": severity,
-        "period": raw_ai_period or "最新兩季 / AI 財報校對",
-        "rule": "Run-rate EPS 只看短期獲利動能，不取代 TTM、FY1 或 FY2。",
-    }
-
-
-def fmt_price(value):
-    value = valuation_num(value)
-    return f"{value:.1f}元" if value is not None else "N/A"
-
-
-def fmt_eps(value):
-    value = valuation_num(value)
-    return f"{value:.2f}" if value is not None else "N/A"
-
-
-def fmt_cap(value):
-    value = valuation_num(value)
-    return f"{value:.1f}x" if value is not None else "N/A"
-
-
-def build_multiple_context(
-    *,
-    target_pe_cap,
-    suggested_cap,
-    dynamic_cap_pack,
-    industry_profile,
-    eff_f_eps,
+    curr_p,
+    ai_fin,
     has_ai_fin_fetch,
+    raw_ai_period,
+    dq_warnings,
+    latest_rev_month,
+    latest_rev_display_label,
+    latest_rev_notice,
+    latest_mom_val,
+    latest_rev_source_url,
+    latest_rev_source_rule,
+    latest_rev_announce_date,
+    latest_rev_announce_month,
+    latest_rev_revenue_month,
+    pe_ratio,
+    ai_pe,
+    sys_forward_pe,
+    ai_fpe,
+    eff_forward_pe,
+    orig_peg,
+    ai_peg,
+    eff_peg,
+    pb_ratio,
+    ai_pb,
+    ai_latest_month_eps,
+    sys_latest_quarter_eps,
+    ai_latest_quarter_eps,
+    sys_ttm_eps,
+    ai_ttm_eps,
+    eff_t_eps,
+    sys_fiscal_year_eps,
+    ai_fiscal_year_eps,
+    sys_forward_eps_system,
+    ai_forward_eps_consensus,
+    ai_forward_eps_ai,
     ai_f_eps_calc,
     ai_forward_eps_fy1,
     ai_forward_eps_fy2,
     ai_forward_eps_fy3,
-    cap_adopted_forward_eps,
-    sys_latest_quarter_eps=None,
-    ai_latest_month_eps=None,
-    ai_latest_quarter_eps=None,
-    ai_previous_quarter_eps=None,
-    ai_last_two_quarter_eps=None,
-    eff_t_eps=None,
-    raw_ai_period=None,
+    ai_forward_eps_fy1_year,
+    ai_forward_eps_fy2_year,
+    ai_forward_eps_fy3_year,
+    rev_growth,
+    ai_yoy,
+    eff_rg,
+    ai_mom,
+    gross_margin,
+    ai_gm,
+    eff_gm,
+    op_margin,
+    ai_om,
+    eff_om,
+    roe,
+    ai_roe,
+    eff_roe,
+    sys_de,
+    ai_de,
+    eff_de,
+    ttm_eps_adoption=None,
 ):
-    """Build multiple caps, formula prices, manual scenario, and FY tiers."""
-    dynamic_cap_pack = dynamic_cap_pack if isinstance(dynamic_cap_pack, dict) else {}
-    industry_profile = industry_profile if isinstance(industry_profile, dict) else {}
+    """Build the financial quality report rows and derived period metadata."""
+    dq_note_text = "；".join(dq_warnings) if dq_warnings else ""
+    ai_period_text = raw_ai_period if raw_ai_period else "AI未啟動或未揭露期間"
+    latest_rev_period = latest_rev_display_label if latest_rev_month and latest_rev_month != "無資料" else "未取得月營收"
+    rev_is_stale = revenue_month_is_older(latest_rev_month) if latest_rev_month and latest_rev_month != "無資料" else False
+    ttm_eps_adoption = ttm_eps_adoption if isinstance(ttm_eps_adoption, dict) else {}
+    ttm_notes = "；".join(ttm_eps_adoption.get("notes") or [])
+    if ttm_eps_adoption.get("warnings"):
+        warn_text = "；".join(str(x) for x in ttm_eps_adoption.get("warnings") or [])
+        ttm_notes = (ttm_notes + "；" if ttm_notes else "") + warn_text
+    if not ttm_notes:
+        ttm_notes = "用於歷史 P/E；近四季 EPS 合計優先，yfinance trailingEps 僅作備援。"
+    ttm_adopted_source = ttm_eps_adoption.get("adopted_source") or adopt_source(sys_ttm_eps, ai_ttm_eps)
+    ttm_period = ai_period_text if ttm_eps_adoption.get("adopted_value") == ai_ttm_eps and ai_ttm_eps is not None else "系統/備援"
 
-    operable_pe_cap = cap_float(target_pe_cap, suggested_cap)
-    base_pe_cap_for_calc = cap_float(dynamic_cap_pack.get("base_multiple"), None)
-    if base_pe_cap_for_calc is None:
-        base_pe_cap_for_calc = cap_float(industry_profile.get("base_pe"), None)
-    if base_pe_cap_for_calc is None:
-        base_pe_cap_for_calc = cap_float(industry_profile.get("cap_hint"), None)
+    def src(field_key, fallback_label="AI補齊"):
+        return _ai_src(ai_fin, has_ai_fin_fetch, ai_period_text, field_key, fallback_label)
 
-    formula_pe_cap = cap_float(dynamic_cap_pack.get("formula_cap"), None)
-    if formula_pe_cap is None:
-        formula_pe_cap = cap_float(dynamic_cap_pack.get("raw_cap"), base_pe_cap_for_calc if base_pe_cap_for_calc is not None else operable_pe_cap)
-    if base_pe_cap_for_calc is None:
-        base_pe_cap_for_calc = formula_pe_cap
+    def url(field_key):
+        return _ai_url(ai_fin, has_ai_fin_fetch, field_key)
 
-    soft_pe_cap = cap_float(dynamic_cap_pack.get("optimistic_cap"), None)
-    if soft_pe_cap is None:
-        soft_pe_cap = cap_float(dynamic_cap_pack.get("soft_ceiling_cap"), formula_pe_cap)
-    hard_pe_cap = cap_float(dynamic_cap_pack.get("hard_ceiling_cap"), cap_float(dynamic_cap_pack.get("ceiling_cap"), soft_pe_cap))
-
-    if soft_pe_cap is not None and base_pe_cap_for_calc is not None:
-        soft_pe_cap = max(soft_pe_cap, base_pe_cap_for_calc)
-    if hard_pe_cap is not None and soft_pe_cap is not None:
-        hard_pe_cap = max(hard_pe_cap, soft_pe_cap)
-
-    soft_pe_cap_for_calc = soft_pe_cap
-    hard_pe_cap_for_calc = hard_pe_cap
-    if formula_pe_cap is not None and soft_pe_cap is not None:
-        formula_pe_cap = min(formula_pe_cap, soft_pe_cap)
-    extreme_pe_cap_for_calc = soft_pe_cap if soft_pe_cap is not None else operable_pe_cap
-
-    forward_eps_period_mismatch = detect_forward_eps_period_mismatch(
-        system_forward_eps=eff_f_eps,
-        fy1_eps=ai_forward_eps_fy1,
-        fy2_eps=ai_forward_eps_fy2,
-    )
-    formula_eps_for_calc = forward_eps_period_mismatch.get("recommended_eps")
-    formula_eps_source = forward_eps_period_mismatch.get("recommended_eps_source")
-    sys_target_price_raw = valuation_price(eff_f_eps, formula_pe_cap)
-    sys_target_price_est = valuation_price(formula_eps_for_calc, formula_pe_cap)
-    is_capped = False
-    extreme_target_price_raw = valuation_price(eff_f_eps, extreme_pe_cap_for_calc)
-    extreme_target_price = valuation_price(formula_eps_for_calc, extreme_pe_cap_for_calc)
-    current_eps_valuation = build_current_eps_valuation(
-        ai_latest_month_eps=ai_latest_month_eps,
-        ai_latest_quarter_eps=ai_latest_quarter_eps,
-        sys_latest_quarter_eps=sys_latest_quarter_eps,
-        eff_t_eps=eff_t_eps,
-        formula_pe_cap=formula_pe_cap,
-        raw_ai_period=raw_ai_period,
-    )
-    run_rate_eps_context = build_run_rate_eps_context(
-        latest_quarter_eps=ai_latest_quarter_eps if ai_latest_quarter_eps is not None else sys_latest_quarter_eps,
-        previous_quarter_eps=ai_previous_quarter_eps,
-        last_two_quarter_eps=ai_last_two_quarter_eps,
-        ttm_eps=eff_t_eps,
-        fy1_eps=ai_forward_eps_fy1 if ai_forward_eps_fy1 is not None else cap_adopted_forward_eps,
-        formula_pe_cap=formula_pe_cap,
-        raw_ai_period=raw_ai_period,
-    )
-
-    try:
-        manual_cap_user_adjusted = (
-            target_pe_cap is not None
-            and suggested_cap is not None
-            and abs(float(target_pe_cap) - float(suggested_cap)) > 1e-6
-        )
-    except Exception:
-        manual_cap_user_adjusted = False
-    manual_cap_input = operable_pe_cap if manual_cap_user_adjusted else base_pe_cap_for_calc
-    manual_cap_source_text = "使用者手動 Cap" if manual_cap_user_adjusted else "未手動調整，採 FY1 base"
-    manual_cap_for_calc = manual_cap_input
-    manual_cap_hit_hard = False
-    if manual_cap_input is not None and hard_pe_cap is not None and manual_cap_input > hard_pe_cap:
-        manual_cap_for_calc = hard_pe_cap
-        manual_cap_hit_hard = True
-    manual_target_price = eff_f_eps * manual_cap_for_calc if eff_f_eps is not None and eff_f_eps > 0 and manual_cap_for_calc is not None else None
-
-    ai_target_price_est = ai_f_eps_calc * formula_pe_cap if has_ai_fin_fetch and ai_f_eps_calc is not None and ai_f_eps_calc > 0 and formula_pe_cap is not None else None
-    ai_is_capped = False
-    ai_extreme_target_price = ai_f_eps_calc * extreme_pe_cap_for_calc if has_ai_fin_fetch and ai_f_eps_calc is not None and ai_f_eps_calc > 0 and extreme_pe_cap_for_calc is not None else None
-    ai_manual_target_price = ai_f_eps_calc * manual_cap_for_calc if has_ai_fin_fetch and ai_f_eps_calc is not None and ai_f_eps_calc > 0 and manual_cap_for_calc is not None else None
-
-    fy1_eps_for_annual = ai_forward_eps_fy1 if ai_forward_eps_fy1 is not None else cap_adopted_forward_eps
-    fy1_formula_target_price = valuation_price(ai_forward_eps_fy1, formula_pe_cap)
-    fy2_formula_target_price = valuation_price(ai_forward_eps_fy2, formula_pe_cap)
-    fy3_formula_target_price = valuation_price(ai_forward_eps_fy3, formula_pe_cap)
-    fy1_base_target_price = valuation_price(ai_forward_eps_fy1, base_pe_cap_for_calc)
-    fy1_soft_target_price = valuation_price(ai_forward_eps_fy1, soft_pe_cap_for_calc)
-    fy1_hard_target_price = valuation_price(ai_forward_eps_fy1, hard_pe_cap_for_calc)
-    fy2_base_target_price = valuation_price(ai_forward_eps_fy2, base_pe_cap_for_calc)
-    fy2_soft_target_price = valuation_price(ai_forward_eps_fy2, soft_pe_cap_for_calc)
-    fy2_hard_target_price = valuation_price(ai_forward_eps_fy2, hard_pe_cap_for_calc)
-    fy3_base_target_price = valuation_price(ai_forward_eps_fy3, base_pe_cap_for_calc)
-    fy3_soft_target_price = valuation_price(ai_forward_eps_fy3, soft_pe_cap_for_calc)
-    fy3_hard_target_price = valuation_price(ai_forward_eps_fy3, hard_pe_cap_for_calc)
-    fy1_manual_target_price = valuation_price(fy1_eps_for_annual, manual_cap_for_calc)
-
+    quality_rows = [
+        {"field": "現價", "system_source": "Yahoo/yfinance 即時或延遲行情", "system_value": curr_p, "ai_source": "不使用AI", "ai_value": None, "adopted_value": curr_p, "adopted_source": "系統行情", "period": "即時/延遲", "fmt": "price"},
+        {"field": "P/E", "system_source": "yfinance；異常時 FinMind PER 備援", "system_value": pe_ratio, "ai_source": src("pe"), "ai_source_url": url("pe"), "ai_value": ai_pe, "adopted_value": pe_ratio if pe_ratio is not None else ai_pe, "adopted_source": adopt_source(pe_ratio, ai_pe), "period": ai_period_text if pe_ratio is None and ai_pe is not None else "系統最新可得", "fmt": "x"},
+        {"field": "Forward P/E", "system_source": "yfinance forwardPE 或 EPS 反推", "system_value": sys_forward_pe, "ai_source": src("forward_eps"), "ai_source_url": url("forward_eps"), "ai_value": ai_fpe, "adopted_value": eff_forward_pe, "adopted_source": adopt_source(sys_forward_pe, ai_fpe), "period": ai_period_text if sys_forward_pe is None and ai_fpe is not None else "系統/反推", "fmt": "x"},
+        {"field": "PEG", "system_source": "Forward P/E ÷ 預估成長率", "system_value": orig_peg, "ai_source": src("yoy"), "ai_source_url": url("yoy"), "ai_value": ai_peg, "adopted_value": None if eff_peg == -999 else eff_peg, "adopted_source": "系統優先/AI備援", "period": "推估值", "fmt": "x", "notes": "成長率為負時 PEG 無意義" if eff_peg == -999 else ""},
+        {"field": "P/B", "system_source": "yfinance；異常時 FinMind PBR 備援", "system_value": pb_ratio, "ai_source": src("pb"), "ai_source_url": url("pb"), "ai_value": ai_pb, "adopted_value": pb_ratio if pb_ratio is not None else ai_pb, "adopted_source": adopt_source(pb_ratio, ai_pb), "period": ai_period_text if pb_ratio is None and ai_pb is not None else "系統最新可得", "fmt": "x"},
+        {"field": "最新單月 EPS", "system_source": "系統未穩定提供，需 AI 查自結/注意股公告", "system_value": None, "ai_source": src("latest_month_eps"), "ai_source_url": url("latest_month_eps"), "ai_value": ai_latest_month_eps, "adopted_value": ai_latest_month_eps, "adopted_source": "AI補齊/自結公告" if ai_latest_month_eps is not None else "無可用資料", "period": ai_period_text, "fmt": "num", "notes": "若取得，目前估值優先採單月 EPS ×12"},
+        {"field": "最新單季 EPS", "system_source": "系統未穩定提供，避免用 TTM 冒充", "system_value": sys_latest_quarter_eps, "ai_source": src("latest_quarter_eps"), "ai_source_url": url("latest_quarter_eps"), "ai_value": ai_latest_quarter_eps, "adopted_value": ai_latest_quarter_eps, "adopted_source": "AI補齊" if ai_latest_quarter_eps is not None else "無可用資料", "period": ai_period_text, "fmt": "num", "notes": "判斷最新獲利動能"},
+        {"field": "TTM EPS", "system_source": "yfinance trailingEps / 現價÷P/E 反推備援", "system_value": sys_ttm_eps, "ai_source": src("ttm_eps"), "ai_source_url": url("ttm_eps"), "ai_value": ai_ttm_eps, "adopted_value": eff_t_eps, "adopted_source": ttm_adopted_source, "period": ttm_period, "fmt": "num", "notes": ttm_notes},
+        {"field": "完整年度 EPS", "system_source": "未穩定提供，需 AI/年報補齊", "system_value": sys_fiscal_year_eps, "ai_source": src("fiscal_year_eps"), "ai_source_url": url("fiscal_year_eps"), "ai_value": ai_fiscal_year_eps, "adopted_value": ai_fiscal_year_eps, "adopted_source": "AI補齊" if ai_fiscal_year_eps is not None else "無可用資料", "period": ai_period_text, "fmt": "num", "notes": "年度基準，不與 TTM 混用"},
+        {"field": "Forward EPS－系統", "system_source": "yfinance forwardEps；必要時由 TTM EPS×成長率推估", "system_value": sys_forward_eps_system, "ai_source": "不使用AI", "ai_source_url": "", "ai_value": None, "adopted_value": sys_forward_eps_system, "adopted_source": "系統/推估" if sys_forward_eps_system is not None else "無可用資料", "period": "系統/推估", "fmt": "num"},
+        {"field": "Forward EPS－AI/共識", "system_source": "不使用系統", "system_value": None, "ai_source": src("forward_eps_consensus") if ai_forward_eps_consensus is not None else src("forward_eps_ai"), "ai_source_url": url("forward_eps_consensus") if ai_forward_eps_consensus is not None else url("forward_eps_ai"), "ai_value": ai_f_eps_calc, "adopted_value": ai_f_eps_calc, "adopted_source": "法人共識/FY1" if ai_forward_eps_fy1 is not None or ai_forward_eps_consensus is not None else ("AI補齊" if ai_forward_eps_ai is not None else "無可用資料"), "period": ai_period_text, "fmt": "num", "notes": "與系統 Forward EPS 分開比較"},
+        {"field": "Forward EPS－FY1", "system_source": "不使用系統", "system_value": None, "ai_source": src("forward_eps_fy1"), "ai_source_url": url("forward_eps_fy1"), "ai_value": ai_forward_eps_fy1, "adopted_value": ai_forward_eps_fy1, "adopted_source": "AI/法人FY1" if ai_forward_eps_fy1 is not None else "無可用資料", "period": fy_year_display_safe(ai_forward_eps_fy1_year), "fmt": "num", "notes": "第17-C-9c-hotfix442：FY1 一年預估估值用"},
+        {"field": "Forward EPS－FY2", "system_source": "不使用系統", "system_value": None, "ai_source": src("forward_eps_fy2"), "ai_source_url": url("forward_eps_fy2"), "ai_value": ai_forward_eps_fy2, "adopted_value": ai_forward_eps_fy2, "adopted_source": "AI/法人FY2" if ai_forward_eps_fy2 is not None else "無可用資料", "period": fy_year_display_safe(ai_forward_eps_fy2_year), "fmt": "num", "notes": "第17-C-9c-hotfix442：FY2 第二年預估估值用，不直接當買點"},
+        {"field": "Forward EPS－FY3", "system_source": "不使用系統", "system_value": None, "ai_source": src("forward_eps_fy3"), "ai_source_url": url("forward_eps_fy3"), "ai_value": ai_forward_eps_fy3, "adopted_value": ai_forward_eps_fy3, "adopted_source": "AI/法人FY3" if ai_forward_eps_fy3 is not None else "無可用資料", "period": fy_year_display_safe(ai_forward_eps_fy3_year), "fmt": "num", "notes": "第17-C-9c-hotfix442：FY3 第三年預估/高風險情境，不作買點"},
+        {"field": "營收 YoY", "system_source": "MOPS/FinMind/Yahoo 月營收；不採 yfinance revenueGrowth", "system_source_url": latest_rev_source_url, "source_rule": latest_rev_source_rule, "announce_date": latest_rev_announce_date, "announce_month": latest_rev_announce_month, "revenue_month": latest_rev_revenue_month, "system_value": rev_growth, "ai_source": src("yoy"), "ai_source_url": url("yoy"), "ai_value": ai_yoy, "adopted_value": eff_rg, "adopted_source": adopt_source(rev_growth, ai_yoy, "月營收公告值", "AI補齊"), "period": latest_rev_period, "fmt": "pct", "is_stale": rev_is_stale, "notes": latest_rev_notice or ("月營收可能不是最新公告月份" if rev_is_stale else "")},
+        {"field": "營收 MoM", "system_source": "MOPS/FinMind/Yahoo 月營收", "system_source_url": latest_rev_source_url, "source_rule": latest_rev_source_rule, "announce_date": latest_rev_announce_date, "announce_month": latest_rev_announce_month, "revenue_month": latest_rev_revenue_month, "system_value": (latest_mom_val / 100.0) if latest_mom_val is not None else None, "ai_source": src("mom"), "ai_source_url": url("mom"), "ai_value": ai_mom, "adopted_value": (latest_mom_val / 100.0) if latest_mom_val is not None else ai_mom, "adopted_source": "月營收公告值/AI覆蓋", "period": latest_rev_period, "fmt": "pct", "is_stale": rev_is_stale},
+        {"field": "毛利率", "system_source": "yfinance；缺值時 FinMind 財報健康度", "system_value": gross_margin, "ai_source": src("gross_margin"), "ai_source_url": url("gross_margin"), "ai_value": ai_gm, "adopted_value": eff_gm, "adopted_source": adopt_source(gross_margin, ai_gm), "period": ai_period_text if gross_margin is None and ai_gm is not None else "系統最新可得", "fmt": "pct", "notes": dq_note_text if "毛利率" in dq_note_text else ""},
+        {"field": "營益率", "system_source": "yfinance；缺值時 FinMind 財報健康度", "system_value": op_margin, "ai_source": src("operating_margin"), "ai_source_url": url("operating_margin"), "ai_value": ai_om, "adopted_value": eff_om, "adopted_source": adopt_source(op_margin, ai_om), "period": ai_period_text if op_margin is None and ai_om is not None else "系統最新可得", "fmt": "pct", "notes": dq_note_text if "營益率" in dq_note_text else ""},
+        {"field": "ROE", "system_source": "yfinance；或用 P/B÷P/E 校正", "system_value": roe, "ai_source": src("roe"), "ai_source_url": url("roe"), "ai_value": ai_roe, "adopted_value": eff_roe, "adopted_source": adopt_source(roe, ai_roe, "系統/恆等式校正", "AI補齊"), "period": ai_period_text if roe is None and ai_roe is not None else "系統/校正", "fmt": "pct"},
+        {"field": "D/E", "system_source": "yfinance；缺值時 FinMind 財報健康度", "system_value": sys_de, "ai_source": src("debt_to_equity"), "ai_source_url": url("debt_to_equity"), "ai_value": ai_de, "adopted_value": eff_de, "adopted_source": adopt_source(sys_de, ai_de), "period": ai_period_text if sys_de is None and ai_de is not None else "系統最新可得", "fmt": "x", "notes": dq_note_text if "D/E" in dq_note_text or "債" in dq_note_text else ""},
+    ]
+    dq_report_df = build_financial_quality_report(quality_rows)
     return {
-        "operable_pe_cap": operable_pe_cap,
-        "base_pe_cap_for_calc": base_pe_cap_for_calc,
-        "formula_pe_cap": formula_pe_cap,
-        "soft_pe_cap": soft_pe_cap,
-        "hard_pe_cap": hard_pe_cap,
-        "soft_pe_cap_for_calc": soft_pe_cap_for_calc,
-        "hard_pe_cap_for_calc": hard_pe_cap_for_calc,
-        "extreme_pe_cap_for_calc": extreme_pe_cap_for_calc,
-        "sys_target_price_est": sys_target_price_est,
-        "sys_target_price_raw": sys_target_price_raw,
-        "formula_eps_for_calc": formula_eps_for_calc,
-        "formula_eps_source": formula_eps_source,
-        "forward_eps_period_mismatch": forward_eps_period_mismatch,
-        "current_eps_raw": current_eps_valuation["current_eps_raw"],
-        "current_eps_for_valuation": current_eps_valuation["current_eps_for_valuation"],
-        "current_eps_source": current_eps_valuation["current_eps_source"],
-        "current_eps_source_detail": current_eps_valuation["current_eps_source_detail"],
-        "current_eps_formula_note": current_eps_valuation["current_eps_formula_note"],
-        "current_eps_period": current_eps_valuation["current_eps_period"],
-        "current_target_price_est": current_eps_valuation["current_target_price_est"],
-        "run_rate_eps_context": run_rate_eps_context,
-        "run_rate_1q_eps_annualized": run_rate_eps_context["one_q_annualized_eps"],
-        "run_rate_2q_eps_annualized": run_rate_eps_context["two_q_annualized_eps"],
-        "run_rate_1q_target_price": run_rate_eps_context["one_q_target_price"],
-        "run_rate_2q_target_price": run_rate_eps_context["two_q_target_price"],
-        "run_rate_reference_eps": run_rate_eps_context["reference_eps"],
-        "run_rate_reference_target_price": run_rate_eps_context["reference_target_price"],
-        "run_rate_label": run_rate_eps_context["label"],
-        "run_rate_action": run_rate_eps_context["action"],
-        "is_capped": is_capped,
-        "extreme_target_price": extreme_target_price,
-        "extreme_target_price_raw": extreme_target_price_raw,
-        "manual_cap_user_adjusted": manual_cap_user_adjusted,
-        "manual_cap_input": manual_cap_input,
-        "manual_cap_source_text": manual_cap_source_text,
-        "manual_cap_for_calc": manual_cap_for_calc,
-        "manual_cap_hit_hard": manual_cap_hit_hard,
-        "manual_target_price": manual_target_price,
-        "ai_target_price_est": ai_target_price_est,
-        "ai_is_capped": ai_is_capped,
-        "ai_extreme_target_price": ai_extreme_target_price,
-        "ai_manual_target_price": ai_manual_target_price,
-        "fy1_eps_for_annual": fy1_eps_for_annual,
-        "fy1_formula_target_price": fy1_formula_target_price,
-        "fy2_formula_target_price": fy2_formula_target_price,
-        "fy3_formula_target_price": fy3_formula_target_price,
-        "fy1_base_target_price": fy1_base_target_price,
-        "fy1_soft_target_price": fy1_soft_target_price,
-        "fy1_hard_target_price": fy1_hard_target_price,
-        "fy2_base_target_price": fy2_base_target_price,
-        "fy2_soft_target_price": fy2_soft_target_price,
-        "fy2_hard_target_price": fy2_hard_target_price,
-        "fy3_base_target_price": fy3_base_target_price,
-        "fy3_soft_target_price": fy3_soft_target_price,
-        "fy3_hard_target_price": fy3_hard_target_price,
-        "fy1_manual_target_price": fy1_manual_target_price,
+        "quality_rows": quality_rows,
+        "dq_report_df": dq_report_df,
+        "dq_note_text": dq_note_text,
+        "ai_period_text": ai_period_text,
+        "latest_rev_period": latest_rev_period,
+        "rev_is_stale": rev_is_stale,
     }

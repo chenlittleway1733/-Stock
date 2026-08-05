@@ -25,6 +25,12 @@ from google import genai
 from google.genai import types
 
 from ai_services.financial_filler import postprocess_financial_ai_payload
+from ai_services.market_gateway import (
+    build_market_ai_fallback_response,
+    build_market_ai_input,
+    build_market_ai_prompt,
+    parse_and_validate_market_ai_response,
+)
 # 從 utils 引入需要的工具
 from utils import (
     build_monthly_revenue_growth_frame,
@@ -1129,6 +1135,57 @@ def get_ai_analysis_final(topic, api_key, model_name="gemini-3.1-pro-preview"):
     except Exception as e: 
         return f"連線異常: {str(e)}", []
 
+
+def get_market_ai_analysis(reasoning_pack, api_key, stock_id=None, stock_name=None, model_name="gemini-3.1-pro-preview"):
+    """Run AI Gateway analysis for market reasoning with deterministic fallback."""
+    ai_input = build_market_ai_input(reasoning_pack, stock_id=stock_id, stock_name=stock_name)
+    prompt_pack = build_market_ai_prompt(ai_input)
+    if not api_key:
+        fallback = build_market_ai_fallback_response(ai_input, reason="未輸入 Gemini API Key，使用規則引擎降級摘要。")
+        return {
+            "ok": False,
+            "issues": [fallback["_fallback_reason"]],
+            "data": fallback,
+            "prompt": prompt_pack,
+            "input": ai_input,
+            "model_used": None,
+        }
+
+    used_model = model_name or "gemini-3.1-pro-preview"
+    try:
+        client = genai.Client(api_key=api_key.strip())
+        response = client.models.generate_content(
+            model=used_model,
+            contents=prompt_pack["user_prompt"],
+            config=types.GenerateContentConfig(
+                system_instruction=prompt_pack["system_instruction"],
+                response_mime_type="application/json",
+            ),
+        )
+        log_data_health("Gemini", True, 200)
+        parsed = parse_and_validate_market_ai_response(response.text, ai_input=ai_input)
+        parsed.update({
+            "prompt": prompt_pack,
+            "input": ai_input,
+            "model_used": used_model,
+        })
+        return parsed
+    except Exception as e:
+        log_exception("Gemini", "get_market_ai_analysis", e)
+        log_data_health("Gemini", False, f"ERR:{used_model}:market_gateway")
+        fallback = build_market_ai_fallback_response(
+            ai_input,
+            reason=f"Gemini 市場分析失敗，已降級規則摘要：{str(e)[:160]}",
+        )
+        return {
+            "ok": False,
+            "issues": [fallback["_fallback_reason"]],
+            "data": fallback,
+            "prompt": prompt_pack,
+            "input": ai_input,
+            "model_used": used_model,
+        }
+
 @st.cache_data(ttl=900) 
 def get_global_market_trend():
     try:
@@ -1375,6 +1432,163 @@ def _read_html_tables_with_fallback(html):
             if body:
                 tables.append(pd.DataFrame(body, columns=header))
         return tables
+
+
+TAIFEX_FUT_CONTRACTS_DATE_URL = "https://www.taifex.com.tw/cht/3/futContractsDate"
+
+
+def _parse_taifex_number(value):
+    text = str(value or "").replace(",", "").strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except Exception:
+        return None
+
+
+def parse_taifex_futures_contracts_html(html, product_name="臺股期貨", investor_name="外資"):
+    """Parse TAIFEX futures institutional table for one product/investor row."""
+    if not html:
+        return {}
+
+    parser = _SimpleHtmlTableParser()
+    try:
+        parser.feed(html)
+    except Exception:
+        return {}
+
+    date_match = re.search(r"日期\s*(\d{4}/\d{1,2}/\d{1,2})", re.sub(r"\s+", "", html))
+    data_date = date_match.group(1).replace("/", "-") if date_match else ""
+    current_product = None
+
+    for table in parser.tables:
+        for row in table:
+            if not row:
+                continue
+            cells = [str(x).strip() for x in row if str(x).strip()]
+            if len(cells) >= 15 and cells[0].isdigit():
+                current_product = cells[1]
+                investor = cells[2]
+                values = cells[3:15]
+            elif len(cells) >= 13 and current_product:
+                investor = cells[0]
+                values = cells[1:13]
+            else:
+                continue
+
+            if product_name not in str(current_product) or investor_name not in str(investor):
+                continue
+            nums = [_parse_taifex_number(value) for value in values[:12]]
+            if len(nums) < 12:
+                continue
+            return {
+                "available": True,
+                "data_date": data_date,
+                "product_name": current_product,
+                "investor_name": investor,
+                "trade_long_lots": nums[0],
+                "trade_long_amount": nums[1],
+                "trade_short_lots": nums[2],
+                "trade_short_amount": nums[3],
+                "trade_net_lots": nums[4],
+                "trade_net_amount": nums[5],
+                "open_interest_long_lots": nums[6],
+                "open_interest_long_amount": nums[7],
+                "open_interest_short_lots": nums[8],
+                "open_interest_short_amount": nums[9],
+                "open_interest_net_lots": nums[10],
+                "open_interest_net_amount": nums[11],
+                "source": "TAIFEX 三大法人區分各期貨契約依日期",
+                "source_url": TAIFEX_FUT_CONTRACTS_DATE_URL,
+            }
+    return {}
+
+
+def build_taifex_foreign_futures_snapshot(row, price_change_pct=None):
+    """Convert a TAIFEX row into the futures_snapshot consumed by market_reasoning."""
+    if not isinstance(row, dict) or not row.get("available"):
+        return {
+            "available": False,
+            "message": "未取得期交所外資台指期資料",
+        }
+
+    trade_long = s_float(row.get("trade_long_lots"))
+    trade_short = s_float(row.get("trade_short_lots"))
+    trade_net = s_float(row.get("trade_net_lots"))
+    oi_long = s_float(row.get("open_interest_long_lots"))
+    oi_short = s_float(row.get("open_interest_short_lots"))
+    oi_net = s_float(row.get("open_interest_net_lots"))
+    if trade_net is None and trade_long is not None and trade_short is not None:
+        trade_net = trade_long - trade_short
+    short_change = None
+    if trade_long is not None and trade_short is not None:
+        short_change = trade_short - trade_long
+
+    if short_change is None and trade_net is not None:
+        short_change = -trade_net
+
+    net_oi_bias = "資料不足"
+    if oi_net is not None:
+        if oi_net <= -30000:
+            net_oi_bias = "外資未平倉偏空"
+        elif oi_net >= 30000:
+            net_oi_bias = "外資未平倉偏多"
+        else:
+            net_oi_bias = "外資未平倉中性"
+
+    daily_bias = "資料不足"
+    if short_change is not None:
+        if short_change >= 3000:
+            daily_bias = "當日空方交易明顯增加"
+        elif short_change > 0:
+            daily_bias = "當日空方交易略多"
+        elif short_change <= -3000:
+            daily_bias = "當日多方交易明顯較多"
+        else:
+            daily_bias = "當日多方交易略多"
+
+    return {
+        "available": True,
+        "source": row.get("source", "TAIFEX"),
+        "source_url": row.get("source_url", TAIFEX_FUT_CONTRACTS_DATE_URL),
+        "data_date": row.get("data_date"),
+        "product_name": row.get("product_name"),
+        "investor_name": row.get("investor_name"),
+        "foreign_futures_net_change": trade_net,
+        "foreign_futures_short_change": short_change,
+        "foreign_futures_trade_long_lots": trade_long,
+        "foreign_futures_trade_short_lots": trade_short,
+        "foreign_futures_long_oi_lots": oi_long,
+        "foreign_futures_short_oi_lots": oi_short,
+        "foreign_futures_net_oi_lots": oi_net,
+        "price_change_pct": price_change_pct,
+        "daily_bias": daily_bias,
+        "net_oi_bias": net_oi_bias,
+        "message": f"{row.get('product_name', '臺股期貨')} {row.get('investor_name', '外資')}：{daily_bias}；{net_oi_bias}",
+    }
+
+
+@st.cache_data(ttl=1800)
+def get_taifex_foreign_futures_snapshot(price_change_pct=None):
+    """Fetch latest TAIFEX foreign investor TAIEX futures position snapshot."""
+    try:
+        res = requests.get(
+            TAIFEX_FUT_CONTRACTS_DATE_URL,
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=12,
+        )
+        log_data_health("TAIFEX", res.status_code == 200, res.status_code)
+        if res.status_code != 200:
+            return {"available": False, "message": f"期交所資料讀取失敗：HTTP {res.status_code}"}
+        row = parse_taifex_futures_contracts_html(res.text, product_name="臺股期貨", investor_name="外資")
+        if not row:
+            return {"available": False, "message": "期交所頁面未解析到臺股期貨外資列"}
+        return build_taifex_foreign_futures_snapshot(row, price_change_pct=price_change_pct)
+    except Exception as e:
+        log_exception("TAIFEX", "get_taifex_foreign_futures_snapshot", e)
+        log_data_health("TAIFEX", False, f"ERR:{str(e)[:120]}")
+        return {"available": False, "message": f"期交所資料讀取失敗：{str(e)[:80]}"}
 
 
 def parse_mops_monthly_revenue_html(html, stock_id, revenue_month):

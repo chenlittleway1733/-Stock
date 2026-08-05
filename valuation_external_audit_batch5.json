@@ -1,0 +1,1058 @@
+{
+  "as_of": "20260605",
+  "groups": {
+    "MEMORY_OSAT_CYCLE": [
+      {
+        "code": "2329",
+        "name": "華泰",
+        "from_taxon": "OSAT_MEMORY_DISPLAY_MATURE",
+        "pepb": {
+          "pe": 25.48,
+          "pb": 3.24,
+          "yield": 1.78,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": -663477,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "記憶體封測",
+          "IC封裝",
+          "封測循環"
+        ]
+      },
+      {
+        "code": "6239",
+        "name": "力成",
+        "from_taxon": "OSAT_MEMORY_DISPLAY_MATURE",
+        "pepb": {
+          "pe": 40.24,
+          "pb": 4.28,
+          "yield": 1.33,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": -4639797,
+          "dealer_net": -2063835,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "記憶體封測",
+          "封測",
+          "先進封裝題材"
+        ]
+      },
+      {
+        "code": "8110",
+        "name": "華東",
+        "from_taxon": "OSAT_MEMORY_DISPLAY_MATURE",
+        "pepb": {
+          "pe": 20.7,
+          "pb": 2.31,
+          "yield": 2.65,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": -139925,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "記憶體封測",
+          "封測"
+        ]
+      },
+      {
+        "code": "8131",
+        "name": "福懋科",
+        "from_taxon": "OSAT_MEMORY_DISPLAY_MATURE",
+        "pepb": {
+          "pe": 34.8,
+          "pb": 2.42,
+          "yield": 1.45,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": -176178,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "記憶體封測",
+          "封測"
+        ]
+      }
+    ],
+    "MEMORY_MANUFACTURING_CYCLE": [
+      {
+        "code": "2337",
+        "name": "旺宏",
+        "from_taxon": "MEMORY_CYCLE",
+        "pepb": {
+          "pe": null,
+          "pb": 5.86,
+          "yield": null,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": -89000,
+          "dealer_net": -2826752,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "NOR Flash",
+          "記憶體製造",
+          "Flash",
+          "P/B週期"
+        ]
+      },
+      {
+        "code": "2344",
+        "name": "華邦電",
+        "from_taxon": "MEMORY_CYCLE",
+        "pepb": {
+          "pe": 48.07,
+          "pb": 6.25,
+          "yield": 0.31,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": -9513592,
+          "dealer_net": -1694095,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "DRAM",
+          "記憶體製造",
+          "P/B週期"
+        ]
+      },
+      {
+        "code": "2408",
+        "name": "南亞科",
+        "from_taxon": "MEMORY_CYCLE",
+        "pepb": {
+          "pe": 32.23,
+          "pb": 5.78,
+          "yield": 0.42,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": -331824,
+          "dealer_net": -1013185,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "DRAM",
+          "記憶體製造",
+          "P/B週期"
+        ]
+      },
+      {
+        "code": "3006",
+        "name": "晶豪科",
+        "from_taxon": "MEMORY_CYCLE",
+        "pepb": {
+          "pe": 26.46,
+          "pb": 4.85,
+          "yield": 0.45,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": -1000,
+          "dealer_net": -217764,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "記憶體IC",
+          "DRAM",
+          "P/B週期"
+        ]
+      }
+    ],
+    "LEGACY_CONSUMER_IC_TURNAROUND": [
+      {
+        "code": "2363",
+        "name": "矽統",
+        "from_taxon": "IC_DESIGN_CONSUMER",
+        "pepb": {
+          "pe": 36.76,
+          "pb": 1.58,
+          "yield": 0.96,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": -60972,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "晶片組",
+          "消費性IC",
+          "轉機題材"
+        ]
+      },
+      {
+        "code": "3041",
+        "name": "揚智",
+        "from_taxon": "IC_DESIGN_CONSUMER",
+        "pepb": {
+          "pe": null,
+          "pb": 2.44,
+          "yield": null,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": 734,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "多媒體IC",
+          "機上盒晶片",
+          "轉機題材"
+        ]
+      },
+      {
+        "code": "3094",
+        "name": "聯傑",
+        "from_taxon": "IC_DESIGN_CONSUMER",
+        "pepb": {
+          "pe": 122.5,
+          "pb": 2.62,
+          "yield": 0.78,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": 294,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "網通IC",
+          "通訊IC",
+          "轉機題材"
+        ]
+      }
+    ],
+    "GENERAL_OSAT_TEST_LEADFRAME": [
+      {
+        "code": "2369",
+        "name": "菱生",
+        "from_taxon": "OSAT_MEMORY_DISPLAY_MATURE",
+        "pepb": {
+          "pe": null,
+          "pb": 2.7,
+          "yield": 0.86,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": 84926,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "封測",
+          "導線架封裝",
+          "車用"
+        ]
+      },
+      {
+        "code": "2441",
+        "name": "超豐",
+        "from_taxon": "OSAT_MEMORY_DISPLAY_MATURE",
+        "pepb": {
+          "pe": 28.16,
+          "pb": 2.96,
+          "yield": 2.28,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": -363000,
+          "dealer_net": -271795,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "封測",
+          "IC封裝",
+          "成熟封測"
+        ]
+      },
+      {
+        "code": "6257",
+        "name": "矽格",
+        "from_taxon": "OSAT_MEMORY_DISPLAY_MATURE",
+        "pepb": {
+          "pe": 33.33,
+          "pb": 4.94,
+          "yield": 1.88,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": -170866,
+          "dealer_net": -118281,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "封測",
+          "測試",
+          "成熟封測"
+        ]
+      },
+      {
+        "code": "6525",
+        "name": "捷敏-KY",
+        "from_taxon": "OSAT_MEMORY_DISPLAY_MATURE",
+        "pepb": {
+          "pe": 19.93,
+          "pb": 3.56,
+          "yield": 4.13,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": -9551,
+          "dealer_net": -6000,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "封測",
+          "功率半導體封裝",
+          "車用"
+        ]
+      },
+      {
+        "code": "8150",
+        "name": "南茂",
+        "from_taxon": "OSAT_MEMORY_DISPLAY_MATURE",
+        "pepb": {
+          "pe": 82.03,
+          "pb": 2.75,
+          "yield": 1.27,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": -12000,
+          "dealer_net": -1057343,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "驅動IC封測",
+          "記憶體封測",
+          "封測",
+          "PE失真防護"
+        ]
+      }
+    ],
+    "PLATFORM_IC_LEADER": [
+      {
+        "code": "2379",
+        "name": "瑞昱",
+        "from_taxon": "IC_DESIGN_PLATFORM_AI_EDGE",
+        "pepb": {
+          "pe": 23.15,
+          "pb": 7.33,
+          "yield": 3.89,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 2817131,
+          "dealer_net": 10566,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "網通晶片",
+          "音訊晶片",
+          "平台型IC",
+          "AI Edge"
+        ]
+      },
+      {
+        "code": "2454",
+        "name": "聯發科",
+        "from_taxon": "IC_DESIGN_PLATFORM_AI_EDGE",
+        "pepb": {
+          "pe": 68.53,
+          "pb": 17.59,
+          "yield": 1.24,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": -108257,
+          "dealer_net": -357424,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "手機晶片",
+          "平台型IC",
+          "AI Edge",
+          "AI ASIC"
+        ]
+      }
+    ],
+    "CONSUMER_MCU_CONTROL_IC": [
+      {
+        "code": "2401",
+        "name": "凌陽",
+        "from_taxon": "IC_DESIGN_CONSUMER",
+        "pepb": {
+          "pe": null,
+          "pb": 1.97,
+          "yield": null,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": -424709,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "多媒體IC",
+          "消費性IC",
+          "MCU/控制IC"
+        ]
+      },
+      {
+        "code": "2436",
+        "name": "偉詮電",
+        "from_taxon": "IC_DESIGN_CONSUMER",
+        "pepb": {
+          "pe": 21.19,
+          "pb": 3.24,
+          "yield": 2.8,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": -93934,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "MCU",
+          "電源管理IC",
+          "消費性控制IC"
+        ]
+      },
+      {
+        "code": "4919",
+        "name": "新唐",
+        "from_taxon": "IC_DESIGN_CONSUMER",
+        "pepb": {
+          "pe": null,
+          "pb": 5.65,
+          "yield": 0.22,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": -120985,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "MCU",
+          "消費性IC",
+          "工控IC"
+        ]
+      },
+      {
+        "code": "4952",
+        "name": "凌通",
+        "from_taxon": "IC_DESIGN_CONSUMER",
+        "pepb": {
+          "pe": 44.5,
+          "pb": 2.46,
+          "yield": 2.02,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": -5209,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "MCU",
+          "語音IC",
+          "消費性IC"
+        ]
+      },
+      {
+        "code": "5471",
+        "name": "松翰",
+        "from_taxon": "IC_DESIGN_CONSUMER",
+        "pepb": {
+          "pe": 52.78,
+          "pb": 2.42,
+          "yield": 1.56,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": 576,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "MCU",
+          "影像控制IC",
+          "消費性控制IC"
+        ]
+      },
+      {
+        "code": "6202",
+        "name": "盛群",
+        "from_taxon": "IC_DESIGN_CONSUMER",
+        "pepb": {
+          "pe": 83.33,
+          "pb": 3.14,
+          "yield": 1.24,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": -41286,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "MCU",
+          "消費性控制IC"
+        ]
+      },
+      {
+        "code": "6243",
+        "name": "迅杰",
+        "from_taxon": "IC_DESIGN_CONSUMER",
+        "pepb": {
+          "pe": null,
+          "pb": 1.91,
+          "yield": 3.69,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": 818,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "鍵盤控制IC",
+          "消費性控制IC"
+        ]
+      }
+    ],
+    "MEMORY_MODULE_STORAGE_BRAND": [
+      {
+        "code": "2451",
+        "name": "創見",
+        "from_taxon": "MEMORY_CYCLE",
+        "pepb": {
+          "pe": 10.4,
+          "pb": 5.29,
+          "yield": 3.67,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": -1152000,
+          "dealer_net": -107591,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "記憶體模組",
+          "儲存品牌"
+        ]
+      },
+      {
+        "code": "3135",
+        "name": "凌航",
+        "from_taxon": "MEMORY_CYCLE",
+        "pepb": {
+          "pe": 16.1,
+          "pb": 6.26,
+          "yield": 2.07,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": 214,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "記憶體產品",
+          "記憶體模組",
+          "儲存"
+        ]
+      },
+      {
+        "code": "3260",
+        "name": "威剛",
+        "from_taxon": "MEMORY_CYCLE",
+        "pepb": {
+          "pe": 8.42,
+          "pb": 4.85,
+          "yield": null,
+          "source": "TPEx peratio"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": null,
+          "dealer_net": null,
+          "source": "TPEx 3insti"
+        },
+        "themes": [
+          "記憶體模組",
+          "儲存品牌"
+        ]
+      },
+      {
+        "code": "4967",
+        "name": "十銓",
+        "from_taxon": "MEMORY_CYCLE",
+        "pepb": {
+          "pe": 7.14,
+          "pb": 3.34,
+          "yield": 3.58,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": -54426,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "記憶體模組",
+          "儲存品牌"
+        ]
+      },
+      {
+        "code": "8271",
+        "name": "宇瞻",
+        "from_taxon": "MEMORY_CYCLE",
+        "pepb": {
+          "pe": 10.82,
+          "pb": 4.5,
+          "yield": 2.03,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": -20201,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "記憶體模組",
+          "工控儲存",
+          "儲存品牌"
+        ]
+      }
+    ],
+    "CONSUMER_INTERFACE_SENSOR_IC": [
+      {
+        "code": "2458",
+        "name": "義隆",
+        "from_taxon": "IC_DESIGN_CONSUMER",
+        "pepb": {
+          "pe": 17.46,
+          "pb": 4.69,
+          "yield": 4.46,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": -15538,
+          "dealer_net": -36728,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "觸控IC",
+          "MCU",
+          "人機介面IC"
+        ]
+      },
+      {
+        "code": "3227",
+        "name": "原相",
+        "from_taxon": "IC_DESIGN_CONSUMER",
+        "pepb": {
+          "pe": 20.44,
+          "pb": 2.98,
+          "yield": null,
+          "source": "TPEx peratio"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": null,
+          "dealer_net": null,
+          "source": "TPEx 3insti"
+        },
+        "themes": [
+          "感測IC",
+          "滑鼠晶片",
+          "人機介面IC"
+        ]
+      }
+    ],
+    "HIGH_SPEED_INTERFACE_IC": [
+      {
+        "code": "3014",
+        "name": "聯陽",
+        "from_taxon": "IC_DESIGN_PLATFORM_AI_EDGE",
+        "pepb": {
+          "pe": 16.43,
+          "pb": 4.07,
+          "yield": 5.59,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": -10276,
+          "dealer_net": -4849,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "高速介面",
+          "I/O控制IC",
+          "平台型IC"
+        ]
+      },
+      {
+        "code": "4966",
+        "name": "譜瑞-KY",
+        "from_taxon": "IC_DESIGN_PLATFORM_AI_EDGE",
+        "pepb": {
+          "pe": 22.74,
+          "pb": 2.54,
+          "yield": null,
+          "source": "TPEx peratio"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": null,
+          "dealer_net": null,
+          "source": "TPEx 3insti"
+        },
+        "themes": [
+          "高速介面",
+          "USB",
+          "車用",
+          "AI PC"
+        ]
+      },
+      {
+        "code": "6756",
+        "name": "威鋒電子",
+        "from_taxon": "IC_DESIGN_PLATFORM_AI_EDGE",
+        "pepb": {
+          "pe": 62.7,
+          "pb": 2.28,
+          "yield": 0.94,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": -1131,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "USB控制IC",
+          "高速介面",
+          "平台型IC"
+        ]
+      }
+    ],
+    "DISPLAY_DRIVER_IC_CYCLE": [
+      {
+        "code": "3034",
+        "name": "聯詠",
+        "from_taxon": "IC_DESIGN_CONSUMER",
+        "pepb": {
+          "pe": 20.16,
+          "pb": 4.16,
+          "yield": 4.67,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": -74815,
+          "dealer_net": -201128,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "驅動IC",
+          "TDDI",
+          "顯示IC",
+          "成熟獲利"
+        ]
+      },
+      {
+        "code": "3545",
+        "name": "敦泰",
+        "from_taxon": "IC_DESIGN_CONSUMER",
+        "pepb": {
+          "pe": null,
+          "pb": 1.39,
+          "yield": 1.43,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": -36845,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "驅動IC",
+          "觸控IC",
+          "顯示IC",
+          "循環"
+        ]
+      },
+      {
+        "code": "3592",
+        "name": "瑞鼎",
+        "from_taxon": "IC_DESIGN_CONSUMER",
+        "pepb": {
+          "pe": 16.97,
+          "pb": 1.91,
+          "yield": 5.38,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": -5671,
+          "dealer_net": 2447,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "驅動IC",
+          "顯示IC",
+          "TDDI"
+        ]
+      },
+      {
+        "code": "4961",
+        "name": "天鈺",
+        "from_taxon": "IC_DESIGN_CONSUMER",
+        "pepb": {
+          "pe": 20.2,
+          "pb": 1.15,
+          "yield": 4.58,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 21000,
+          "dealer_net": -16935,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "驅動IC",
+          "電源管理IC",
+          "顯示IC"
+        ]
+      },
+      {
+        "code": "6962",
+        "name": "奕力-KY",
+        "from_taxon": "IC_DESIGN_CONSUMER",
+        "pepb": {
+          "pe": 24.69,
+          "pb": 0.87,
+          "yield": 2.77,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": -40877,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "驅動IC",
+          "TDDI",
+          "顯示IC"
+        ]
+      },
+      {
+        "code": "8016",
+        "name": "矽創",
+        "from_taxon": "IC_DESIGN_CONSUMER",
+        "pepb": {
+          "pe": 19.06,
+          "pb": 3.12,
+          "yield": 3.79,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 24131,
+          "dealer_net": -8570,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "驅動IC",
+          "顯示IC",
+          "消費性IC"
+        ]
+      }
+    ],
+    "RF_CONNECTIVITY_IC": [
+      {
+        "code": "4968",
+        "name": "立積",
+        "from_taxon": "IC_DESIGN_PLATFORM_AI_EDGE",
+        "pepb": {
+          "pe": 38.34,
+          "pb": 3.73,
+          "yield": 1.41,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": -9313,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "RF IC",
+          "WiFi FEM",
+          "無線通訊IC"
+        ]
+      },
+      {
+        "code": "6526",
+        "name": "達發",
+        "from_taxon": "IC_DESIGN_PLATFORM_AI_EDGE",
+        "pepb": {
+          "pe": 38.4,
+          "pb": 6.25,
+          "yield": 2.02,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 1000,
+          "dealer_net": -10639,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "網通IC",
+          "藍牙音訊IC",
+          "Connectivity IC"
+        ]
+      }
+    ],
+    "EDGE_AI_SENSOR_SOC": [
+      {
+        "code": "6695",
+        "name": "芯鼎",
+        "from_taxon": "IC_DESIGN_PLATFORM_AI_EDGE",
+        "pepb": {
+          "pe": null,
+          "pb": 3.41,
+          "yield": null,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": -3768,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "AI影像IC",
+          "影像處理",
+          "Edge AI"
+        ]
+      },
+      {
+        "code": "7749",
+        "name": "意騰-KY",
+        "from_taxon": "IC_DESIGN_PLATFORM_AI_EDGE",
+        "pepb": {
+          "pe": 37.32,
+          "pb": 5.49,
+          "yield": 1.94,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": -10755,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "AI聲學處理",
+          "Edge AI",
+          "AI晶片"
+        ]
+      }
+    ],
+    "DEFENSE_DRONE_EVENT": [
+      {
+        "code": "8033",
+        "name": "雷虎",
+        "from_taxon": "THEME_EVENT",
+        "pepb": {
+          "pe": 200.75,
+          "pb": 10.64,
+          "yield": null,
+          "source": "TWSE BWIBBU_ALL"
+        },
+        "inst": {
+          "foreign_net": null,
+          "it_net": 0,
+          "dealer_net": -16167,
+          "source": "TWSE T86 20260605"
+        },
+        "themes": [
+          "軍工",
+          "無人機",
+          "事件驅動",
+          "題材"
+        ]
+      }
+    ],
+    "LEGACY_TECH_REVIEW": [
+      {
+        "code": "8078",
+        "name": "華寶",
+        "from_taxon": "GENERAL",
+        "pepb": {},
+        "inst": {},
+        "themes": [
+          "待確認",
+          "舊資料保留",
+          "低可信度分類"
+        ]
+      }
+    ]
+  }
+}

@@ -46,6 +46,69 @@ def log_exception(source, context, exc=None):
         return event
     return event
 
+
+def format_fy_year_label(year_value):
+    """Display FY year labels consistently as 2026E / 年期未明."""
+    try:
+        if year_value is None:
+            return "年期未明"
+        text = str(year_value).strip()
+        if text in ["", "None", "nan", "未標示"]:
+            return "年期未明"
+        return f"{text}E" if re.match(r"^\d{4}$", text) else text
+    except Exception:
+        return "年期未明"
+
+
+def taipei_today():
+    """Return Taiwan-market current date independent of server timezone."""
+    tz = datetime.timezone(datetime.timedelta(hours=8))
+    return datetime.datetime.now(tz).date()
+
+
+def build_forward_eps_calendar_notice(current_date=None, fy1_year=None, fy2_year=None, fy3_year=None):
+    """Build FY year/month guidance without changing FY1/FY2/FY3 calculations."""
+    try:
+        if current_date is None:
+            day = taipei_today()
+        elif isinstance(current_date, datetime.datetime):
+            day = current_date.date()
+        elif isinstance(current_date, datetime.date):
+            day = current_date
+        else:
+            day = datetime.datetime.strptime(str(current_date)[:10], "%Y-%m-%d").date()
+    except Exception:
+        day = taipei_today()
+
+    month = int(day.month)
+    fy_sequence_text = (
+        f"FY1={format_fy_year_label(fy1_year)} / "
+        f"FY2={format_fy_year_label(fy2_year)} / "
+        f"FY3={format_fy_year_label(fy3_year)}"
+    )
+
+    if month >= 10:
+        phase = "q4_fy2_primary_reference"
+        ui_notice = "目前已進入 10 月後，FY1 接近落地，市場通常改以 FY2 作主要前瞻參考；FY1 仍需用來驗證本年度獲利是否達標。"
+        prompt_notice = "10-12 月：FY1 接近落地，請以 FY2 作主要前瞻參考，但不得自動用 FY2 支撐買進；仍需檢查 FY2 法人共識、訂單/營收/毛利率證據與 FY1 落地狀況。"
+    elif month >= 7:
+        phase = "h2_fy2_reference"
+        ui_notice = "目前已進入 7 月後，估值判讀應同步參考 FY2；FY1 計算方式不變，仍是年度主估值與落地檢查基準。"
+        prompt_notice = "7-9 月：FY1 計算方式不變，但請同步參考 FY2 判斷市場是否提前定價；FY2 仍不可直接視為買點。"
+    else:
+        phase = "h1_fy1_primary"
+        ui_notice = ""
+        prompt_notice = "1-6 月：FY1 通常仍是主要年度估值參考；FY2/FY3 僅作遠期情境與市場先行定價檢查。"
+
+    return {
+        "date": day.isoformat(),
+        "month": month,
+        "phase": phase,
+        "fy_sequence_text": fy_sequence_text,
+        "ui_notice": ui_notice,
+        "prompt_notice": f"目前台北時間月份={month}月；{fy_sequence_text}；{prompt_notice} FY1/FY2/FY3 EPS 計算方式不變。",
+    }
+
 # ==========================================
 # 1. 全局安全轉換與排版函數
 # ==========================================
@@ -2934,6 +2997,7 @@ def build_industry_model_snapshot_audit(
     target_confidence=None,
     divergence_warnings=None,
     dq_warnings=None,
+    current_date=None,
 ):
     """單次快照稽核：只判斷本次模型是否需要人工檢查，不判斷連續幾次。
 
@@ -3423,6 +3487,7 @@ def build_forward_eps_tiered_valuation_report(
     target_confidence=None,
     divergence_warnings=None,
     dq_warnings=None,
+    current_date=None,
 ):
     """建立 TTM / FY1 / FY2 / FY3 EPS 分層估值與法人目標價反推表。
 
@@ -3460,18 +3525,17 @@ def build_forward_eps_tiered_valuation_report(
     fy_definition = "FY1/FY2/FY3 EPS 是預估年度 EPS 序列；FY1=一年預估EPS、FY2=第二年預估EPS、FY3=第三年預估EPS，實際年度請以 EPS 對應年度欄位解讀。"
 
     def year_label(y):
-        if y is None or str(y).strip() in ["", "未標示", "None", "nan"]:
-            return "年期未明"
-        s = str(y).strip()
-        if s.endswith("E"):
-            return s
-        if re.match(r"^\d{4}$", s):
-            return f"{s}E"
-        return s
+        return format_fy_year_label(y)
 
     fy1_label = f"{year_label(fy1_year)}，一年預估 EPS" if fy1_year is not None else "年期未明，一年預估 EPS，請人工確認"
     fy2_label = f"{year_label(fy2_year)}，第二年預估 EPS" if fy2_year is not None else "年期未明，第二年預估 EPS，請人工確認"
     fy3_label = f"{year_label(fy3_year)}，第三年預估 EPS / 長期情境 EPS" if fy3_year is not None else "年期未明，第三年預估 EPS / 長期情境 EPS，請人工確認"
+    fy_calendar_notice = build_forward_eps_calendar_notice(
+        current_date=current_date,
+        fy1_year=fy1_year,
+        fy2_year=fy2_year,
+        fy3_year=fy3_year,
+    )
 
     rows = []
     tiers = [
@@ -3601,5 +3665,11 @@ def build_forward_eps_tiered_valuation_report(
         "future_evidence_score": future_evidence.get("score"),
         "future_evidence_label": future_evidence.get("label"),
         "future_evidence_action": future_evidence.get("action"),
+        "fy_calendar_phase": fy_calendar_notice.get("phase"),
+        "fy_calendar_date": fy_calendar_notice.get("date"),
+        "fy_calendar_month": fy_calendar_notice.get("month"),
+        "fy_sequence_text": fy_calendar_notice.get("fy_sequence_text"),
+        "fy_calendar_ui_notice": fy_calendar_notice.get("ui_notice"),
+        "fy_calendar_prompt_notice": fy_calendar_notice.get("prompt_notice"),
     }
     return {"summary": summary, "report": report}

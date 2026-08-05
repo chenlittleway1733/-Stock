@@ -1,245 +1,345 @@
-"""Financial data context builders for ui_main.render_main_page."""
+"""Multiple and annual valuation context builders for ui_main.render_main_page."""
 
 from ui_common import *
 
 
-def _row_text(row, key, default=""):
+def cap_float(value, default=None):
     try:
-        value = row.get(key, default)
+        return float(value) if value is not None else default
     except Exception:
         return default
-    if value is None:
-        return default
+
+
+def valuation_num(value):
     try:
-        if pd.isna(value):
-            return default
+        if value is None:
+            return None
+        value = float(value)
+        if pd.isna(value) or value <= 0:
+            return None
+        return value
     except Exception:
-        pass
-    text = str(value).strip()
-    return "" if text.lower() in {"nan", "none", "nat", "null"} else text
+        return None
 
 
-def build_financial_base_context(*, stock_id, info, current_price, finmind_key, has_ai_financial_snapshot=False):
-    """Collect system/FinMind financial inputs before valuation calculations."""
-    info = info or {}
-    df_rev_bk = get_monthly_revenue(stock_id, finmind_key)
-    df_per_bk = get_pe_pb_data(stock_id, finmind_key)
-    fm_health = get_finmind_financial_health(stock_id, finmind_key)
+def valuation_price(eps, cap):
+    eps_value = valuation_num(eps)
+    cap_value = valuation_num(cap)
+    return eps_value * cap_value if eps_value is not None and cap_value is not None else None
 
-    if df_rev_bk is not None and not df_rev_bk.empty:
-        latest_rev_row = df_rev_bk.iloc[-1]
-        if "actual_revenue_month" in df_rev_bk.columns:
-            latest_rev_month = normalize_revenue_month(df_rev_bk["actual_revenue_month"].iloc[-1])
-        else:
-            latest_rev_month = normalize_revenue_month(df_rev_bk["Month"].iloc[-1])
-        latest_mom_val = s_float(df_rev_bk["monthly_revenue_mom"].iloc[-1]) if "monthly_revenue_mom" in df_rev_bk.columns else s_float(df_rev_bk["MoM"].iloc[-1])
-        latest_yoy_val = s_float(df_rev_bk["monthly_revenue_yoy"].iloc[-1]) if "monthly_revenue_yoy" in df_rev_bk.columns else (s_float(df_rev_bk["YoY"].iloc[-1]) if "YoY" in df_rev_bk.columns else None)
-        latest_monthly_yoy = latest_yoy_val / 100.0 if latest_yoy_val is not None else None
-        latest_rev_source = _row_text(latest_rev_row, "revenue_source", "月營收資料源") or "月營收資料源"
-        latest_rev_source_url = _row_text(latest_rev_row, "source_url")
-        latest_rev_source_rule = _row_text(latest_rev_row, "source_rule")
-        latest_rev_announce_date = _row_text(latest_rev_row, "announce_date")
-        latest_rev_announce_month = normalize_revenue_month(_row_text(latest_rev_row, "announce_month"))
-        latest_rev_revenue_month = normalize_revenue_month(
-            _row_text(latest_rev_row, "revenue_month")
-            or _row_text(latest_rev_row, "actual_revenue_month")
-            or _row_text(latest_rev_row, "Month")
-            or latest_rev_month
-        )
-        rev_notice_pack = build_revenue_month_notice(latest_rev_month)
-        latest_rev_notice = rev_notice_pack.get("notice", "")
-        latest_rev_display_label = rev_notice_pack.get("display_label", f"公告月份：{latest_rev_month}")
+
+def build_current_eps_valuation(
+    *,
+    ai_latest_month_eps=None,
+    ai_latest_quarter_eps=None,
+    sys_latest_quarter_eps=None,
+    eff_t_eps=None,
+    formula_pe_cap=None,
+    raw_ai_period=None,
+):
+    """Build current realized EPS valuation, preferring latest-month then latest-quarter annualized EPS."""
+    latest_month_eps = valuation_num(ai_latest_month_eps)
+    if latest_month_eps is not None:
+        current_eps_for_valuation = latest_month_eps * 12
+        current_eps_raw = latest_month_eps
+        source = "最新單月 EPS 年化"
+        source_detail = "AI 最新單月 / 自結 EPS ×12 年化值"
+        source_note = f"原始單月 EPS={current_eps_raw:.2f}；年化 EPS={current_eps_for_valuation:.2f}"
+        period = raw_ai_period or "最新已抓取月份"
     else:
-        latest_rev_month = "無資料"
-        latest_mom_val = None
-        latest_monthly_yoy = None
-        latest_rev_notice = "未取得月營收資料，營收 YoY / MoM 將改用其他資料源或顯示 N/A。"
-        latest_rev_display_label = "公告月份：未取得"
-        latest_rev_source = ""
-        latest_rev_source_url = ""
-        latest_rev_source_rule = ""
-        latest_rev_announce_date = ""
-        latest_rev_announce_month = ""
-        latest_rev_revenue_month = ""
+        latest_quarter_eps = valuation_num(ai_latest_quarter_eps)
+        source = "最新單季 EPS 年化"
+        source_detail = "AI 最新單季 EPS ×4 年化值"
+        if latest_quarter_eps is None:
+            latest_quarter_eps = valuation_num(sys_latest_quarter_eps)
+            source_detail = "系統最新單季 EPS ×4 年化值"
 
-    pe_ratio = s_float(info.get("trailingPE"))
-    if (pe_ratio is None or pe_ratio > 1000) and df_per_bk is not None and not df_per_bk.empty:
-        if (pd.Timestamp.today() - df_per_bk.iloc[-1]["date"]).days < 30:
-            pe_ratio = s_float(df_per_bk["PER"].iloc[-1])
-
-    pb_ratio = s_float(info.get("priceToBook"))
-    if (pb_ratio is None or pb_ratio > 500) and df_per_bk is not None and not df_per_bk.empty and "PBR" in df_per_bk.columns:
-        pb_ratio = s_float(df_per_bk["PBR"].iloc[-1])
-
-    roe = s_float(info.get("returnOnEquity"))
-    sys_de = s_float(info.get("debtToEquity"))
-    if sys_de is not None:
-        sys_de = sys_de / 100.0
-
-    gross_margin = s_float(info.get("grossMargins"))
-    op_margin = s_float(info.get("operatingMargins"))
-
-    if gross_margin is None:
-        gross_margin = fm_health.get("grossMargins")
-    if op_margin is None:
-        op_margin = fm_health.get("operatingMargins")
-    if sys_de is None:
-        sys_de = fm_health.get("debtToEquity")
-
-    # yfinance revenueGrowth 常是季度/TTM 口徑，不等於台股最新單月營收 YoY。
-    # 系統「營收 YoY」只採公告月份的月營收資料；缺值時留空，後續可由 AI 單月 YoY 補齊。
-    rev_growth = latest_monthly_yoy
-    earn_growth = s_float(info.get("earningsGrowth"))
-
-    t_eps = s_float(info.get("trailingEps"))
-    sys_ttm_eps_source = "yfinance trailingEps"
-    sys_ttm_eps_is_inferred = False
-    if t_eps is None and pe_ratio is not None and pe_ratio > 0 and current_price > 0:
-        t_eps = current_price / pe_ratio
-        sys_ttm_eps_source = "現價 / P/E 反推"
-        sys_ttm_eps_is_inferred = True
-
-    sys_f_eps_calc = s_float(info.get("forwardEps"))
+        if latest_quarter_eps is not None:
+            current_eps_for_valuation = latest_quarter_eps * 4
+            current_eps_raw = latest_quarter_eps
+            source_note = f"原始單季 EPS={current_eps_raw:.2f}；年化 EPS={current_eps_for_valuation:.2f}"
+            period = raw_ai_period or "最新已抓取季度"
+        else:
+            current_eps_for_valuation = valuation_num(eff_t_eps)
+            current_eps_raw = current_eps_for_valuation
+            source = "TTM EPS"
+            source_detail = "近四季已實現 EPS"
+            source_note = "直接採 TTM EPS，未做單季年化" if current_eps_for_valuation is not None else "未取得可用 EPS"
+            period = "近四季 / 系統反推" if current_eps_for_valuation is not None else "未取得"
 
     return {
-        "df_rev_bk": df_rev_bk,
-        "df_per_bk": df_per_bk,
-        "fm_health": fm_health,
-        "latest_rev_month": latest_rev_month,
-        "latest_mom_val": latest_mom_val,
-        "latest_rev_notice": latest_rev_notice,
-        "latest_rev_display_label": latest_rev_display_label,
-        "latest_rev_source": latest_rev_source,
-        "latest_rev_source_url": latest_rev_source_url,
-        "latest_rev_source_rule": latest_rev_source_rule,
-        "latest_rev_announce_date": latest_rev_announce_date,
-        "latest_rev_announce_month": latest_rev_announce_month,
-        "latest_rev_revenue_month": latest_rev_revenue_month,
-        "pe_ratio": pe_ratio,
-        "pb_ratio": pb_ratio,
-        "roe": roe,
-        "sys_de": sys_de,
-        "gross_margin": gross_margin,
-        "op_margin": op_margin,
-        "rev_growth": rev_growth,
-        "earn_growth": earn_growth,
-        "t_eps": t_eps,
-        "sys_ttm_eps_source": sys_ttm_eps_source if t_eps is not None else "",
-        "sys_ttm_eps_is_inferred": sys_ttm_eps_is_inferred,
-        "sys_f_eps_calc": sys_f_eps_calc,
-        "sys_latest_quarter_eps": None,
-        "sys_ttm_eps": t_eps,
-        "sys_fiscal_year_eps": None,
-        "sys_forward_eps_system": sys_f_eps_calc,
-        "show_ai_financial_warning": pe_ratio is None and t_eps is None and not has_ai_financial_snapshot,
+        "current_eps_raw": current_eps_raw,
+        "current_eps_for_valuation": current_eps_for_valuation,
+        "current_eps_source": source,
+        "current_eps_source_detail": source_detail,
+        "current_eps_formula_note": source_note,
+        "current_eps_period": period,
+        "current_target_price_est": valuation_price(current_eps_for_valuation, formula_pe_cap),
     }
 
 
-def first_valid_analyst_count(*vals):
-    for value in vals:
-        float_value = s_float(value)
-        if float_value is not None and float_value > 0:
-            return int(float_value)
-    return None
+def build_run_rate_eps_context(
+    *,
+    latest_quarter_eps=None,
+    previous_quarter_eps=None,
+    last_two_quarter_eps=None,
+    ttm_eps=None,
+    fy1_eps=None,
+    formula_pe_cap=None,
+    raw_ai_period=None,
+):
+    """Build 1Q/2Q annualized EPS checks for fast-growth names without replacing TTM."""
+    latest = valuation_num(latest_quarter_eps)
+    previous = valuation_num(previous_quarter_eps)
+    two_quarter_sum = valuation_num(last_two_quarter_eps)
+    if two_quarter_sum is None and latest is not None and previous is not None:
+        two_quarter_sum = latest + previous
 
+    one_q_annualized = latest * 4 if latest is not None else None
+    two_q_annualized = two_quarter_sum * 2 if two_quarter_sum is not None else None
+    ttm = valuation_num(ttm_eps)
+    fy1 = valuation_num(fy1_eps)
 
-def build_ai_financial_context(*, stock_id, info, ai_financial_store):
-    """Normalize an existing AI financial snapshot into variables used by ui_main."""
-    info = info or {}
-    ai_financial_store = ai_financial_store if isinstance(ai_financial_store, dict) else {}
-    ai_fin = ai_financial_store.get(stock_id, {})
-    if isinstance(ai_fin, dict) and ai_fin:
-        bound_stock_id = str(ai_fin.get("_stock_id") or stock_id)
-        if bound_stock_id != str(stock_id):
-            ai_fin = {}
-            ai_financial_store.pop(stock_id, None)
-    if not isinstance(ai_fin, dict):
-        ai_fin = {}
+    reference_eps = two_q_annualized if two_q_annualized is not None else one_q_annualized
+    ttm_ratio = reference_eps / ttm if reference_eps is not None and ttm is not None and ttm > 0 else None
+    fy1_ratio = reference_eps / fy1 if reference_eps is not None and fy1 is not None and fy1 > 0 else None
 
-    has_ai_fin_fetch = bool(ai_fin)
-    ai_pe = s_float(ai_fin.get("pe")) if has_ai_fin_fetch else None
-    ai_pb = s_float(ai_fin.get("pb")) if has_ai_fin_fetch else None
-    ai_latest_month_eps = pick_first_number(ai_fin.get("latest_month_eps")) if has_ai_fin_fetch else None
-    ai_latest_quarter_eps = pick_first_number(ai_fin.get("latest_quarter_eps")) if has_ai_fin_fetch else None
-    ai_previous_quarter_eps = pick_first_number(ai_fin.get("previous_quarter_eps")) if has_ai_fin_fetch else None
-    ai_last_two_quarter_eps = pick_first_number(ai_fin.get("last_two_quarter_eps")) if has_ai_fin_fetch else None
-    if ai_last_two_quarter_eps is None and ai_latest_quarter_eps is not None and ai_previous_quarter_eps is not None:
-        ai_last_two_quarter_eps = ai_latest_quarter_eps + ai_previous_quarter_eps
-    ai_ttm_eps = pick_first_number(ai_fin.get("ttm_eps"), ai_fin.get("trailing_eps")) if has_ai_fin_fetch else None
-    ai_fiscal_year_eps = pick_first_number(ai_fin.get("fiscal_year_eps")) if has_ai_fin_fetch else None
-    ai_forward_eps_ai = pick_first_number(ai_fin.get("forward_eps_ai"), ai_fin.get("forward_eps")) if has_ai_fin_fetch else None
-    ai_forward_eps_consensus = pick_first_number(ai_fin.get("forward_eps_consensus")) if has_ai_fin_fetch else None
-    ai_forward_eps_fy1 = pick_first_number(ai_fin.get("forward_eps_fy1"), ai_forward_eps_consensus, ai_forward_eps_ai) if has_ai_fin_fetch else None
-    ai_forward_eps_fy2 = pick_first_number(ai_fin.get("forward_eps_fy2")) if has_ai_fin_fetch else None
-    ai_forward_eps_fy3 = pick_first_number(ai_fin.get("forward_eps_fy3")) if has_ai_fin_fetch else None
-    ai_forward_eps_fy1_year = ai_fin.get("forward_eps_fy1_year") if has_ai_fin_fetch else None
-    ai_forward_eps_fy2_year = ai_fin.get("forward_eps_fy2_year") if has_ai_fin_fetch else None
-    ai_forward_eps_fy3_year = ai_fin.get("forward_eps_fy3_year") if has_ai_fin_fetch else None
-    ai_forward_eps_fy_source_note = ai_fin.get("forward_eps_fy_source_note") if has_ai_fin_fetch else None
-    ai_forward_eps_fy_basis = ai_fin.get("forward_eps_fy_basis") if has_ai_fin_fetch else None
-    ai_t_eps = ai_ttm_eps
-    ai_f_eps_calc = pick_first_number(ai_forward_eps_fy1, ai_forward_eps_consensus, ai_forward_eps_ai) if has_ai_fin_fetch else None
-    ai_yoy = s_float(ai_fin.get("yoy")) if has_ai_fin_fetch else None
-    ai_gm = s_float(ai_fin.get("gross_margin")) if has_ai_fin_fetch else None
-    ai_om = s_float(ai_fin.get("operating_margin")) if has_ai_fin_fetch else None
-    ai_roe = s_float(ai_fin.get("roe")) if has_ai_fin_fetch else None
-    ai_de = s_float(ai_fin.get("debt_to_equity")) if has_ai_fin_fetch else None
-    ai_dy = s_float(ai_fin.get("dividend_yield")) if has_ai_fin_fetch else None
-    ai_fcf = s_float(ai_fin.get("free_cash_flow")) if has_ai_fin_fetch else None
-    ai_cr = s_float(ai_fin.get("current_ratio")) if has_ai_fin_fetch else None
-    ai_shares = s_float(ai_fin.get("shares_outstanding")) if has_ai_fin_fetch else None
-    ai_target_price = s_float(ai_fin.get("target_price")) if has_ai_fin_fetch else None
-    ai_hi_val = s_float(ai_fin.get("target_price_high")) if has_ai_fin_fetch else None
-    ai_me_val = (s_float(ai_fin.get("target_price_avg")) or ai_target_price) if has_ai_fin_fetch else None
-    ai_lo_val = s_float(ai_fin.get("target_price_low")) if has_ai_fin_fetch else None
-    ai_analyst_count = ai_fin.get("target_price_analyst_count") if has_ai_fin_fetch else None
-    ai_target_rationale = str(ai_fin.get("target_price_rationale") or "").strip() if has_ai_fin_fetch else ""
-    sys_analyst_count = info.get("numberOfAnalystOpinions")
-    ai_analyst_count = first_valid_analyst_count(
-        ai_analyst_count,
-        ai_fin.get("analyst_count") if has_ai_fin_fetch else None,
-        ai_fin.get("target_analyst_count") if has_ai_fin_fetch else None,
-        sys_analyst_count,
-    )
-    ai_mom = normalize_financial_ratio(ai_fin.get("mom")) if has_ai_fin_fetch else None
+    if one_q_annualized is not None and fy1 is not None and one_q_annualized > fy1 * 1.20:
+        label = "單季過熱需確認"
+        action = "最新單季年化已高於 FY1 20% 以上，需確認是否有一次性因素、認列時點或毛利率高峰。"
+        severity = "orange"
+    elif two_q_annualized is not None and ttm is not None and two_q_annualized > ttm * 1.30:
+        label = "獲利動能加速"
+        action = "近二季年化高於 TTM 30% 以上，可作 AI 高成長股動能參考，但不得取代 FY1/FY2。"
+        severity = "green"
+    elif two_q_annualized is not None and fy1 is not None and 0.85 <= (two_q_annualized / fy1) <= 1.15:
+        label = "近二季支撐 FY1"
+        action = "近二季年化與 FY1 接近，代表 FY1 預估較有落地跡象。"
+        severity = "green"
+    elif one_q_annualized is not None and ttm is not None and one_q_annualized > ttm * 1.30:
+        label = "單季動能加速"
+        action = "最新單季年化高於 TTM 30% 以上，但缺近二季確認，需等待下一季或月營收延續。"
+        severity = "yellow"
+    elif reference_eps is not None:
+        label = "動能中性"
+        action = "Run-rate EPS 未明顯高於 TTM 或 FY1，暫不提高估值口徑。"
+        severity = "neutral"
+    else:
+        label = "資料不足"
+        action = "缺少最新單季或近二季 EPS，無法建立 Run-rate EPS。"
+        severity = "gray"
 
     return {
-        "ai_fin": ai_fin,
-        "has_ai_fin_fetch": has_ai_fin_fetch,
-        "ai_pe": ai_pe,
-        "ai_pb": ai_pb,
-        "ai_latest_month_eps": ai_latest_month_eps,
-        "ai_latest_quarter_eps": ai_latest_quarter_eps,
-        "ai_previous_quarter_eps": ai_previous_quarter_eps,
-        "ai_last_two_quarter_eps": ai_last_two_quarter_eps,
-        "ai_ttm_eps": ai_ttm_eps,
-        "ai_fiscal_year_eps": ai_fiscal_year_eps,
-        "ai_forward_eps_ai": ai_forward_eps_ai,
-        "ai_forward_eps_consensus": ai_forward_eps_consensus,
-        "ai_forward_eps_fy1": ai_forward_eps_fy1,
-        "ai_forward_eps_fy2": ai_forward_eps_fy2,
-        "ai_forward_eps_fy3": ai_forward_eps_fy3,
-        "ai_forward_eps_fy1_year": ai_forward_eps_fy1_year,
-        "ai_forward_eps_fy2_year": ai_forward_eps_fy2_year,
-        "ai_forward_eps_fy3_year": ai_forward_eps_fy3_year,
-        "ai_forward_eps_fy_source_note": ai_forward_eps_fy_source_note,
-        "ai_forward_eps_fy_basis": ai_forward_eps_fy_basis,
-        "ai_t_eps": ai_t_eps,
-        "ai_f_eps_calc": ai_f_eps_calc,
-        "ai_yoy": ai_yoy,
-        "ai_gm": ai_gm,
-        "ai_om": ai_om,
-        "ai_roe": ai_roe,
-        "ai_de": ai_de,
-        "ai_dy": ai_dy,
-        "ai_fcf": ai_fcf,
-        "ai_cr": ai_cr,
-        "ai_shares": ai_shares,
-        "ai_target_price": ai_target_price,
-        "ai_hi_val": ai_hi_val,
-        "ai_me_val": ai_me_val,
-        "ai_lo_val": ai_lo_val,
-        "ai_analyst_count": ai_analyst_count,
-        "ai_target_rationale": ai_target_rationale,
-        "ai_mom": ai_mom,
+        "latest_quarter_eps": latest,
+        "previous_quarter_eps": previous,
+        "last_two_quarter_eps": two_quarter_sum,
+        "one_q_annualized_eps": one_q_annualized,
+        "two_q_annualized_eps": two_q_annualized,
+        "one_q_target_price": valuation_price(one_q_annualized, formula_pe_cap),
+        "two_q_target_price": valuation_price(two_q_annualized, formula_pe_cap),
+        "reference_eps": reference_eps,
+        "reference_target_price": valuation_price(reference_eps, formula_pe_cap),
+        "ttm_ratio": ttm_ratio,
+        "fy1_ratio": fy1_ratio,
+        "label": label,
+        "action": action,
+        "severity": severity,
+        "period": raw_ai_period or "最新兩季 / AI 財報校對",
+        "rule": "Run-rate EPS 只看短期獲利動能，不取代 TTM、FY1 或 FY2。",
+    }
+
+
+def fmt_price(value):
+    value = valuation_num(value)
+    return f"{value:.1f}元" if value is not None else "N/A"
+
+
+def fmt_eps(value):
+    value = valuation_num(value)
+    return f"{value:.2f}" if value is not None else "N/A"
+
+
+def fmt_cap(value):
+    value = valuation_num(value)
+    return f"{value:.1f}x" if value is not None else "N/A"
+
+
+def build_multiple_context(
+    *,
+    target_pe_cap,
+    suggested_cap,
+    dynamic_cap_pack,
+    industry_profile,
+    eff_f_eps,
+    has_ai_fin_fetch,
+    ai_f_eps_calc,
+    ai_forward_eps_fy1,
+    ai_forward_eps_fy2,
+    ai_forward_eps_fy3,
+    cap_adopted_forward_eps,
+    sys_latest_quarter_eps=None,
+    ai_latest_month_eps=None,
+    ai_latest_quarter_eps=None,
+    ai_previous_quarter_eps=None,
+    ai_last_two_quarter_eps=None,
+    eff_t_eps=None,
+    raw_ai_period=None,
+):
+    """Build multiple caps, formula prices, manual scenario, and FY tiers."""
+    dynamic_cap_pack = dynamic_cap_pack if isinstance(dynamic_cap_pack, dict) else {}
+    industry_profile = industry_profile if isinstance(industry_profile, dict) else {}
+
+    operable_pe_cap = cap_float(target_pe_cap, suggested_cap)
+    base_pe_cap_for_calc = cap_float(dynamic_cap_pack.get("base_multiple"), None)
+    if base_pe_cap_for_calc is None:
+        base_pe_cap_for_calc = cap_float(industry_profile.get("base_pe"), None)
+    if base_pe_cap_for_calc is None:
+        base_pe_cap_for_calc = cap_float(industry_profile.get("cap_hint"), None)
+
+    formula_pe_cap = cap_float(dynamic_cap_pack.get("formula_cap"), None)
+    if formula_pe_cap is None:
+        formula_pe_cap = cap_float(dynamic_cap_pack.get("raw_cap"), base_pe_cap_for_calc if base_pe_cap_for_calc is not None else operable_pe_cap)
+    if base_pe_cap_for_calc is None:
+        base_pe_cap_for_calc = formula_pe_cap
+
+    soft_pe_cap = cap_float(dynamic_cap_pack.get("optimistic_cap"), None)
+    if soft_pe_cap is None:
+        soft_pe_cap = cap_float(dynamic_cap_pack.get("soft_ceiling_cap"), formula_pe_cap)
+    hard_pe_cap = cap_float(dynamic_cap_pack.get("hard_ceiling_cap"), cap_float(dynamic_cap_pack.get("ceiling_cap"), soft_pe_cap))
+
+    if soft_pe_cap is not None and base_pe_cap_for_calc is not None:
+        soft_pe_cap = max(soft_pe_cap, base_pe_cap_for_calc)
+    if hard_pe_cap is not None and soft_pe_cap is not None:
+        hard_pe_cap = max(hard_pe_cap, soft_pe_cap)
+
+    soft_pe_cap_for_calc = soft_pe_cap
+    hard_pe_cap_for_calc = hard_pe_cap
+    if formula_pe_cap is not None and soft_pe_cap is not None:
+        formula_pe_cap = min(formula_pe_cap, soft_pe_cap)
+    extreme_pe_cap_for_calc = soft_pe_cap if soft_pe_cap is not None else operable_pe_cap
+
+    forward_eps_period_mismatch = detect_forward_eps_period_mismatch(
+        system_forward_eps=eff_f_eps,
+        fy1_eps=ai_forward_eps_fy1,
+        fy2_eps=ai_forward_eps_fy2,
+    )
+    formula_eps_for_calc = forward_eps_period_mismatch.get("recommended_eps")
+    formula_eps_source = forward_eps_period_mismatch.get("recommended_eps_source")
+    sys_target_price_raw = valuation_price(eff_f_eps, formula_pe_cap)
+    sys_target_price_est = valuation_price(formula_eps_for_calc, formula_pe_cap)
+    is_capped = False
+    extreme_target_price_raw = valuation_price(eff_f_eps, extreme_pe_cap_for_calc)
+    extreme_target_price = valuation_price(formula_eps_for_calc, extreme_pe_cap_for_calc)
+    current_eps_valuation = build_current_eps_valuation(
+        ai_latest_month_eps=ai_latest_month_eps,
+        ai_latest_quarter_eps=ai_latest_quarter_eps,
+        sys_latest_quarter_eps=sys_latest_quarter_eps,
+        eff_t_eps=eff_t_eps,
+        formula_pe_cap=formula_pe_cap,
+        raw_ai_period=raw_ai_period,
+    )
+    run_rate_eps_context = build_run_rate_eps_context(
+        latest_quarter_eps=ai_latest_quarter_eps if ai_latest_quarter_eps is not None else sys_latest_quarter_eps,
+        previous_quarter_eps=ai_previous_quarter_eps,
+        last_two_quarter_eps=ai_last_two_quarter_eps,
+        ttm_eps=eff_t_eps,
+        fy1_eps=ai_forward_eps_fy1 if ai_forward_eps_fy1 is not None else cap_adopted_forward_eps,
+        formula_pe_cap=formula_pe_cap,
+        raw_ai_period=raw_ai_period,
+    )
+
+    try:
+        manual_cap_user_adjusted = (
+            target_pe_cap is not None
+            and suggested_cap is not None
+            and abs(float(target_pe_cap) - float(suggested_cap)) > 1e-6
+        )
+    except Exception:
+        manual_cap_user_adjusted = False
+    manual_cap_input = operable_pe_cap if manual_cap_user_adjusted else base_pe_cap_for_calc
+    manual_cap_source_text = "使用者手動 Cap" if manual_cap_user_adjusted else "未手動調整，採 FY1 base"
+    manual_cap_for_calc = manual_cap_input
+    manual_cap_hit_hard = False
+    if manual_cap_input is not None and hard_pe_cap is not None and manual_cap_input > hard_pe_cap:
+        manual_cap_for_calc = hard_pe_cap
+        manual_cap_hit_hard = True
+    manual_target_price = eff_f_eps * manual_cap_for_calc if eff_f_eps is not None and eff_f_eps > 0 and manual_cap_for_calc is not None else None
+
+    ai_target_price_est = ai_f_eps_calc * formula_pe_cap if has_ai_fin_fetch and ai_f_eps_calc is not None and ai_f_eps_calc > 0 and formula_pe_cap is not None else None
+    ai_is_capped = False
+    ai_extreme_target_price = ai_f_eps_calc * extreme_pe_cap_for_calc if has_ai_fin_fetch and ai_f_eps_calc is not None and ai_f_eps_calc > 0 and extreme_pe_cap_for_calc is not None else None
+    ai_manual_target_price = ai_f_eps_calc * manual_cap_for_calc if has_ai_fin_fetch and ai_f_eps_calc is not None and ai_f_eps_calc > 0 and manual_cap_for_calc is not None else None
+
+    fy1_eps_for_annual = ai_forward_eps_fy1 if ai_forward_eps_fy1 is not None else cap_adopted_forward_eps
+    fy1_formula_target_price = valuation_price(ai_forward_eps_fy1, formula_pe_cap)
+    fy2_formula_target_price = valuation_price(ai_forward_eps_fy2, formula_pe_cap)
+    fy3_formula_target_price = valuation_price(ai_forward_eps_fy3, formula_pe_cap)
+    fy1_base_target_price = valuation_price(ai_forward_eps_fy1, base_pe_cap_for_calc)
+    fy1_soft_target_price = valuation_price(ai_forward_eps_fy1, soft_pe_cap_for_calc)
+    fy1_hard_target_price = valuation_price(ai_forward_eps_fy1, hard_pe_cap_for_calc)
+    fy2_base_target_price = valuation_price(ai_forward_eps_fy2, base_pe_cap_for_calc)
+    fy2_soft_target_price = valuation_price(ai_forward_eps_fy2, soft_pe_cap_for_calc)
+    fy2_hard_target_price = valuation_price(ai_forward_eps_fy2, hard_pe_cap_for_calc)
+    fy3_base_target_price = valuation_price(ai_forward_eps_fy3, base_pe_cap_for_calc)
+    fy3_soft_target_price = valuation_price(ai_forward_eps_fy3, soft_pe_cap_for_calc)
+    fy3_hard_target_price = valuation_price(ai_forward_eps_fy3, hard_pe_cap_for_calc)
+    fy1_manual_target_price = valuation_price(fy1_eps_for_annual, manual_cap_for_calc)
+
+    return {
+        "operable_pe_cap": operable_pe_cap,
+        "base_pe_cap_for_calc": base_pe_cap_for_calc,
+        "formula_pe_cap": formula_pe_cap,
+        "soft_pe_cap": soft_pe_cap,
+        "hard_pe_cap": hard_pe_cap,
+        "soft_pe_cap_for_calc": soft_pe_cap_for_calc,
+        "hard_pe_cap_for_calc": hard_pe_cap_for_calc,
+        "extreme_pe_cap_for_calc": extreme_pe_cap_for_calc,
+        "sys_target_price_est": sys_target_price_est,
+        "sys_target_price_raw": sys_target_price_raw,
+        "formula_eps_for_calc": formula_eps_for_calc,
+        "formula_eps_source": formula_eps_source,
+        "forward_eps_period_mismatch": forward_eps_period_mismatch,
+        "current_eps_raw": current_eps_valuation["current_eps_raw"],
+        "current_eps_for_valuation": current_eps_valuation["current_eps_for_valuation"],
+        "current_eps_source": current_eps_valuation["current_eps_source"],
+        "current_eps_source_detail": current_eps_valuation["current_eps_source_detail"],
+        "current_eps_formula_note": current_eps_valuation["current_eps_formula_note"],
+        "current_eps_period": current_eps_valuation["current_eps_period"],
+        "current_target_price_est": current_eps_valuation["current_target_price_est"],
+        "run_rate_eps_context": run_rate_eps_context,
+        "run_rate_1q_eps_annualized": run_rate_eps_context["one_q_annualized_eps"],
+        "run_rate_2q_eps_annualized": run_rate_eps_context["two_q_annualized_eps"],
+        "run_rate_1q_target_price": run_rate_eps_context["one_q_target_price"],
+        "run_rate_2q_target_price": run_rate_eps_context["two_q_target_price"],
+        "run_rate_reference_eps": run_rate_eps_context["reference_eps"],
+        "run_rate_reference_target_price": run_rate_eps_context["reference_target_price"],
+        "run_rate_label": run_rate_eps_context["label"],
+        "run_rate_action": run_rate_eps_context["action"],
+        "is_capped": is_capped,
+        "extreme_target_price": extreme_target_price,
+        "extreme_target_price_raw": extreme_target_price_raw,
+        "manual_cap_user_adjusted": manual_cap_user_adjusted,
+        "manual_cap_input": manual_cap_input,
+        "manual_cap_source_text": manual_cap_source_text,
+        "manual_cap_for_calc": manual_cap_for_calc,
+        "manual_cap_hit_hard": manual_cap_hit_hard,
+        "manual_target_price": manual_target_price,
+        "ai_target_price_est": ai_target_price_est,
+        "ai_is_capped": ai_is_capped,
+        "ai_extreme_target_price": ai_extreme_target_price,
+        "ai_manual_target_price": ai_manual_target_price,
+        "fy1_eps_for_annual": fy1_eps_for_annual,
+        "fy1_formula_target_price": fy1_formula_target_price,
+        "fy2_formula_target_price": fy2_formula_target_price,
+        "fy3_formula_target_price": fy3_formula_target_price,
+        "fy1_base_target_price": fy1_base_target_price,
+        "fy1_soft_target_price": fy1_soft_target_price,
+        "fy1_hard_target_price": fy1_hard_target_price,
+        "fy2_base_target_price": fy2_base_target_price,
+        "fy2_soft_target_price": fy2_soft_target_price,
+        "fy2_hard_target_price": fy2_hard_target_price,
+        "fy3_base_target_price": fy3_base_target_price,
+        "fy3_soft_target_price": fy3_soft_target_price,
+        "fy3_hard_target_price": fy3_hard_target_price,
+        "fy1_manual_target_price": fy1_manual_target_price,
     }

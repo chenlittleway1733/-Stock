@@ -1,82 +1,64 @@
-"""Quote panel for ui_main.render_main_page."""
+"""Stock title, watchlist, and industry-classification panel."""
 
-from ui_common import *
+from ui_common import (
+    SECTOR_MAP,
+    get_industry_valuation_profile,
+    get_watchlist,
+    st,
+    toggle_watchlist,
+    translate_to_zh,
+)
 
 
-def _quote_color(value, base):
-    if value > base:
-        return "#ff4d4d"
-    if value < base:
-        return "#00cc66"
-    return "#ffffff"
+def render_stock_header_panel(*, curr_id, stock_name, info):
+    """Render stock heading and industry model summary.
 
-
-def render_quote_panel(*, hist, info):
-    """Render latest quote data and return values reused by valuation logic."""
-    st.markdown("#### ⚡ 即時報價與交易資訊")
-    info = info or {}
-    today_data = hist.iloc[-1]
-    prev_data = hist.iloc[-2] if len(hist) > 1 else today_data
-
-    curr_p = s_float(today_data.get("Close"), 0)
-    open_p = s_float(today_data.get("Open"), 0)
-    high_p = s_float(today_data.get("High"), 0)
-    low_p = s_float(today_data.get("Low"), 0)
-    vol_shares = s_float(today_data.get("Volume"), 0)
-
-    vol_lots = int(vol_shares // 1000) if vol_shares else 0
-    prev_vol_lots = int(s_float(prev_data.get("Volume"), 0) // 1000) if len(hist) > 1 else 0
-
-    prev_close = s_float(info.get("previousClose"), s_float(prev_data.get("Close"), 0))
-    change = curr_p - prev_close if prev_close else 0
-    change_pct = (change / prev_close) * 100 if prev_close else 0
-    amp = ((high_p - low_p) / prev_close) * 100 if prev_close and prev_close > 0 else 0
-    avg_price = (high_p + low_p + curr_p) / 3 if curr_p else 0
-    turnover_100m = (vol_shares * avg_price) / 100000000
-
-    c_curr = _quote_color(curr_p, prev_close)
-    c_open = _quote_color(open_p, prev_close)
-    c_high = _quote_color(high_p, prev_close)
-    c_low = _quote_color(low_p, prev_close)
-    c_change = _quote_color(change, 0)
-    arrow = "▲" if change > 0 else ("▼" if change < 0 else "")
-
-    quote_html = f"""
-    <style>
-    .q-container {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px 30px; background: #1e1e1e; padding: 15px 20px; border-radius: 8px; font-family: sans-serif; margin-bottom: 20px; border: 1px solid #333; }}
-    .q-item {{ display: flex; justify-content: space-between; border-bottom: 1px solid #333; padding-bottom: 4px; }}
-    .q-label {{ color: #aaa; font-size: 1rem; }}
-    .q-val {{ font-weight: bold; font-size: 1.1rem; }}
-    </style>
-    <div class="q-container">
-        <div class="q-item"><span class="q-label">成交</span><span class="q-val" style="color: {c_curr};">{curr_p:,.2f}</span></div>
-        <div class="q-item"><span class="q-label">昨收</span><span class="q-val" style="color: #fff;">{prev_close:,.2f}</span></div>
-        <div class="q-item"><span class="q-label">開盤</span><span class="q-val" style="color: {c_open};">{open_p:,.2f}</span></div>
-        <div class="q-item"><span class="q-label">漲跌幅</span><span class="q-val" style="color: {c_change};">{arrow} {abs(change_pct):.2f}%</span></div>
-        <div class="q-item"><span class="q-label">最高</span><span class="q-val" style="color: {c_high};">{high_p:,.2f}</span></div>
-        <div class="q-item"><span class="q-label">漲跌</span><span class="q-val" style="color: {c_change};">{arrow} {abs(change):.2f}</span></div>
-        <div class="q-item"><span class="q-label">最低</span><span class="q-val" style="color: {c_low};">{low_p:,.2f}</span></div>
-        <div class="q-item"><span class="q-label">總量 (張)</span><span class="q-val" style="color: #ffd700;">{vol_lots:,}</span></div>
-        <div class="q-item"><span class="q-label">均價</span><span class="q-val" style="color: #fff;">{avg_price:,.2f}</span></div>
-        <div class="q-item"><span class="q-label">昨量 (張)</span><span class="q-val" style="color: #fff;">{prev_vol_lots:,}</span></div>
-        <div class="q-item"><span class="q-label">成交金額(億)</span><span class="q-val" style="color: #fff;">{turnover_100m:,.2f}</span></div>
-        <div class="q-item"><span class="q-label">振幅</span><span class="q-val" style="color: #fff;">{amp:.2f}%</span></div>
-    </div>
+    Returns:
+        (sector_display, industry_profile)
     """
-    st.markdown(clean_html(quote_html), unsafe_allow_html=True)
+    info = info or {}
+    col_title, col_star = st.columns([0.85, 0.15])
+    with col_title:
+        st.markdown(f"### 🏢 {stock_name} ({curr_id})")
+    with col_star:
+        in_watch = curr_id in get_watchlist()
+        btn_label = "⭐ 移除自選" if in_watch else "☆ 加入自選"
+        if st.button(btn_label, use_container_width=True):
+            toggle_watchlist(curr_id, stock_name)
+            st.rerun()
 
-    return {
-        "curr_p": curr_p,
-        "open_p": open_p,
-        "high_p": high_p,
-        "low_p": low_p,
-        "vol_shares": vol_shares,
-        "vol_lots": vol_lots,
-        "prev_vol_lots": prev_vol_lots,
-        "prev_close": prev_close,
-        "change": change,
-        "change_pct": change_pct,
-        "amp": amp,
-        "avg_price": avg_price,
-        "turnover_100m": turnover_100m,
-    }
+    sector_disp = SECTOR_MAP.get(info.get("sector", "未知"), info.get("sector", "未知"))
+    early_ai_fin = st.session_state.ai_fetched_financials.get(curr_id, {}) if hasattr(st.session_state, "ai_fetched_financials") else {}
+    if isinstance(early_ai_fin, dict) and early_ai_fin:
+        if str(early_ai_fin.get("_stock_id") or curr_id) != str(curr_id):
+            early_ai_fin = {}
+
+    industry_profile = get_industry_valuation_profile(
+        curr_id,
+        stock_name,
+        sector_disp,
+        info.get("industry", "未知"),
+        ai_financials=early_ai_fin,
+    )
+    st.markdown(
+        f"**🏷️ 產業分類：** {sector_disp} / {info.get('industry', '未知')}｜"
+        f"估值模型：{industry_profile.get('model_label', '一般產業')}｜"
+        f"題材標籤：{industry_profile.get('themes_text', '—')}｜"
+        f"分類來源：{industry_profile.get('classification_source', industry_profile.get('mapping_source', '—'))}"
+    )
+    if industry_profile.get("classification_needs_manual_review"):
+        st.warning(
+            f"⚠️ 產業分類待確認：{industry_profile.get('classification_warning', '此分類不是正式 stock_mapping.py 指定。')}"
+            f"｜可信度：{industry_profile.get('classification_confidence', 'low')}"
+            f"｜Dynamic Cap 分類折扣：×{float(industry_profile.get('classification_confidence_factor', 1.0) or 1.0):.2f}"
+        )
+    if industry_profile.get("pe_trap_warning"):
+        st.warning("⚠️ 本產業具有 P/E 陷阱風險：低 P/E 不一定代表低估，請優先檢查 P/B、週期位置、報價或訂單落地。")
+    if industry_profile.get("pe_model_suitable") is False:
+        st.warning("⚠️ 本分類不適合使用一般 P/E 公式估值作為買進依據，應以事件、訂單、籌碼與財報落地程度評估。")
+
+    with st.expander("📖 查看公司詳細營業項目簡介 (自動英翻中)"):
+        st.write(translate_to_zh(info.get("longBusinessSummary", "暫無簡介。")))
+
+    return sector_disp, industry_profile
+

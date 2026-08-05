@@ -1,73 +1,82 @@
-"""Peer comparison panel for ui_main.render_main_page."""
+"""Quote panel for ui_main.render_main_page."""
 
 from ui_common import *
 
 
-def render_peer_compare_panel(*, curr_id, stock_name):
-    if not st.session_state.show_pk:
-        return
+def _quote_color(value, base):
+    if value > base:
+        return "#ff4d4d"
+    if value < base:
+        return "#00cc66"
+    return "#ffffff"
 
-    st.markdown("#### ⚔️ 產業橫向對比 (同業估值與利潤率 PK)")
-    st.markdown("<small style='color:gray;'>*註：透過 AI 動態檢索業務相近的競爭對手，並抓取最新財報數據進行橫向比較。*</small>", unsafe_allow_html=True)
-    with st.spinner("AI 正在深度檢索產業鏈與競爭對手，並同步抓取最新財報數據..."):
-        peers = get_peers_from_ai(stock_name, curr_id, st.session_state.api_key)
-        if not peers:
-            st.error("AI 暫時找不到明確的同業數據，或請檢查您的 API Key 額度。")
-            st.markdown("---")
-            return
 
-        compare_list = [curr_id] + [p for p in peers if p != curr_id]
-        compare_data = []
-        for code in compare_list:
-            _, p_info = get_stock_data(code, st.session_state.fugle_key, st.session_state.finmind_key)
-            p_name = get_chinese_name(code) or code
-            if not p_info:
-                continue
+def render_quote_panel(*, hist, info):
+    """Render latest quote data and return values reused by valuation logic."""
+    st.markdown("#### ⚡ 即時報價與交易資訊")
+    info = info or {}
+    today_data = hist.iloc[-1]
+    prev_data = hist.iloc[-2] if len(hist) > 1 else today_data
 
-            pe_val = s_float(p_info.get("trailingPE"))
-            pe_fmt = f"{pe_val:.2f}x" if pe_val is not None else "N/A"
-            gm_fmt = to_pct(s_float(p_info.get("grossMargins")))
-            om_fmt = to_pct(s_float(p_info.get("operatingMargins")))
-            roe_fmt = to_pct(s_float(p_info.get("returnOnEquity")))
-            prev_close_val = s_float(p_info.get("previousClose"))
-            prev_close_fmt = f"{prev_close_val:.2f}" if prev_close_val is not None else "N/A"
-            t_eps_p = s_float(p_info.get("trailingEps"))
-            f_eps_p = s_float(p_info.get("forwardEps"))
-            t_eps_p_str = f"{t_eps_p:.2f}" if t_eps_p is not None else "N/A"
-            f_eps_p_str = f"{f_eps_p:.2f}" if f_eps_p is not None else "N/A"
-            eps_display = f"{t_eps_p_str} / <span style='color:#00bfff;'>{f_eps_p_str}</span>"
-            if prev_close_val is not None and f_eps_p is not None and f_eps_p > 0:
-                fpe_fmt = f"<b style='color:#FFD700;'>{prev_close_val / f_eps_p:.1f}x</b>"
-            else:
-                fpe_fmt = "<span style='color:gray;'>N/A</span>"
-            target_mean_p = s_float(p_info.get("targetMeanPrice"))
-            if target_mean_p is not None and prev_close_val is not None and prev_close_val > 0:
-                upside = ((target_mean_p - prev_close_val) / prev_close_val) * 100
-                if upside >= 25:
-                    upside_fmt = f"<span style='color:#ff4d4d; font-weight:bold;'>+{upside:.1f}%</span>"
-                elif upside > 0:
-                    upside_fmt = f"<span style='color:#00cc66;'>+{upside:.1f}%</span>"
-                else:
-                    upside_fmt = f"<span style='color:#aaa;'>{upside:.1f}%</span>"
-                target_display = f"{target_mean_p:.1f} ({upside_fmt})"
-            else:
-                target_display = "<span style='color:gray;'>無資料</span>"
-            compare_data.append({
-                "代號": f"{p_name} ({code})",
-                "股價": prev_close_fmt,
-                "前瞻 P/E": fpe_fmt,
-                "預估 EPS": eps_display,
-                "目標價": target_display,
-                "毛利率": gm_fmt,
-                "營益率": om_fmt,
-                "ROE": roe_fmt,
-            })
+    curr_p = s_float(today_data.get("Close"), 0)
+    open_p = s_float(today_data.get("Open"), 0)
+    high_p = s_float(today_data.get("High"), 0)
+    low_p = s_float(today_data.get("Low"), 0)
+    vol_shares = s_float(today_data.get("Volume"), 0)
 
-        if compare_data:
-            table_html = "<table style='width:100%; text-align:center; border-collapse: collapse; margin-top: 10px; font-size: 1.05rem; color: #e0e0e0;'><tr style='background-color:#333; color:#fff; border-bottom: 2px solid #555;'><th style='padding:12px;'>公司名稱</th><th>最新收盤價</th><th>前瞻 P/E</th><th>預估 EPS (今/明)</th><th>目標價 (潛在空間)</th><th>毛利率</th><th>營益率</th><th>ROE</th></tr>"
-            for row in compare_data:
-                row_bg = "#2c3e50" if str(curr_id) in row["代號"] else "#1e1e1e"
-                table_html += f"<tr style='background-color:{row_bg}; border-bottom:1px solid #444;'><td style='padding:12px; color:#ffffff;'><b>{row['代號']}</b></td><td>{row['股價']}</td><td>{row['前瞻 P/E']}</td><td>{row['預估 EPS']}</td><td>{row['目標價']}</td><td>{row['毛利率']}</td><td>{row['營益率']}</td><td style='color:#00bfff;'><b>{row['ROE']}</b></td></tr>"
-            table_html += "</table>"
-            st.markdown(table_html, unsafe_allow_html=True)
-    st.markdown("---")
+    vol_lots = int(vol_shares // 1000) if vol_shares else 0
+    prev_vol_lots = int(s_float(prev_data.get("Volume"), 0) // 1000) if len(hist) > 1 else 0
+
+    prev_close = s_float(info.get("previousClose"), s_float(prev_data.get("Close"), 0))
+    change = curr_p - prev_close if prev_close else 0
+    change_pct = (change / prev_close) * 100 if prev_close else 0
+    amp = ((high_p - low_p) / prev_close) * 100 if prev_close and prev_close > 0 else 0
+    avg_price = (high_p + low_p + curr_p) / 3 if curr_p else 0
+    turnover_100m = (vol_shares * avg_price) / 100000000
+
+    c_curr = _quote_color(curr_p, prev_close)
+    c_open = _quote_color(open_p, prev_close)
+    c_high = _quote_color(high_p, prev_close)
+    c_low = _quote_color(low_p, prev_close)
+    c_change = _quote_color(change, 0)
+    arrow = "▲" if change > 0 else ("▼" if change < 0 else "")
+
+    quote_html = f"""
+    <style>
+    .q-container {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px 30px; background: #1e1e1e; padding: 15px 20px; border-radius: 8px; font-family: sans-serif; margin-bottom: 20px; border: 1px solid #333; }}
+    .q-item {{ display: flex; justify-content: space-between; border-bottom: 1px solid #333; padding-bottom: 4px; }}
+    .q-label {{ color: #aaa; font-size: 1rem; }}
+    .q-val {{ font-weight: bold; font-size: 1.1rem; }}
+    </style>
+    <div class="q-container">
+        <div class="q-item"><span class="q-label">成交</span><span class="q-val" style="color: {c_curr};">{curr_p:,.2f}</span></div>
+        <div class="q-item"><span class="q-label">昨收</span><span class="q-val" style="color: #fff;">{prev_close:,.2f}</span></div>
+        <div class="q-item"><span class="q-label">開盤</span><span class="q-val" style="color: {c_open};">{open_p:,.2f}</span></div>
+        <div class="q-item"><span class="q-label">漲跌幅</span><span class="q-val" style="color: {c_change};">{arrow} {abs(change_pct):.2f}%</span></div>
+        <div class="q-item"><span class="q-label">最高</span><span class="q-val" style="color: {c_high};">{high_p:,.2f}</span></div>
+        <div class="q-item"><span class="q-label">漲跌</span><span class="q-val" style="color: {c_change};">{arrow} {abs(change):.2f}</span></div>
+        <div class="q-item"><span class="q-label">最低</span><span class="q-val" style="color: {c_low};">{low_p:,.2f}</span></div>
+        <div class="q-item"><span class="q-label">總量 (張)</span><span class="q-val" style="color: #ffd700;">{vol_lots:,}</span></div>
+        <div class="q-item"><span class="q-label">均價</span><span class="q-val" style="color: #fff;">{avg_price:,.2f}</span></div>
+        <div class="q-item"><span class="q-label">昨量 (張)</span><span class="q-val" style="color: #fff;">{prev_vol_lots:,}</span></div>
+        <div class="q-item"><span class="q-label">成交金額(億)</span><span class="q-val" style="color: #fff;">{turnover_100m:,.2f}</span></div>
+        <div class="q-item"><span class="q-label">振幅</span><span class="q-val" style="color: #fff;">{amp:.2f}%</span></div>
+    </div>
+    """
+    st.markdown(clean_html(quote_html), unsafe_allow_html=True)
+
+    return {
+        "curr_p": curr_p,
+        "open_p": open_p,
+        "high_p": high_p,
+        "low_p": low_p,
+        "vol_shares": vol_shares,
+        "vol_lots": vol_lots,
+        "prev_vol_lots": prev_vol_lots,
+        "prev_close": prev_close,
+        "change": change,
+        "change_pct": change_pct,
+        "amp": amp,
+        "avg_price": avg_price,
+        "turnover_100m": turnover_100m,
+    }
